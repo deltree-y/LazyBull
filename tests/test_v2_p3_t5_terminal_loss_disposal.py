@@ -11,8 +11,9 @@
 - §5 引用计数复算（按行口径，pattern ``terminal_loss|terminal_risk``，排除
   ``__pycache__`` 与本核验测试自身——本文件晚于实测日存在）：src 39 文件 /
   85 行（家族自身 46 行 + 家族外 39 行）、tests 19 个 test_*.py、scripts
-  12 个（仅 .py/.ps1 脚本文件入计——``scripts/check/complexity_baseline.json``
-  等数据产物非脚本，不在文档口径内）。
+  13 个（仅 .py/.ps1 脚本文件入计——``scripts/check/complexity_baseline.json``
+  等数据产物非脚本，不在文档口径内；2026-10-30 新增 T5 迁移清单的
+  rollback_only 引用 ``scripts/v2_p4/t5_migration.py``，处置脚本清单仍 12 项）。
 
 **断言锁定 2026-10-23 实测值**（文档 §5.3：规划期旧口径已过时，以清单实测为准）。
 处置文档为 append-only——未来追加复审注记不改清单数值，不破本测试；家族文件
@@ -89,6 +90,11 @@ DISPOSAL_TESTS = tuple(
 )
 DISPOSAL_FIXTURE = "tests/fixtures/inuse_closure_baseline_20261006.json"
 
+#: P4-T5 迁移工具新增命中：`t5_migration.py` 的「文件 × 载体 × 校验」清单把
+#: `terminal_risk_model_root` 登记为 rollback_only（只校验可用性，不消费家族代码）。
+#: 2026-10-30 复测：scripts 引用面 12→13，处置脚本清单（§4）仍为 12 项。
+SCRIPT_REFERENCE_EXTRAS = ("scripts/v2_p4/t5_migration.py",)
+
 #: §5 引用面实测值（按行口径，pattern 见下，排除 __pycache__）
 _REFERENCE_PATTERN = re.compile(r"terminal_loss|terminal_risk")
 SRC_REF_FILES = 39
@@ -96,7 +102,7 @@ SRC_REF_LINES = 85
 SRC_REF_FAMILY_LINES = 46
 SRC_REF_OUTSIDE_LINES = 39
 TESTS_REF_FILES = 19
-SCRIPTS_REF_FILES = 12
+SCRIPTS_REF_FILES = 13
 
 
 def _wc_lines(path: Path) -> int:
@@ -193,4 +199,6 @@ class TestReferenceCounts:
     def test_scripts_reference_counts(self):
         files, _lines, per_file = _reference_counts(REPO_ROOT / "scripts", (".py", ".ps1"))
         assert files == SCRIPTS_REF_FILES
-        assert {p.relative_to(REPO_ROOT).as_posix() for p in per_file} == set(DISPOSAL_SCRIPTS)
+        assert {p.relative_to(REPO_ROOT).as_posix() for p in per_file} == set(
+            DISPOSAL_SCRIPTS
+        ) | set(SCRIPT_REFERENCE_EXTRAS)

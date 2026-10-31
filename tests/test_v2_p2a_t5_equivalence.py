@@ -998,8 +998,12 @@ def test_importer_package_of_scanned_files_exact():
     （P2b-T1 注记：core/decision 新增 portfolio_merger 一件（单袖合并器 +
     core 内部过渡端口），扫描面 30→31，属 P2b 规划 §4 预登记增长；
     __init__.py 5 个不变。）
+    （P4-T1 注记：core/accounting 新增 engine_state / ledger 两件、
+    core/execution 新增 live_schedule 一件（D1/D2 状态外置与入账分离），
+    扫描面 31→34，属 P4 规划 §4.1 预登记增长（live_schedule 为 T1 执行
+    登记偏差项，见规划 §17）；__init__.py 5 个不变。）
     """
-    assert len(_V2_CORE_SCAN_FILES) == 31
+    assert len(_V2_CORE_SCAN_FILES) == 35
     assert len(_V2_CORE_INIT_FILES) == 5
     for path in _V2_CORE_SCAN_FILES:
         expected = ".".join(path.resolve().parent.relative_to(_REPO_ROOT).parts)

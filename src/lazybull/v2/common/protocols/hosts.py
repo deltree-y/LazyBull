@@ -8,7 +8,7 @@ Executor.execute_daily 的两个阶段，同一执行语义的宿主适配）。
 
 from __future__ import annotations
 
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from src.lazybull.v2.common.protocols.core import (
     DecisionMaker,
@@ -57,8 +57,15 @@ class PaperHost(Protocol):
         """
         ...
 
-    def run_t1(self, date: TradeDate, fills: Sequence[Fill]) -> None:
-        """T+1 执行（手工回填实际成交）。
+    def run_t1(self, date: TradeDate, fills: Optional[Sequence[Fill]] = None) -> None:
+        """T+1 执行（2026-10-28 勘误：引擎按真实行情记账为权威）。
+
+        〔原「手工回填实际成交」措辞勘误（P4 T2 评审处置，用户裁决；同步
+        docs/contracts/protocols.md F12 §4）：纸面 = 模拟盘，无真实成交来源；
+        fills=None ⇒ 引擎行情记账为权威；fills 非空 ⇒ 提交前核对通道（不一致 ⇒
+        零副作用拒绝，当日未落盘可修正重试）。人工回填直接驱动入账 = live 实盘
+        宿主阶段义务（两阶段规则：先 export_state 持当日快照再批量
+        Ledger.apply_fills）。〕
 
         副作用：更新账本
         """

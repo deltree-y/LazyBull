@@ -23,12 +23,14 @@ from src.lazybull.v2.common import cost as new_cost
 from src.lazybull.v2.common.cost import CostModel
 from src.lazybull.v2.common.rules.stop_loss import StopLossConfig
 from src.lazybull.v2.common.types import TSCode, Weight
+from src.lazybull.v2.core.decision.portfolio_merger import SingleSleevePortfolioMerger
 from src.lazybull.v2.core.execution.ml_signal_feed import BacktestEngineML
 from src.lazybull.v2.core.signal.base import Signal
+from src.lazybull.v2.hosts.native_engine import NativeMergeBacktestEngineML
+from src.lazybull.v2.hosts.backtest.replay import _run_replay_engine_and_collect
 from src.lazybull.v2.hosts.backtest.runtime import (
     LEGACY_BYPASS,
     SINGLE_SLEEVE_PASSTHROUGH,
-    configure_merger_mode,
     get_merger_call_count,
 )
 
@@ -89,7 +91,7 @@ class _DeterministicSignal(Signal):
         return [(stock, score) for stock, score in ranked if stock in universe_set]
 
 
-class _InstrumentedEngineML(BacktestEngineML):
+class _InstrumentedMixin:
     """只增加验收观测，不改变归一化、补位或合并数值路径。"""
 
     def __init__(self, *args, **kwargs):
@@ -117,6 +119,14 @@ class _InstrumentedEngineML(BacktestEngineML):
                     "merge_delta": get_merger_call_count(self) - before_count,
                 }
             )
+
+
+class _InstrumentedEngineML(_InstrumentedMixin, BacktestEngineML):
+    pass
+
+
+class _InstrumentedNativeEngineML(_InstrumentedMixin, NativeMergeBacktestEngineML):
+    pass
 
 
 def _flat_closes(stocks=_STOCKS) -> Dict[str, List[float]]:
@@ -187,23 +197,26 @@ def _make_arm(
         data_storage=_FakeStorage(),
     )
     kwargs.update(overrides)
-    engine = _InstrumentedEngineML(**kwargs)
-    configure_merger_mode(engine, mode)
+    if mode != LEGACY_BYPASS:
+        engine = _InstrumentedNativeEngineML(
+            **kwargs, portfolio_merger=SingleSleevePortfolioMerger(), sleeve_id="value"
+        )
+    else:
+        engine = _InstrumentedEngineML(**kwargs)
     engine.record_holdings_snapshot = True
 
     merge_calls = []
     port_returns = []
     account_builds = []
     if mode == SINGLE_SLEEVE_PASSTHROUGH:
-        adapter = engine.merge_port
-        original_build = adapter._build_account
+        original_build = engine._build_current_account
 
-        def _build_spy(**build_kwargs):
-            account_builds.append(dict(build_kwargs))
-            return original_build(**build_kwargs)
+        def _build_spy(total_value):
+            account_builds.append({"total_value": total_value})
+            return original_build(total_value)
 
-        adapter._build_account = _build_spy
-        original_merge = adapter._merger.merge
+        engine._build_current_account = _build_spy
+        original_merge = engine.portfolio_merger.merge
 
         def _merge_spy(targets, current):
             target = targets["value"]
@@ -217,15 +230,15 @@ def _make_arm(
             )
             return original_merge(targets, current)
 
-        adapter._merger.merge = _merge_spy
-        original_port_merge = adapter.merge_legacy_batch_targets
+        engine.portfolio_merger.merge = _merge_spy
+        original_port_merge = engine._merge_target_weights
 
-        def _port_spy(**port_kwargs):
-            result = original_port_merge(**port_kwargs)
+        def _port_spy(normalized, date):
+            result = original_port_merge(normalized, date)
             port_returns.append(list(result.items()))
             return result
 
-        adapter.merge_legacy_batch_targets = _port_spy
+        engine._merge_target_weights = _port_spy
 
     return SimpleNamespace(
         engine=engine,
@@ -276,6 +289,20 @@ def _assert_independent_initial_state(closed, opened) -> None:
 
 def _run_arm(arm, dates: List[pd.Timestamp]):
     arm.nav = arm.engine.run(dates[0], dates[-1], dates, arm.price_data)
+    return arm
+
+
+def _run_collect_arm(arm, dates: List[pd.Timestamp]):
+    arm.metrics = _run_replay_engine_and_collect(
+        arm.engine,
+        dates[0].strftime("%Y%m%d"),
+        dates[-1].strftime("%Y%m%d"),
+        dates,
+        arm.price_data,
+        bt_top_n=2,
+        split_num=0,
+    )
+    arm.nav = arm.metrics["_nav_curve"]
     return arm
 
 
@@ -344,7 +371,7 @@ def _assert_real_merge_path(closed, opened) -> None:
     assert len(opened.port_returns) == len(expected_dates)
     assert len(opened.account_builds) == len(expected_dates)
     assert get_merger_call_count(opened.engine) == len(expected_dates)
-    assert opened.engine.merge_port.call_count == len(expected_dates)
+    assert opened.engine.portfolio_merger.merge_call_count == len(expected_dates)
     for (_date, _raw, normalized), call, returned in zip(
         opened.engine.normalize_inputs, opened.merge_calls, opened.port_returns
     ):
@@ -377,7 +404,7 @@ def _drive_early(arm, idx: int, cycle_day: int, signal_dates: Dict):
 
 
 def test_default_closed_and_enabled_three_modes_exact(synthetic_cost_settings):
-    """缺省 None 与显式 legacy_bypass 均零实例端口，开启后全产物仍精确一致。"""
+    """缺省 native 与显式 native 均真实合并，显式 legacy 为零合并且三臂产物一致。"""
     price_data = _make_price_data(_flat_closes())
     arms = [
         _run_arm(
@@ -392,11 +419,31 @@ def test_default_closed_and_enabled_three_modes_exact(synthetic_cost_settings):
         for mode in (None, LEGACY_BYPASS, SINGLE_SLEEVE_PASSTHROUGH)
     ]
     default, closed, opened = arms
-    assert "merge_port" not in vars(default.engine)
-    assert "merge_port" not in vars(closed.engine)
-    _assert_arm_equivalent(default, closed)
+    assert default.engine.portfolio_merger.merge_call_count > 0
+    assert "portfolio_merger" not in vars(closed.engine)
+    assert "merge_port" not in vars(default.engine) and "merge_port" not in vars(closed.engine)
+    _assert_arm_equivalent(closed, default)
     _assert_arm_equivalent(closed, opened)
     _assert_real_merge_path(closed, opened)
+
+
+def test_native_close_replay_returns_and_matches_legacy(synthetic_cost_settings):
+    """close 是公开合法配置：证据投影跳过，不得让正常原生回测失败或改值。"""
+    price_data = _make_price_data(_flat_closes())
+    closed, opened = _make_pair(
+        price_data,
+        rebalance_freq=3,
+        sell_timing="close",
+        enable_early_rebalance_on_empty=False,
+    )
+    for arm in (closed, opened):
+        _run_collect_arm(arm, _DATES[:10])
+    _assert_arm_equivalent(closed, opened)
+    _assert_real_merge_path(closed, opened)
+    assert len(opened.engine.trades) > 0
+    assert opened.metrics["_merger_s6_role"] == "backtest_t3_evidence_skipped_sell_timing_close"
+    assert opened.metrics["_merger_net_call_count"] == 0
+    assert opened.metrics["_native_evidence_order_count"] == 0
 
 
 def test_equal_regular_rebalance_and_condition_refill(synthetic_cost_settings):
@@ -640,7 +687,7 @@ def test_anti_mutation_bypass_and_false_count_detected(synthetic_cost_settings):
         enable_early_rebalance_on_empty=False,
     )
     _assert_real_merge_path(closed, opened)
-    opened.engine.merge_port._call_count += 1
+    opened.engine.portfolio_merger.merge_call_count += 1
     with pytest.raises(AssertionError):
         _assert_real_merge_path(closed, opened)
 
@@ -650,7 +697,7 @@ def test_anti_mutation_bypass_and_false_count_detected(synthetic_cost_settings):
         rebalance_freq=20,
         enable_early_rebalance_on_empty=False,
     )
-    bypass.engine.merge_port = None
+    bypass.engine._merge_target_weights = lambda normalized, date: dict(normalized)
     _run_arm(bypass, _DATES[:3])
     pd.testing.assert_frame_equal(closed.nav, bypass.nav, check_exact=True)
     with pytest.raises(AssertionError):
@@ -690,7 +737,7 @@ def test_anti_mutation_weight_reorder_and_renormalize_detected(synthetic_cost_se
     price_data = _make_price_data(_flat_closes())
     closed = _make_arm(LEGACY_BYPASS, price_data.copy(deep=True))
     opened = _make_arm(SINGLE_SLEEVE_PASSTHROUGH, price_data.copy(deep=True))
-    original_merge = opened.engine.merge_port._merger.merge
+    original_merge = opened.engine.portfolio_merger.merge
 
     def _mutating_merge(targets, current):
         target = original_merge(targets, current)
@@ -707,19 +754,14 @@ def test_anti_mutation_weight_reorder_and_renormalize_detected(synthetic_cost_se
             ),
         )
 
-    opened.engine.merge_port._merger.merge = _mutating_merge
+    opened.engine.portfolio_merger.merge = _mutating_merge
     weights = {"A": 0.9, "B": 0.4}
     date = _DATES[0]
     for arm in (closed, opened):
         arm.engine.normalize_inputs.append((date, dict(weights), dict(weights)))
-    result = opened.engine.merge_port.merge_legacy_batch_targets(
-        weights=weights,
-        date=date,
-        cash=100_000.0,
-        total_value=200_000.0,
-        positions={},
-        initial_capital=777_777.0,
-    )
+    opened.engine.current_capital = 100_000.0
+    opened.engine._last_rebalance_nav = 200_000.0
+    result = opened.engine._merge_target_weights(weights, date)
     if mutation == "reorder":
         assert list(result) != list(weights), "重排变异未实际生效"
     else:

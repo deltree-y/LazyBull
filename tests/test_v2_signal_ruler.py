@@ -184,7 +184,8 @@ def _write_min_runs_batch(root: Path, name: str, ds_id: str, topk_by_split: dict
     summary.to_parquet(batch / "summary.parquet", index=False)
     cfg = {"bt_top_n": 20}
     (batch / "batch_meta.json").write_text(json.dumps({
-        "batch_id": name, "config": cfg, "config_fingerprint": fingerprint(cfg),
+        "batch_id": name, "host_mode": "backtest",
+        "config": cfg, "config_fingerprint": fingerprint(cfg),
         "data_state": {"data_state_id": ds_id}, "baseline_ref": None, "arms": [],
     }, ensure_ascii=False), encoding="utf-8")
     for split in (0, 1):

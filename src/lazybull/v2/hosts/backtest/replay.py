@@ -56,8 +56,8 @@ from loguru import logger
 # 只读过渡依赖（去除节点 P4）：config 为全局单例，不复制（§3.5 / V2R-02）。
 from src.lazybull.common.config import get_data_root
 
-# 只读过渡依赖（去除节点 P2b/P3 → P3-T3 起仅限 cs_train_verify 验收例外路径,
-# P4 评审清偿）：panel 默认路径不再使用旧特征读取。
+# 只读过渡依赖（P4 Q6-B：cs_train_verify 保活至旧链路物理删除，仅作过渡验收工具；
+# 生产/纸面不可达守卫不变）：panel 默认路径不使用旧特征读取。
 from src.lazybull.data import DataLoader, Storage
 
 # 运行时派生四族因子（永久沿用，§3.5 登记表）：factors 不迁移。
@@ -72,12 +72,18 @@ from src.lazybull.universe.domains import domain_market_whitelist
 from src.lazybull.v2.common.trading_config import TradingConfig
 from src.lazybull.v2.common.types import FeatureQuery, ReplayContractError, TradeDate
 from src.lazybull.v2.hosts.backtest.runtime import (
-    configure_merger_mode,
+    LEGACY_BYPASS,
+    SINGLE_SLEEVE_PASSTHROUGH,
     create_backtest_engine_from_config,
     create_or_reuse_signal,
     get_merger_call_count,
+    get_merger_net_call_count,
     infer_rebalance_freq_from_label,
     validate_merger_mode,
+)
+from src.lazybull.v2.hosts.native_engine import (
+    NativeMergeBacktestEngineML,
+    project_t3_evidence_orders,
 )
 
 # ---------------------------------------------------------------------------
@@ -483,11 +489,12 @@ def _assemble_replay_engine(
     bt_exclude_st: bool,
     bt_min_list_days: int,
     merger_mode: Optional[str] = None,
+    industry_reader=None,
 ):
     """universe / signal / 引擎装配（D8 提取自 run_oos_backtest；调用顺序逐字保留）。
 
     侧效应：``engine.record_holdings_snapshot = True``（快照是 runs 产物数据源）。
-    P2b-T3：合并适配器只在引擎构造完成后按显式模式装配（D4/D6）。
+    P4-T3：工厂在构造期按模式选择原生单袖子类；显式 legacy 仅服务冻结回归边。
     """
     universe = BasicUniverse(
         stock_basic=stock_basic,
@@ -504,6 +511,11 @@ def _assemble_replay_engine(
         persistent_signal=persistent_signal,
         verbose=False,
     )
+    optional_engine_kwargs = {}
+    if industry_reader is not None:
+        optional_engine_kwargs["industry_reader"] = industry_reader
+    if merger_mode is not None:
+        optional_engine_kwargs["merger_mode"] = merger_mode
     engine = create_backtest_engine_from_config(
         trading_config=effective_config,
         universe=universe,
@@ -516,8 +528,8 @@ def _assemble_replay_engine(
         verbose=False,
         completion_window_days=5,
         enable_pending_order=True,
+        **optional_engine_kwargs,
     )
-    configure_merger_mode(engine, merger_mode)
     # 政策旁路（terminal_loss P2-1）：开启逐日持仓快照（只读，不影响任何决策）
     engine.record_holdings_snapshot = True
     # D6 摘除：旧侧此处的 engine.set_exposure_table(...)（None = 不启用，B0 下 no-op
@@ -600,6 +612,27 @@ def _run_replay_engine_and_collect(
     metrics["_execution_attribution"] = engine.get_execution_attribution()
     metrics["_holdings_snapshot"] = engine.get_holdings_snapshot()
     metrics["_merger_call_count"] = get_merger_call_count(engine)
+    metrics["_merger_net_call_count"] = get_merger_net_call_count(engine)
+    metrics["_native_evidence_order_count"] = 0
+    metrics["_merger_mode"] = (
+        SINGLE_SLEEVE_PASSTHROUGH
+        if isinstance(engine, NativeMergeBacktestEngineML)
+        else LEGACY_BYPASS
+    )
+    metrics["_merger_s6_role"] = "backtest_t3_evidence_not_applicable_legacy"
+    if isinstance(engine, NativeMergeBacktestEngineML):
+        # 仅 T3 证明性证据：成交已完成，S6 不参与执行；投影禁止 T4 复用。
+        # close 无对应 OrderType，明确跳过证据投影，不得让旁路缩减正常回测支持面。
+        sell_timing = getattr(engine, "sell_timing", "open")
+        if sell_timing == "open":
+            evidence_orders = project_t3_evidence_orders(engine.trades, engine.merger_sleeve_id)
+            if evidence_orders:
+                engine.net_native_orders(evidence_orders)
+            metrics["_native_evidence_order_count"] = len(evidence_orders)
+            metrics["_merger_net_call_count"] = get_merger_net_call_count(engine)
+            metrics["_merger_s6_role"] = "backtest_t3_evidence_only"
+        else:
+            metrics["_merger_s6_role"] = f"backtest_t3_evidence_skipped_sell_timing_{sell_timing}"
     return metrics
 
 
@@ -739,6 +772,7 @@ def run_oos_backtest(
         bt_exclude_st,
         bt_min_list_days,
         merger_mode=merger_mode,
+        industry_reader=(loader.load_shenwan_industry if bt_max_per_industry is not None else None),
     )
 
     return _run_replay_engine_and_collect(

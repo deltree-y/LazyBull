@@ -60,7 +60,12 @@ from src.lazybull.v2.core.signal.ml_signal import MLSignal
 from src.lazybull.v2.evidence.fingerprint_keys import fingerprint
 from src.lazybull.v2.hosts.backtest.replay import run_oos_backtest
 from src.lazybull.v2.hosts.backtest.runs_writer import write_runs_batch
-from src.lazybull.v2.hosts.backtest.runtime import MERGER_SLEEVE_ID, validate_merger_mode
+from src.lazybull.v2.hosts.backtest.runtime import (
+    LEGACY_BYPASS,
+    MERGER_SLEEVE_ID,
+    SINGLE_SLEEVE_PASSTHROUGH,
+    validate_merger_mode,
+)
 from src.lazybull.v2.train.core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
 
 # P3-T3 改指（§17.1-C②）：旧口径函数在 v2 侧逐字保留，行为不变（等价验证 = 既有 P2a 测试全绿）
@@ -294,6 +299,10 @@ _MERGER_NOTE_KEYS = frozenset(
         "merger.sleeve_id",
         "merger.call_count",
         "merger.call_count_by_fold",
+        "merger.net_call_count",
+        "merger.net_call_count_by_fold",
+        "merger.native_evidence_order_count",
+        "merger.s6_role",
     }
 )
 
@@ -310,21 +319,43 @@ def _build_replay_meta_notes(
     merger_mode: Optional[str],
     extra_meta_notes: Optional[Dict[str, str]],
 ) -> Dict[str, str]:
-    """从逐折实际采集值生成合并证据；缺省模式不新增任何键。"""
+    """从实际引擎与逐折计数生成 merge/S6 证据，缺省 native 也如实登记。"""
     notes = dict(extra_meta_notes or {})
-    if merger_mode is None:
-        return notes
+    actual_mode = merger_mode or str(results[0].get("merger_mode", SINGLE_SLEEVE_PASSTHROUGH))
     by_fold = {
         str(int(result["split_index"])): int(result.get("merger_call_count", 0))
         for result in results
     }
+    net_by_fold = {
+        str(int(result["split_index"])): int(result.get("merger_net_call_count", 0))
+        for result in results
+    }
     notes.update(
         {
-            "merger.mode": merger_mode,
+            "merger.mode": actual_mode,
             "merger.sleeve_id": MERGER_SLEEVE_ID,
             "merger.call_count": str(sum(by_fold.values())),
             "merger.call_count_by_fold": json.dumps(
                 by_fold, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "merger.net_call_count": str(sum(net_by_fold.values())),
+            "merger.net_call_count_by_fold": json.dumps(
+                net_by_fold, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "merger.native_evidence_order_count": str(
+                sum(int(result.get("native_evidence_order_count", 0)) for result in results)
+            ),
+            "merger.s6_role": ";".join(
+                sorted(
+                    {
+                        str(
+                            result.get(
+                                "merger_s6_role", "backtest_t3_evidence_not_applicable_legacy"
+                            )
+                        )
+                        for result in results
+                    }
+                )
             ),
         }
     )
@@ -404,6 +435,12 @@ def _run_b0_split(
         "holdings_snapshot": metrics["_holdings_snapshot"],
         "config_overrides": _live_config_overrides(feature_columns),
         "merger_call_count": int(metrics.get("_merger_call_count", 0)),
+        "merger_net_call_count": int(metrics.get("_merger_net_call_count", 0)),
+        "native_evidence_order_count": int(metrics.get("_native_evidence_order_count", 0)),
+        "merger_mode": str(metrics.get("_merger_mode", LEGACY_BYPASS)),
+        "merger_s6_role": str(
+            metrics.get("_merger_s6_role", "backtest_t3_evidence_not_applicable_legacy")
+        ),
     }
 
 
@@ -420,7 +457,7 @@ def replay_b0(
     source: Optional[str] = None,
 ) -> Path:
     """B0 重放主流程：切分 → 逐折 v2 OOS 回测 → runs 契约批次写出。"""
-    validate_merger_mode(merger_mode)
+    resolved_merger_mode = validate_merger_mode(merger_mode)
     note_conflicts = _MERGER_NOTE_KEYS & set(extra_meta_notes or {})
     if note_conflicts:
         raise ValueError(f"extra_meta_notes 与合并内建证据键冲突: {sorted(note_conflicts)}")
@@ -448,7 +485,7 @@ def replay_b0(
             raise ValueError(f"--splits 子集 {sorted(selected)} 与生成的切分无交集")
 
     config = build_batch_config(splits)
-    _apply_merger_mode_to_config(config, merger_mode)
+    _apply_merger_mode_to_config(config, resolved_merger_mode)
     batch_id = batch_id or make_batch_id(config)
     config["batch_run_id"] = batch_id
     logger.info(f"B0 重放批次: {batch_id}（{len(splits)} 折）")
@@ -487,8 +524,8 @@ def replay_b0(
         for split in splits
     ]
 
-    meta_notes = _build_replay_meta_notes(results, merger_mode, extra_meta_notes)
-    effective_arms = tuple(arms) if arms is not None else ((merger_mode,) if merger_mode else ())
+    meta_notes = _build_replay_meta_notes(results, resolved_merger_mode, extra_meta_notes)
+    effective_arms = tuple(arms) if arms is not None else (resolved_merger_mode,)
     out_dir = write_runs_batch(
         results,
         batch_id=batch_id,

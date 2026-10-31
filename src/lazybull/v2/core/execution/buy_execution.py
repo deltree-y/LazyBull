@@ -38,12 +38,22 @@ from loguru import logger
 
 from src.lazybull.v2.common.date_utils import to_trade_date_str
 from src.lazybull.v2.common.trade_status import is_tradeable
+from src.lazybull.v2.core.accounting.ledger import BookingEntry, make_fill_key
 from src.lazybull.v2.core.decision.buy_plan import (
     REASON_ALREADY_BOUGHT,
     REASON_EXECUTION_FAILED,
     fill_slots_from_candidates,
 )
-from src.lazybull.v2.core.decision.sizing import compute_lot_shares
+from src.lazybull.v2.core.decision.sizing import (
+    compute_lot_shares,
+    compute_min_buy_value_threshold,
+)
+from src.lazybull.v2.core.execution.completion import (  # noqa: F401 - 兼容旧导入
+    _build_completion_stocks_to_try,
+    _complete_slot_attempt,
+    _completion_buy_loop,
+    _record_completion_skip_for_slot,
+)
 
 
 def _pop_pending_signal(
@@ -91,6 +101,7 @@ def _parse_pending_signal_data(engine, signal_data: Dict) -> Dict:
         desired_position_count = signal_data.get("desired_position_count")
         tranche_idx = signal_data.get("tranche_idx", 0)
         decision_trace = signal_data.get("decision_trace")
+        instruction_shares = signal_data.get("instruction_shares") or {}
     else:
         signals = signal_data
         ranked_candidates = []
@@ -102,6 +113,7 @@ def _parse_pending_signal_data(engine, signal_data: Dict) -> Dict:
         desired_position_count = None
         tranche_idx = 0
         decision_trace = None
+        instruction_shares = {}
 
     tranche_tag = (
         f"[批次 {tranche_idx + 1}/{engine.stagger_tranches}] "
@@ -118,11 +130,18 @@ def _parse_pending_signal_data(engine, signal_data: Dict) -> Dict:
         "desired_position_count": desired_position_count,
         "tranche_idx": tranche_idx,
         "decision_trace": decision_trace,
+        "instruction_shares": {
+            str(code): int(shares) for code, shares in instruction_shares.items()
+        },
+        "instruction_reason": signal_data.get("instruction_reason") if isinstance(signal_data, dict) else None,
+        "completion_meta": signal_data.get("completion_meta") or {} if isinstance(signal_data, dict) else {},
         "tranche_tag": tranche_tag,
     }
 
 
-def _sync_slot_weights_with_signals(signals: Dict, slot_weights: List[Dict]) -> List[Dict]:
+def _sync_slot_weights_with_signals(
+    signals: Dict, slot_weights: List[Dict], instruction_shares: Dict[str, int]
+) -> List[Dict]:
     """执行日权重可能被风险预算调整，按原槽位顺序同步更新（D8 提取件，顺序不变）。"""
     if slot_weights:
         ordered_slot_weights = []
@@ -131,15 +150,30 @@ def _sync_slot_weights_with_signals(signals: Dict, slot_weights: List[Dict]) -> 
             slot_stock = slot.get("stock")
             if slot_stock in signals and slot_stock not in seen_slot_stocks:
                 ordered_slot_weights.append(
-                    {"stock": slot_stock, "weight": float(signals[slot_stock])}
+                    {
+                        "stock": slot_stock,
+                        "weight": float(signals[slot_stock]),
+                        "instruction_shares": instruction_shares.get(slot_stock),
+                    }
                 )
                 seen_slot_stocks.add(slot_stock)
         for stock, weight in signals.items():
             if stock not in seen_slot_stocks:
-                ordered_slot_weights.append({"stock": stock, "weight": float(weight)})
+                ordered_slot_weights.append(
+                    {
+                        "stock": stock,
+                        "weight": float(weight),
+                        "instruction_shares": instruction_shares.get(stock),
+                    }
+                )
     else:
         ordered_slot_weights = [
-            {"stock": stock, "weight": float(weight)} for stock, weight in signals.items()
+            {
+                "stock": stock,
+                "weight": float(weight),
+                "instruction_shares": instruction_shares.get(stock),
+            }
+            for stock, weight in signals.items()
         ]
     return ordered_slot_weights
 
@@ -160,7 +194,9 @@ def _prepare_pending_buy_context(
     if engine.enable_risk_budget:
         signals = engine._apply_risk_budget(signals, date)
 
-    slot_weights = _sync_slot_weights_with_signals(signals, slot_weights)
+    slot_weights = _sync_slot_weights_with_signals(
+        signals, slot_weights, parsed.get("instruction_shares") or {}
+    )
     if not priority_candidates:
         priority_candidates = list(signals.items())
 
@@ -193,6 +229,8 @@ def _prepare_pending_buy_context(
         "desired_position_count": parsed["desired_position_count"],
         "tranche_idx": tranche_idx,
         "decision_trace": decision_trace,
+        "instruction_reason": parsed.get("instruction_reason"),
+        "completion_meta": parsed.get("completion_meta") or {},
         "tranche_tag": parsed["tranche_tag"],
         "portfolio_value": portfolio_value,
         "current_value": current_value,
@@ -231,11 +269,18 @@ def _record_buy_execution(
     buy_detail: Dict,
     stock: str,
     target_value: float,
+    requested_shares: Optional[int] = None,
 ) -> bool:
     """执行买入并按成交结果登记（D8 提取件，顺序不变）。"""
     trades_before = len(engine.trades)
 
-    engine._buy_stock(date, stock, target_value, signal_date=signal_date)
+    engine._buy_stock(
+        date,
+        stock,
+        target_value,
+        signal_date=signal_date,
+        requested_shares=requested_shares,
+    )
 
     trade_executed = (
         len(engine.trades) > trades_before
@@ -343,6 +388,12 @@ def _execute_slot_matched_buys(engine, date: pd.Timestamp, ctx: Dict) -> Dict:
 
     def _evaluate_candidate(candidate_stock: str, slot: Dict) -> tuple:
         if candidate_stock in engine.positions:
+            # 原槽位若携带固化增量股数，则是“存量加仓”，不是重复建仓。
+            if (
+                candidate_stock == slot.get("stock")
+                and slot.get("instruction_shares") is not None
+            ):
+                return True, ""
             return False, "__held__"
         return _check_candidate_tradeable(
             blocked_tradeability_reasons, date_quote, trade_date_str, candidate_stock
@@ -351,8 +402,21 @@ def _execute_slot_matched_buys(engine, date: pd.Timestamp, ctx: Dict) -> Dict:
     def _execute_buy(candidate_stock: str, slot: Dict) -> bool:
         target_value = current_value * float(slot["weight"])
         buy_detail = _build_buy_detail(portfolio_value, candidate_stock, target_value)
+        # 只有原槽位候选使用 T0 固化股数；同日顺延到其他候选时仍按原槽位权重预算。
+        requested_shares = (
+            slot.get("instruction_shares")
+            if candidate_stock == slot.get("stock")
+            else None
+        )
         return _record_buy_execution(
-            engine, date, signal_date, successful_buys, buy_detail, candidate_stock, target_value
+            engine,
+            date,
+            signal_date,
+            successful_buys,
+            buy_detail,
+            candidate_stock,
+            target_value,
+            requested_shares=requested_shares,
         )
 
     def _on_reject(slot: Dict, candidate_stock: str, reason: str) -> None:
@@ -498,14 +562,32 @@ def _register_unfilled_slots(engine, date: pd.Timestamp, ctx: Dict, run: Dict) -
         unfilled_count = len(remaining_unfilled_slots)
         unfilled_stocks = [slot["stock"] for slot in remaining_unfilled_slots]
 
+        per_stock = {}
+        for item in remaining_unfilled_slots:
+            meta = (ctx.get("completion_meta") or {}).get(item["stock"], {})
+            per_stock[item["stock"]] = {
+                "original_signal_date": meta.get("original_signal_date") or signal_date,
+                "attempts": int(meta.get("attempts") or 0) + 1,
+            }
+        attempts = max((item["attempts"] for item in per_stock.values()), default=1)
+        original_signal_date = next(
+            (item["original_signal_date"] for item in per_stock.values()), signal_date
+        )
         engine.unfilled_slots[signal_date] = {
             "unfilled_count": unfilled_count,
             "unfilled_slot_weights": remaining_unfilled_slots,
             "target_n": len(planned_slot_weights),
             "ranked_candidates": ranked_candidates,
             "signal_date": signal_date,
+            "original_signal_date": original_signal_date,
+            "completion_meta": per_stock,
             "first_attempt_date": date,
-            "attempts": 0,
+            "attempts": attempts,
+            "last_reason": ctx.get("instruction_reason"),
+            "reason_count": str(ctx.get("instruction_reason") or "").count(
+                "（买入后市值过小）"
+            )
+            + 1,
             "tranche_idx": tranche_idx,
         }
 
@@ -520,236 +602,111 @@ def _register_unfilled_slots(engine, date: pd.Timestamp, ctx: Dict, run: Dict) -
         )
 
 
-def _record_completion_skip_for_slot(
-    engine, tranche_tag: str, reason: str, original_signal_date: pd.Timestamp
-) -> None:
-    """带批次前缀的补齐跳过记录（D8 提取件，四处同型合并，顺序不变）。"""
-    prefix = f"{tranche_tag.strip()} " if tranche_tag.strip() else ""
-    engine._record_completion_skip(
-        reason,
-        f"{prefix}信号日{original_signal_date.date()}",
-    )
+def _size_buy_shares(
+    *,
+    target_value: float,
+    requested_shares: Optional[int],
+    trade_price: float,
+    capital: float,
+    cost_model,
+) -> Optional[tuple[int, float, float, float]]:
+    """按固化股数/权重预算和可用现金计算本次买入股数（legacy 缩量顺序）。"""
+    if requested_shares is not None:
+        if int(requested_shares) <= 0:
+            return None
+        target_value = float(int(requested_shares)) * trade_price
+    shares = compute_lot_shares(target_value, trade_price)
+    if shares == 0:
+        return None
+    amount = shares * trade_price
+    cost = cost_model.calculate_buy_cost(amount)
+    total_cost_cash = amount + cost
+    if total_cost_cash > capital:
+        if capital <= cost:
+            return None
+        shares = compute_lot_shares(capital - cost, trade_price)
+        if shares == 0:
+            return None
+        amount = shares * trade_price
+        cost = cost_model.calculate_buy_cost(amount)
+        total_cost_cash = amount + cost
+    return shares, amount, cost, total_cost_cash
 
 
-def _build_completion_stocks_to_try(
-    positions: Dict, new_ranked_candidates: List[Tuple[str, float]], unfilled_count: int
-) -> List[Tuple[str, float]]:
-    """从新的候选列表中选择可用股票，排除已持仓股票（D8 提取件，顺序不变）。
-
-    多取 buffer 以应对部分候选不可交易（停牌/涨跌停）的情况
-    """
-    candidate_buffer = unfilled_count * 2
-    stocks_to_try = []
-    for stock, score in new_ranked_candidates:
-        if stock not in positions:
-            stocks_to_try.append((stock, score))
-            if len(stocks_to_try) >= candidate_buffer:
-                break
-    return stocks_to_try
-
-
-def _completion_buy_loop(
-    engine,
-    date: pd.Timestamp,
-    original_signal_date: pd.Timestamp,
-    prev_date: pd.Timestamp,
-    trade_date_str: str,
-    date_quote: pd.DataFrame,
-    unfilled_slot_weights: List[Dict],
-    stocks_to_try: List[Tuple[str, float]],
-    new_ranked_candidates: List[Tuple[str, float]],
-    current_value: float,
-    completion_success_items: List[Dict[str, str]],
-    completion_delayed_slots: List[str],
-) -> List[Dict]:
-    """逐个槽位尝试补齐买入（D8 提取件，顺序不变）。
-
-    Returns:
-        本日仍未补齐的槽位列表（保留到下次补齐）
-    """
-    bought_stocks = []
-    remaining_unfilled_slots = []
-    bought_stock_set = set()  # 跟踪已买入的股票，避免重复买入
-    untradeable_stocks = set()  # 当天不可交易的股票，跳过后续槽位的重复尝试
-
-    # 逐个槽位尝试补齐
-    for slot_weight_info in unfilled_slot_weights:
-        original_stock = slot_weight_info["stock"]
-        weight = slot_weight_info["weight"]
-
-        # 尝试从有限的候选列表中买入（按顺序）
-        bought_for_this_slot = False
-
-        for stock, score in stocks_to_try:
-            # 跳过已买入或当天已确认不可交易的股票
-            if stock in bought_stock_set or stock in untradeable_stocks:
+def _build_residual_pending(
+    engine, ranked
+) -> tuple[Dict[str, float], List[Dict], int, Dict[str, Dict]]:
+    """从残余槽位和当日排名构建补位信号（原 plan_residual_completion 内层）。"""
+    pending: Dict[str, float] = {}
+    slot_rows: List[Dict] = []
+    completion_meta: Dict[str, Dict] = {}
+    tranche_idx = 0
+    for signal_date, slot in list(engine.unfilled_slots.items()):
+        remaining = []
+        per_stock_meta = slot.get("completion_meta") or {}
+        for item in slot.get("unfilled_slot_weights") or []:
+            item_meta = per_stock_meta.get(item["stock"], {})
+            if not item_meta:
+                item_meta = {
+                    "original_signal_date": slot.get("original_signal_date") or signal_date,
+                    "attempts": int(slot.get("attempts") or 0),
+                }
+            if int(item_meta.get("attempts") or 0) > 5:
                 continue
-
-            # 检查是否可交易（在当日 D）
-            tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action="buy")
-
-            if not tradeable:
-                untradeable_stocks.add(stock)
-                if engine.verbose:
-                    engine._record_completion_skip(
-                        "候选不可交易",
-                        f"{stock}({reason})",
-                    )
+            candidate = next(
+                (
+                    stock
+                    for stock, _score in ranked
+                    if stock not in engine.positions
+                    and stock not in pending
+                    and stock != item["stock"]
+                ),
+                None,
+            )
+            if candidate is None:
+                remaining.append(item)
                 continue
-
-            # 可交易，尝试买入
-            target_value = current_value * weight
-            engine._buy_stock(date, stock, target_value, signal_date=original_signal_date)
-
-            # 检查是否买入成功
-            if stock in engine.positions:
-                bought_stocks.append(stock)
-                bought_stock_set.add(stock)  # 记录已买入
-                bought_for_this_slot = True
-                completion_success_items.append({"slot": original_stock, "buy": stock})
-                engine._update_completion_attribution(
-                    original_signal_date=original_signal_date,
-                    ranking_date=prev_date,
-                    execution_date=date,
-                    planned_stock=original_stock,
-                    actual_stock=stock,
-                    ranked_candidates=new_ranked_candidates,
-                )
-
-                engine.completion_stats["total_completed"] += 1
-
-                break
-
-        # 如果该槽位未能补齐，保留到下次（会在下次重新生成有限候选继续尝试）
-        if not bought_for_this_slot:
-            remaining_unfilled_slots.append(slot_weight_info)
-            completion_delayed_slots.append(original_stock)
-
-    return remaining_unfilled_slots
+            pending[candidate] = float(item["weight"])
+            slot_rows.append({"stock": candidate, "weight": float(item["weight"])})
+            completion_meta[candidate] = {
+                "original_signal_date": item_meta.get("original_signal_date") or signal_date,
+                "attempts": int(item_meta.get("attempts") or 0),
+            }
+            tranche_idx = int(slot.get("tranche_idx") or 0)
+        if remaining:
+            slot["unfilled_slot_weights"] = remaining
+            slot["unfilled_count"] = len(remaining)
+        else:
+            engine.unfilled_slots.pop(signal_date, None)
+    return pending, slot_rows, tranche_idx, completion_meta
 
 
-def _complete_slot_attempt(
-    engine,
-    date: pd.Timestamp,
-    current_idx: int,
-    prev_date: pd.Timestamp,
-    prev_date_quote: pd.DataFrame,
-    trade_date_str: str,
-    date_quote: pd.DataFrame,
-    date_to_idx: Dict,
-    signal_date: pd.Timestamp,
-    slot_info: Dict,
-    completed_signal_dates: List,
-    completion_success_items: List[Dict[str, str]],
-    completion_delayed_slots: List[str],
-) -> None:
-    """单个信号日的补齐尝试（D8 提取件，顺序不变）。"""
-    first_attempt_date = slot_info["first_attempt_date"]
-    unfilled_slot_weights = slot_info["unfilled_slot_weights"]
-    # （T8 清理：旧实现此处解包的 target_n 从不使用——死绑定删除，行为不变）
-    attempts = slot_info["attempts"]
-    original_signal_date = slot_info["signal_date"]  # T日
-    completion_tranche_idx = slot_info.get("tranche_idx", 0)
-    tranche_tag = (
-        f"[批次 {completion_tranche_idx + 1}/{engine.stagger_tranches}] "
-        if engine.stagger_tranches > 1
-        else ""
-    )
-
-    # 计算已经过了多少个交易日（从 T+1 开始）
-    first_attempt_idx = date_to_idx.get(first_attempt_date)
-
-    if first_attempt_idx is None:
-        return
-
-    days_elapsed = current_idx - first_attempt_idx
-
-    # 在 T+1 日（首次尝试日）不进行补齐，从 T+2 日开始
-    if days_elapsed == 0:
-        return
-
-    # 检查是否超过补齐窗口（窗口从 T+1 开始，所以是 < completion_window_days）
-    if days_elapsed >= engine.completion_window_days:
-        # 超过补齐窗口，放弃补齐
-        unfilled_count = len(unfilled_slot_weights)
-        unfilled_stocks = [slot["stock"] for slot in unfilled_slot_weights]
-        engine.completion_stats["total_abandoned"] += 1
-        completed_signal_dates.append(signal_date)
-
-        engine._record_completion_abandoned_summary(
-            tranche_tag=tranche_tag,
-            original_signal_date=original_signal_date,
-            attempts=attempts,
-            unfilled_stocks=unfilled_stocks,
+def _residual_reason(engine, date: pd.Timestamp, pending: Dict[str, float], quote) -> str:
+    """补位失败回执原因（保持 legacy 展示语义）。"""
+    portfolio_value = engine._calculate_portfolio_value(date)
+    min_value = engine._get_min_buy_value_threshold(date)
+    if min_value <= 0:
+        min_value = compute_min_buy_value_threshold(
+            total_assets=portfolio_value,
+            target_count=len(engine.positions) + len(pending),
+            ratio=0.2,
         )
-        return
-
-    # 在补齐窗口内，尝试补齐
-    # 使用 D-1 日的数据重新生成候选股票列表
-    if prev_date_quote.empty:
-        _record_completion_skip_for_slot(engine, tranche_tag, "前日无行情", original_signal_date)
-        return
-
-    # 获取 D-1 日的股票池
-    stock_universe = engine.universe.get_stocks(prev_date, quote_data=prev_date_quote)
-
-    # 调用扩展点获取 D-1 日的额外数据
-    extra_data = engine._build_signal_data(prev_date)
-    if extra_data is None:
-        _record_completion_skip_for_slot(engine, tranche_tag, "无数据", original_signal_date)
-        return
-
-    # 合并默认数据和额外数据
-    signal_data = {}
-    signal_data.update(extra_data)
-
-    # 使用 D-1 日的数据重新生成排序候选列表
-    new_ranked_candidates = engine.signal.generate_ranked(prev_date, stock_universe, signal_data)
-
-    if not new_ranked_candidates:
-        _record_completion_skip_for_slot(engine, tranche_tag, "无候选", original_signal_date)
-        return
-
-    # 从新的候选列表中选择可用股票，排除已持仓股票
-    # 多取 buffer 以应对部分候选不可交易（停牌/涨跌停）的情况
-    unfilled_count = len(unfilled_slot_weights)
-    stocks_to_try = _build_completion_stocks_to_try(
-        engine.positions, new_ranked_candidates, unfilled_count
+    first_stock, first_weight = next(iter(pending.items()))
+    first_price = 0.0
+    price_row = quote[quote["ts_code"] == first_stock]
+    if not price_row.empty:
+        first_price = float(price_row.iloc[0].get("close") or 0.0)
+    planned_shares = compute_lot_shares(portfolio_value * first_weight, first_price)
+    too_small = (
+        min_value > 0 and planned_shares > 0 and planned_shares * first_price < min_value
     )
-
-    if not stocks_to_try:
-        _record_completion_skip_for_slot(engine, tranche_tag, "候选已持仓", original_signal_date)
-        return
-
-    # 尝试按槽位补齐
-    current_value = engine._calculate_portfolio_value(date)
-    # 分批调仓时，补齐预算也按本批槽位比例分配，与正常买入路径一致。
-    if engine.stagger_tranches > 1:
-        current_value *= engine._get_tranche_capital_fraction(completion_tranche_idx)
-
-    remaining_unfilled_slots = _completion_buy_loop(
-        engine,
-        date=date,
-        original_signal_date=original_signal_date,
-        prev_date=prev_date,
-        trade_date_str=trade_date_str,
-        date_quote=date_quote,
-        unfilled_slot_weights=unfilled_slot_weights,
-        stocks_to_try=stocks_to_try,
-        new_ranked_candidates=new_ranked_candidates,
-        current_value=current_value,
-        completion_success_items=completion_success_items,
-        completion_delayed_slots=completion_delayed_slots,
+    retry_count = max(
+        (int(slot.get("reason_count") or 1) for slot in engine.unfilled_slots.values()),
+        default=0,
     )
-
-    # 更新槽位信息
-    slot_info["attempts"] += 1
-    slot_info["unfilled_slot_weights"] = remaining_unfilled_slots
-    engine.completion_stats["completion_attempts"] += 1
-
-    # 如果已经全部补齐，从待补齐列表中移除
-    if not remaining_unfilled_slots:
-        completed_signal_dates.append(signal_date)
+    if not too_small:
+        return "补位槽位-信号生成"
+    return "补位槽位-信号生成" + "（买入后市值过小）" * (retry_count + 1)
 
 
 class BacktestBuyExecutionMixin:
@@ -778,6 +735,42 @@ class BacktestBuyExecutionMixin:
         _register_unfilled_slots(self, date, ctx, run)
 
         # 当日买入/卖出明细统一在每日总结下一行展示，这里不再单独输出买入执行日志。
+
+    def plan_residual_completion(self, date: pd.Timestamp) -> None:
+        """T0 收盘：把 T1 残余槽位具体化为下一交易日补位信号。
+
+        不复用隔日内部直买路径；候选按当日数据重新生成，权重继承原槽位，
+        由宿主投影固化下一交易日股数。
+        """
+        if not self.unfilled_slots or self.price_data_cache is None:
+            return
+        trade_date_str = to_trade_date_str(date)
+        quote = self.price_data_cache[self.price_data_cache["trade_date"] == trade_date_str]
+        if quote.empty:
+            return
+        universe = self.universe.get_stocks(date, quote_data=quote)
+        data = self._build_signal_data(date)
+        if data is None:
+            return
+        ranked = self.signal.generate_ranked(date, universe, data)
+        if not ranked:
+            return
+        if pd.Timestamp(date) in self.pending_signals:
+            return
+        pending, slot_rows, tranche_idx, completion_meta = _build_residual_pending(self, ranked)
+        if not pending:
+            return
+        self.pending_signals[pd.Timestamp(date)] = {
+            "signals": pending,
+            "ranked_candidates": list(ranked),
+            "priority_candidates": list(ranked),
+            "slot_weights": slot_rows,
+            "target_n": len(self.positions) + len(pending),
+            "desired_position_count": len(self.positions) + len(pending),
+            "tranche_idx": tranche_idx,
+            "completion_meta": completion_meta,
+            "instruction_reason": _residual_reason(self, date, pending, quote),
+        }
 
     def _process_position_completion(
         self,
@@ -938,6 +931,7 @@ class BacktestBuyExecutionMixin:
         stock: str,
         target_value: float,
         signal_date: Optional[pd.Timestamp] = None,
+        requested_shares: Optional[int] = None,
     ) -> None:
         """直接买入股票（不检查交易状态）
 
@@ -948,18 +942,27 @@ class BacktestBuyExecutionMixin:
             stock: 股票代码
             target_value: 目标市值
         """
-        # 若已有持仓，跳过重复买入，避免覆盖持有期与成本基础导致计算错误
-        if stock in self.positions:
-            self._record_duplicate_buy_skip(
-                stock=stock,
-                buy_date=self.positions[stock]["buy_date"],
-            )
-            return
-
         # 获取成交价格（不复权 close）
         trade_price = self._get_trade_price(date, stock)
         if trade_price is None:
             logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格，跳过买入")
+            return
+
+        # 已有持仓：只有 T1 固化增量指令才加仓；普通重复买入仍跳过。
+        if stock in self.positions:
+            if requested_shares is not None and int(requested_shares) > 0:
+                self._add_to_position(
+                    date,
+                    stock,
+                    float(int(requested_shares)) * trade_price,
+                    buy_type="instruction_add",
+                    buy_reason="T1 固化指令加仓",
+                )
+                return
+            self._record_duplicate_buy_skip(
+                stock=stock,
+                buy_date=self.positions[stock]["buy_date"],
+            )
             return
 
         # 获取绩效价格（后复权 close_adj）
@@ -968,30 +971,16 @@ class BacktestBuyExecutionMixin:
             logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
             pnl_price = trade_price
 
-        # 按手买入（100股为一手）
-        shares = compute_lot_shares(target_value, trade_price)
-
-        if shares == 0:
+        sized = _size_buy_shares(
+            target_value=target_value,
+            requested_shares=requested_shares,
+            trade_price=trade_price,
+            capital=self.current_capital,
+            cost_model=self.cost_model,
+        )
+        if sized is None:
             return
-
-        # 计算买入金额和成本（基于成交价格）
-        amount = shares * trade_price
-        cost = self.cost_model.calculate_buy_cost(amount)
-        total_cost_cash = amount + cost  # 总现金支出（含手续费）
-
-        if total_cost_cash > self.current_capital:
-            # 资金不足，按可用资金买入
-            # 确保有足够资金支付手续费
-            if self.current_capital <= cost:
-                # 资金不足以支付手续费，无法买入
-                return
-
-            shares = compute_lot_shares(self.current_capital - cost, trade_price)
-            if shares == 0:
-                return
-            amount = shares * trade_price
-            cost = self.cost_model.calculate_buy_cost(amount)
-            total_cost_cash = amount + cost
+        shares, amount, cost, total_cost_cash = sized
 
         # 与纸面交易一致：过小仓位买入拦截（按买入后市值阈值）
         min_buy_value_threshold = self._get_min_buy_value_threshold(date)
@@ -1004,10 +993,10 @@ class BacktestBuyExecutionMixin:
             return
 
         # 建立新持仓（记录买入的成交价格和绩效价格）
-        self.positions[stock] = {
-            "shares": shares,
-            "buy_date": date,
-            "signal_date": signal_date or date,
+        # P4-T1（D2）：入账唯一入口 = Ledger.apply_fills——原位完成全部数值
+        # 计算后构造入账指令，现金/持仓/成交日志的变更仅经账本落账
+        new_position = {
+            "shares": shares, "buy_date": date, "signal_date": signal_date or date,
             "buy_trade_price": trade_price,  # 成交价格（不复权）
             "buy_pnl_price": pnl_price,  # 绩效价格（后复权）
             "buy_cost_cash": total_cost_cash,  # 总现金支出（含手续费）
@@ -1015,22 +1004,25 @@ class BacktestBuyExecutionMixin:
         # 子类可覆写 _build_position_extra_info 以附加额外元数据（如 ATR）
         extra = self._build_position_extra_info(date, stock)
         if extra:
-            self.positions[stock].update(extra)
-
-        self.current_capital -= total_cost_cash
-
-        # 记录交易
-        self.trades.append(
-            {
-                "date": date,
-                "signal_date": signal_date or date,
-                "stock": stock,
-                "action": "buy",
-                "price": trade_price,  # 成交价格
-                "shares": shares,
-                "amount": amount,
-                "cost": cost,
-            }
+            new_position.update(extra)
+        trade_record = {
+            "date": date, "signal_date": signal_date or date, "stock": stock, "action": "buy",
+            "price": trade_price,  # 成交价格
+            "shares": shares, "amount": amount, "cost": cost,
+        }
+        self.ledger.apply_fills(
+            self,
+            [
+                BookingEntry(
+                    fill_key=make_fill_key(date, "buy", stock, len(self.trades)),
+                    date=date,
+                    stock=stock,
+                    action="buy",
+                    cash_delta=-total_cost_cash,
+                    trade_record=trade_record,
+                    new_position=new_position,
+                )
+            ],
         )
 
     def _add_to_position(
@@ -1087,25 +1079,28 @@ class BacktestBuyExecutionMixin:
             total_cost_cash = amount + cost
 
         position = self.positions[stock]
-        position["shares"] = int(position["shares"]) + int(shares)
-        # 加权平均成本：累加现金支出（原买入日/持有期不变）
-        position["buy_cost_cash"] = float(position.get("buy_cost_cash", 0.0)) + total_cost_cash
-        self.current_capital -= total_cost_cash
-
-        self.trades.append(
-            {
-                "date": date,
-                "signal_date": date,
-                "stock": stock,
-                "action": "buy",
-                "price": trade_price,
-                "shares": shares,
-                "amount": amount,
-                "cost": cost,
-                "buy_type": buy_type,
-                "buy_reason": buy_reason,
-                "buy_date": position.get("buy_date"),
-            }
+        # P4-T1（D2）：入账唯一入口 = Ledger.apply_fills——加仓股数/成本增量
+        # 原位计算后交账本落账（买入日/持有期不变，buy_cost_cash 加权累加）
+        trade_record = {
+            "date": date, "signal_date": date, "stock": stock, "action": "buy",
+            "price": trade_price, "shares": shares, "amount": amount, "cost": cost,
+            "buy_type": buy_type, "buy_reason": buy_reason,
+            "buy_date": position.get("buy_date"),
+        }
+        self.ledger.apply_fills(
+            self,
+            [
+                BookingEntry(
+                    fill_key=make_fill_key(date, "buy", stock, len(self.trades)),
+                    date=date,
+                    stock=stock,
+                    action="buy",
+                    cash_delta=-total_cost_cash,
+                    trade_record=trade_record,
+                    add_shares=int(shares),
+                    add_cost_cash=float(total_cost_cash),
+                )
+            ],
         )
         return float(total_cost_cash)
 
@@ -1115,6 +1110,7 @@ class BacktestBuyExecutionMixin:
         stock: str,
         target_value: float,
         signal_date: Optional[pd.Timestamp] = None,
+        requested_shares: Optional[int] = None,
     ) -> None:
         """买入股票（在 T+1 日以收盘价买入）
 
@@ -1127,7 +1123,13 @@ class BacktestBuyExecutionMixin:
             signal_date: 触发本次买入计划的信号日期
         """
         # 直接买入，执行阶段的交易状态检查由上层调度负责。
-        self._buy_stock_direct(date, stock, target_value, signal_date=signal_date)
+        self._buy_stock_direct(
+            date,
+            stock,
+            target_value,
+            signal_date=signal_date,
+            requested_shares=requested_shares,
+        )
 
     def _update_completion_attribution(
         self,

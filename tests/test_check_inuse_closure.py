@@ -78,9 +78,36 @@ import check_inuse_closure as cic  # noqa: E402
 # _registry 封闭注册表 + value 包 __init__ + value/spec + value/feature_columns
 # 候选超集声明），均不在两条主链路闭包内
 # ⇒ 不在用 141→147、全仓 345→351；静态闭包与在用数不变
-INUSE_BASELINE = 204
-NOTIN_BASELINE = 147
-STATIC_BASELINE = 200
+# P4-T1（2026-10-27）新增 v2/core 交付件 3 模块（accounting/engine_state +
+# accounting/ledger + execution/live_schedule，D1/D2 状态外置与入账分离），
+# 均不在两条主链路闭包内 ⇒ 不在用 147→150、全仓 351→354；静态闭包与在用数不变
+# P4-T2（2026-10-27）新增 v2/hosts/paper 交付件 3 模块（包 __init__ +
+# performance/reporting 迁移件，D3/D6「移动 + 旧路径 re-export 壳」过渡例外）：
+# 旧 paper/performance.py 与 paper/reporting.py 改壳后仍留闭包，两件新本体经壳
+# 进入纸面链路闭包 ⇒ 静态闭包 200→202、在用 204→206；包 __init__ 不在闭包内
+# ⇒ 不在用 150→151、全仓 354→357
+# P4-T2 续（2026-10-27）新增 v2/hosts/paper 交付件 2 模块（daily_assembly
+# 当日数据组装 + D4 量化就绪门、state_store 状态存储），均不在两条主链路
+# 闭包内 ⇒ 不在用 151→153、全仓 357→359；静态闭包与在用数不变
+# P4-T2 宿主核心（2026-10-27）新增 v2/hosts/paper 交付件 3 模块
+#（config_adapter 配置适配 / host 宿主核心 / factory 装配工厂），均不在两条
+# 主链路闭包内 ⇒ 不在用 153→156、全仓 359→362；静态闭包与在用数不变
+# P4-T2 评审处置（2026-10-28）新增 v2/hosts/paper 交付件 2 模块
+#（instruction_projection 指令投影纯函数族 / recovery 半提交恢复 mixin——
+# 复杂度门 1200 行硬上限拆分，行为不变），均不在两条主链路闭包内 ⇒
+# 不在用 156→158、全仓 362→364；静态闭包与在用数不变
+# P4-T2 复审处置（2026-10-28）新增 write_lock 写锁 mixin 1 模块（复杂度拆分），
+# 不在两条主链路闭包内 ⇒ 不在用 158→159、全仓 364→365；静态闭包与在用数不变
+# P4-T3（2026-10-28）原生合并替换：backtest.merger_adapter 删除、hosts.native_engine
+# 新增，均不在两条主链路闭包内 ⇒ 静态 202 / 在用 206 / 全仓 365 / 不在用 159 不变
+# P4-T5 收口（2026-10-30）纸面入口接 v2（CLI/Bot 六族命令与五指令统一解析）后，
+# `paper_trade.py` 主链路经 entrypoints 进入 v2/hosts/paper 全域 ⇒ 静态闭包
+# 202→265、在用 206→269（+4 动态加载补充不变）、全仓 365→371、不在用 159→102。
+# 该变化来自 T5 生产入口接线（非本修复引入），基线按实测显式更新；
+# 底稿 tests/fixtures/inuse_closure_baseline_20261006.json 同步刷新（沿用既有约定）。
+INUSE_BASELINE = 270
+NOTIN_BASELINE = 102
+STATIC_BASELINE = 266
 
 
 @pytest.fixture()

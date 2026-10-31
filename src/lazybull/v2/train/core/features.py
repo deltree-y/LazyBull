@@ -18,8 +18,6 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.common.config import get_data_root
-
 from .constants import (
     FACTOR_EXCLUDE_LIST_FILE,
 )

@@ -67,7 +67,8 @@ def _make_runs_batch(root: Path) -> Path:
     chain.to_parquet(batch / "chain_nav.parquet", index=False)
     summary.to_parquet(batch / "summary.parquet", index=False)
     (batch / "batch_meta.json").write_text(json.dumps({
-        "batch_id": "batch_ok", "config": _CONFIG, "config_fingerprint": fingerprint(_CONFIG),
+        "batch_id": "batch_ok", "host_mode": "backtest",
+        "config": _CONFIG, "config_fingerprint": fingerprint(_CONFIG),
         "data_state": {"data_state_id": "ds1"}, "baseline_ref": None, "arms": [],
     }, ensure_ascii=False), encoding="utf-8")
     fold_specs = [

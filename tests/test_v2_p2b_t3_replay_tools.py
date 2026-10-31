@@ -31,7 +31,6 @@ from src.lazybull.v2.hosts.backtest.runtime import (
     LEGACY_BYPASS,
     MERGER_SLEEVE_ID,
     SINGLE_SLEEVE_PASSTHROUGH,
-    configure_merger_mode,
     get_merger_call_count,
     validate_merger_mode,
 )
@@ -295,14 +294,9 @@ def _edit_meta_and_rehash(batch_dir, mutate):
 
 
 def test_runtime_default_bypass_and_enabled_assembly():
-    for mode in (None, LEGACY_BYPASS):
-        engine = SimpleNamespace()
-        assert configure_merger_mode(engine, mode) is None
-        assert "merge_port" not in vars(engine)
-        assert get_merger_call_count(engine) == 0
-    engine = SimpleNamespace()
-    adapter = configure_merger_mode(engine, SINGLE_SLEEVE_PASSTHROUGH)
-    assert engine.merge_port is adapter and adapter.sleeve_id == "value"
+    assert validate_merger_mode(None) == SINGLE_SLEEVE_PASSTHROUGH
+    assert validate_merger_mode(LEGACY_BYPASS) == LEGACY_BYPASS
+    assert get_merger_call_count(SimpleNamespace()) == 0
     with pytest.raises(ValueError, match="未知 P2b 合并模式"):
         validate_merger_mode("silent-bypass")
 
@@ -322,7 +316,10 @@ def test_replay_b0_config_snapshot_excludes_mode_and_notes_use_actual_counts(mon
     notes = replay_b0._build_replay_meta_notes(results, SINGLE_SLEEVE_PASSTHROUGH, None)
     assert notes["merger.call_count"] == "5"
     assert json.loads(notes["merger.call_count_by_fold"]) == {"0": 2, "1": 3}
-    assert replay_b0._build_replay_meta_notes(results, None, None) == {}
+    default_notes = replay_b0._build_replay_meta_notes(results, None, None)
+    assert default_notes["merger.mode"] == SINGLE_SLEEVE_PASSTHROUGH
+    assert default_notes["merger.call_count"] == "5"
+    assert default_notes["merger.net_call_count"] == "0"
 
 
 def test_replay_b0_unknown_mode_and_note_conflict_fail_before_real_config(monkeypatch):

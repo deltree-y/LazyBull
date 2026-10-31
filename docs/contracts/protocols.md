@@ -3,7 +3,7 @@
 > **单文件制（F6 起生效，2026-10-01）**：原「plans/ 草案 + contracts/ 契约」双轨合并，本文件为**唯一载体**；
 > 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
 > （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
-> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F11（2026-10-22 起草 / 2026-10-23 用户批准生效，P3 T4 评审处置包：§6 补 SleeveRegistry 协议代码化过渡注记——P3 期 `v2/sleeves/_registry.py` 为 SleeveSpec 注册表（唯一袖子入口），协议代码化兑现节点 = P4/P5 袖子信号迁移评审；随方案 F15 同批）**。代码实现以本文档为唯一接口依据。
+> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F12（2026-10-28 用户批准生效，P4 T2 评审处置：`PaperHost.run_t1` fills 语义勘误 + 签名改 `Optional[Sequence[Fill]] = None`；引擎真实行情记账为权威，fills 仅作提交前核对）**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
 |---|---|---|---|---|
@@ -18,13 +18,14 @@
 | F9（= v0.9） | 2026-10-16 | 本文件单文件制修订（P2b 单袖直通过渡口径） | **生效**（2026-10-16：两位专家评审通过（reviewer1/reviewer2）+ 用户确认同提交落档；随方案 F12 同批） | §3.4 `PortfolioMerger.merge` 的「Σ袖子目标权重 = 1.0（合并前各自归一）」明确为**上游前置条件**：P2b 单袖直通不重复运行时校验、不新增判定分支，亦不授权新输入生产者绕过归一化；多袖期是否运行时校验、容差与失败模式随 P6.5 另行预登记，不在本版预判。`net_across_sleeves` 同期仅支持 S6 单袖指令原样透传，混合 `source_sleeve` fail-fast；反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。`TargetPortfolio.target_weights` 注释同步指向上游不变量；`src/lazybull/v2/common/{protocols/core.py,types.py}` 同批同步，**公开签名不变** |
 | F10（= v0.10） | 2026-10-20 | 本文件单文件制修订（P3 T0.5a 契约修订包，随方案 F14 同批；Q8-①③ 2026-10-20 用户批准） | **生效**（2026-10-20 用户确认；开工硬门 #6 两轮评审处置闭合，随方案 F14 同批） | ① §2.2 训练协议：`ModelConfig` 增可选字段 `label_spec` / `feature_recipe` / `split_spec` / `domain`（版本号 + 规范化序列化 + 入模型 metadata 与配置指纹；默认 None/空映射、frozen、canonical JSON、映射不可变）；**`model_family` 语义不变 = 家族目录名（选股 = `stock_selection`），算法名由 `hyperparams.algorithm` 承载**；`val_window_months` 改可选（比例模式置 None）；`train_fold` 注记显式四日期由编排器按现役规则换算、train 侧不得二次比例切分；训练统计（train_samples/best_iteration/val_*）从注册表 metadata 读取、`train_fold` 返回签名不变；`WalkForwardOrchestrator.run` 增编排参数（`test_window_months` / `selected_split_indices` / `skip_training` / `start_model_version` / `skip_training_eval` / `deploy_train`）；② 产物边界注记（Q3-C）：WF 编排产物保持现格式与路径、回测批次落 runs/，经 wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 四键关联，验收含「从 wf_run_id 定位完整批次证据」；③ §7 依赖表注记：train 依赖不含 sleeves / universe（规格与域解析由薄入口/宿主注入） |
 | F11（= v0.11） | 2026-10-22 | 本文件单文件制修订（P3 T4 评审处置包：reviewer2 R2-T4-01 P1 + reviewer1 P3-9；实施规划 §18.11） | **生效**（2026-10-23 用户批准；reviewer1 复核一通过 + reviewer2 复核一确认草案内容可接受；随 P3 T5 收口提交落档） | §6 补过渡注记：P3 期 `v2/sleeves/_registry.py` 为 **SleeveSpec 注册表**（`get_sleeve_spec` / `list_sleeve_ids`，注册条目 = 规格对象而非信号类），**不是** §6 `SleeveRegistry` 协议的代码化；差异理由 = 信号实现 P3 期维持 `v2/core/signal/` 单处（P3 实施规划 §1.1-4）且 sleeves → core import 违反 §7 依赖方向，现行 `register/get/list_all` + `signal_class: type[Signal]` 签名本期无可实现形态（MLSignal 未实现协议 Signal）；`SleeveRegistry` 协议代码化兑现节点 = 信号实现迁入 sleeves 的阶段（**P4/P5 袖子信号迁移评审**，到期表登记随方案 F15 同批）；过渡期 spec 注册表为**唯一袖子入口**，hosts/薄入口经规格对象 + `signal_impl` 限定名字符串解析装配信号；**禁止以接口别名将 spec 与 signal_class 两种返回语义视为等价** |
+| F12（= v0.12） | 2026-10-28 | P4 T2 评审处置 + 用户裁决（实施规划 §18.10/§18.11） | **生效**（2026-10-28 用户批准；登记即生效，沿 F7 勘误先例） | §3.2/§4 `PaperHost.run_t1` 语义勘误：纸面由引擎按真实行情记账为权威，`fills` 非空仅作提交前核对（不一致零副作用拒绝，可修正重试），人工回填直接驱动入账归 live 阶段；代码协议签名同步为 `fills: Optional[Sequence[Fill]] = None` |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义）
 
-> 版本：v0.11（2026-10-22 起草 / 2026-10-23 用户批准生效；配套方案 F15 = v1.21）
-> 状态：**已生效**（F11：P3 T4 评审处置包——§6 SleeveRegistry 协议代码化过渡注记；reviewer1/reviewer2 复核一通过 + 用户批准；与方案 F15 同批，随 P3 T5 收口提交落档）
+> 版本：v0.12（2026-10-28 用户批准生效；P4 T2 评审处置）
+> 状态：**已生效**（F12：`PaperHost.run_t1` fills 语义勘误 + Optional 签名；用户裁决引擎真实行情记账为权威，登记即生效）
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
 > **设计方法论（R4 教训）**：先枚举现实引擎语义（R1 侦察事实），再让类型覆盖它——禁止先定义理想类型再让引擎适应类型
@@ -46,6 +47,7 @@
 | v0.7 | 2026-10-01 | P0 评审第二轮：§11 打钩依据补核实代码态（commit）；「内核内部」语义单列 P2a 对账用例分片（2-B）；LedgerEntry.payload 类型化欠账登记入 §10（2-C）；§11 补止盈行 + 止损检查器双层归属对齐方案 v1.11（1-A） | 兼容（注记 / 清单 / 登记；无签名破坏） |
 | v0.8 | 2026-10-06 | P2a T0 勘误包：止盈无在用对照物改退役机制描述 / 估值回退 4→5 处 / 每日钩子括注按代码实测；Kelly 包装合并兑现节点与 §11 快速复核登记 | 兼容（勘误与注记；无签名破坏） |
 | v0.9 | 2026-10-16 | P2b 单袖直通：Σ=1 明确为上游前置条件且直通期不重复运行时校验；S6 单袖透传，混合袖 fail-fast；多袖校验与净额化仍归 P6.5 | 兼容（过渡语义澄清；公开签名不变） |
+| v0.12 | 2026-10-28 | P4 T2：`PaperHost.run_t1` fills 语义勘误为引擎行情记账权威 + 提交前核对；签名改 `Optional[Sequence[Fill]] = None` | 兼容（既有调用可省略 fills；语义按用户裁决澄清） |
 
 ---
 
@@ -649,9 +651,14 @@ class Executor(Protocol):
     ) -> Sequence[Fill]:
         """每日执行（T0 判定、T+1 开盘价成交；顺延语义由内核延迟队列处理）
 
-        形态说明（R5）：本方法在回测宿主内**跨两天**——内部两阶段
+        形态说明（R5，2026-10-28 勘误）：本方法在回测宿主内**跨两天**——内部两阶段
         （T0 收单 / T+1 开盘成交）由引擎连续驱动；纸面宿主将其**分别暴露**为
-        run_t0 / run_t1（T+1 成交来自人工回填而非引擎撮合）。
+        run_t0 / run_t1。〔原文「T+1 成交来自人工回填而非引擎撮合」勘误（P4 T2 评审
+        处置，用户裁决）：旧纸面链本无人工回填入口（T1 按真实行情模拟成交），纸面宿主
+        忠实迁移 = **引擎按真实行情记账为权威**；run_t1 的 fills 参数 = 提交前核对通道
+        （不一致 ⇒ 零副作用拒绝，当日未落盘可修正重试）。人工回填直接驱动入账的形态
+        登记为将来 live 实盘宿主阶段义务（两阶段规则：先 export_state 持当日快照再批量
+        Ledger.apply_fills）。〕
         两种形态是同一执行语义的宿主适配，不是两种执行语义。
 
         幂等：否（改变账本状态）
@@ -831,8 +838,13 @@ class PaperHost(Protocol):
         """
         ...
 
-    def run_t1(self, date: TradeDate, fills: Sequence[Fill]) -> None:
-        """T+1 执行（手工回填实际成交）
+    def run_t1(self, date: TradeDate, fills: Optional[Sequence[Fill]] = None) -> None:
+        """T+1 执行（2026-10-28 勘误：引擎按真实行情记账为权威）
+
+        〔原文「手工回填实际成交」勘误（P4 T2 评审处置，用户裁决）：纸面 = 模拟盘，
+        无真实成交来源；fills=None ⇒ 引擎行情记账为权威；fills 非空 ⇒ 提交前核对
+        通道（与引擎当日撮合逐笔比对：一致正常提交，不一致零副作用拒绝——当日未
+        落盘可修正重试）。人工回填直接驱动入账 = live 实盘宿主阶段义务。〕
 
         副作用：更新账本
         """

@@ -42,10 +42,10 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     from src.lazybull.paper import PaperStorage
     from src.lazybull.paper.performance import build_account_value_series
     from src.lazybull.data.tushare_client import TushareClient
-
-    paper_storage = PaperStorage(
-        root_path=get_paper_root(), verbose=False, smb_reader=_smb_reader
-    )
+    from src.lazybull.v2.hosts.paper.entrypoints import assert_complete_generation_at
+    paper_root = get_paper_root()
+    paper_storage = PaperStorage(root_path=paper_root, verbose=False, smb_reader=_smb_reader)
+    assert_complete_generation_at(paper_root, _smb_reader)
 
     rebalance_state = paper_storage.load_rebalance_state()
     if rebalance_state is None:
@@ -681,11 +681,11 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
 
     from src.lazybull.paper import PaperStorage
     from src.lazybull.paper.performance import calculate_annualized_return, load_account_start_date
+    from src.lazybull.v2.hosts.paper.entrypoints import assert_complete_generation_at
 
     paper_root = get_paper_root()
-    paper_storage = PaperStorage(
-        root_path=paper_root, verbose=False, smb_reader=_smb_reader
-    )
+    paper_storage = PaperStorage(root_path=paper_root, verbose=False, smb_reader=_smb_reader)
+    assert_complete_generation_at(paper_root, _smb_reader)
     config = paper_storage.load_config()
     if config is None and _smb_reader is not None:
         _emit_diag("远端配置读取失败，保留上次快照")

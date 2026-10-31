@@ -29,6 +29,7 @@ from src.lazybull.v2.common.rules.sell_rules import (
 )
 from src.lazybull.v2.common.rules.stop_loss_checker import check_positions_stop_loss
 from src.lazybull.v2.common.trade_status import is_tradeable
+from src.lazybull.v2.core.accounting.ledger import BookingEntry, make_fill_key
 from src.lazybull.v2.core.decision.sizing import resolve_trim_shares
 
 
@@ -570,21 +571,16 @@ class BacktestSellExecutionMixin:
             else 0
         )
 
-        # 更新持仓和资金
+        # 更新持仓和资金（P4-T1（D2）：入账唯一入口 = Ledger.apply_fills）
         remaining_shares = total_shares - shares
-        if remaining_shares > 0:
-            # 部分卖出：保留剩余持仓，每股成本基准不变，总现金支出按剩余比例缩减
-            self.positions[stock]["shares"] = remaining_shares
-            self.positions[stock]["buy_cost_cash"] = buy_cost_cash * remaining_shares / total_shares
-        else:
-            del self.positions[stock]
-        self.current_capital += sell_proceeds
-
-        # 如果是止损卖出，清理止损监控器中的持仓状态
-        if sell_type == "stop_loss" and self.stop_loss_monitor:
-            self.stop_loss_monitor.remove_position(stock)
+        # 部分卖出语义：每股成本基准不变，总现金支出按剩余比例缩减（整仓卖出该值不消费）
+        remaining_cost_cash = (
+            buy_cost_cash * remaining_shares / total_shares if remaining_shares > 0 else 0.0
+        )
 
         # 记录交易（包含绩效收益信息和卖出类型）
+        # P4-T1 注：记录构建前移至入账前——操作数全部为局部变量/配置
+        #（不依赖入账后状态），语句可观察效果与旧序一致
         trade_record = {
             "date": date,
             "signal_date": signal_date,
@@ -609,4 +605,22 @@ class BacktestSellExecutionMixin:
             trade_record["sell_reason"] = sell_reason
             trade_record["trigger_type"] = trigger_type
 
-        self.trades.append(trade_record)
+        self.ledger.apply_fills(
+            self,
+            [
+                BookingEntry(
+                    fill_key=make_fill_key(date, "sell", stock, len(self.trades)),
+                    date=date,
+                    stock=stock,
+                    action="sell",
+                    cash_delta=sell_proceeds,
+                    trade_record=trade_record,
+                    remaining_shares=remaining_shares,
+                    remaining_cost_cash=remaining_cost_cash,
+                )
+            ],
+        )
+
+        # 如果是止损卖出，清理止损监控器中的持仓状态
+        if sell_type == "stop_loss" and self.stop_loss_monitor:
+            self.stop_loss_monitor.remove_position(stock)

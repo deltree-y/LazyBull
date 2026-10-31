@@ -32,6 +32,15 @@ from src.lazybull.paper import (
     format_positions_mobile,
     format_trade_result,
 )
+from src.lazybull.v2.hosts.paper.entrypoints import (
+    assert_legacy_rollback_allowed,
+    format_v2_model_info,
+    format_v2_positions,
+    resolve_entry_engine,
+    run_v2_day,
+)
+from src.lazybull.v2.hosts.paper.state_service import reset_v2_t0
+from src.lazybull.v2.hosts.paper.state_store import PaperStateStore
 
 # 凭证与 Webhook
 APP_KEY = os.getenv("APP_KEY")
@@ -115,6 +124,10 @@ def execute_trade(
     trade_date: str, progress_callback: Optional[Callable[[str], None]] = None
 ) -> tuple[str, str]:
     """执行交易流程，返回 (格式化结果文本, 校正后交易日期)。"""
+    if resolve_entry_engine() == "v2":
+        result = run_v2_day(trade_date)
+        return result.push_text, result.corrected_date
+    assert_legacy_rollback_allowed(PaperStateStore())
     result = execute_trade_workflow(trade_date, progress_callback=progress_callback)
     return format_trade_result(result), result.corrected_date
 
@@ -349,7 +362,10 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         """
         trade_date = args[0] if args else pd.Timestamp.today().strftime("%Y%m%d")
         try:
-            text = format_positions_mobile(trade_date)
+            if resolve_entry_engine() == "v2":
+                text = format_v2_positions(trade_date, store=PaperStateStore())
+            else:
+                text = format_positions_mobile(trade_date)
             self._safe_reply_markdown("持仓概览", text, incoming)
         except Exception as e:
             self._safe_reply(f"查询持仓失败: {e}", incoming)
@@ -392,8 +408,9 @@ class SimpleHandler(dts.AsyncChatbotHandler):
                 trade_date, progress_callback=reporter.update
             )
             reporter.stop()
-            # 记录本次实际执行日期，供 trade next 推算下一交易日
-            PaperStorage().save_last_trade_date(corrected_date)
+            # v2 宿主已在同代提交中记录；legacy 保持原补记路径。
+            if resolve_entry_engine() == "legacy":
+                PaperStorage().save_last_trade_date(corrected_date)
             elapsed = time.monotonic() - start
             result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
             self._safe_reply_markdown("交易结果", result_text, incoming)
@@ -409,7 +426,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         用法: model
         """
         try:
-            text = format_model_info()
+            text = format_v2_model_info() if resolve_entry_engine() == "v2" else format_model_info()
             logging.info(f"模型信息查询成功，文本长度 {len(text)}")
             self._safe_reply_markdown("模型信息", text, incoming)
         except Exception as e:
@@ -465,9 +482,15 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         用法: reset-t0
         """
         try:
-            ps = PaperStorage()
-            ps.reset_t0()
-            self._safe_reply("reset-t0 完成，账户已恢复初始状态", incoming)
+            if resolve_entry_engine() == "v2":
+                day = pd.Timestamp.today().strftime("%Y%m%d")
+                reset_v2_t0(PaperStateStore(), trade_date=day)
+                self._safe_reply("v2 最近 T0 与延迟队列已重置，账户保持不变", incoming)
+            else:
+                assert_legacy_rollback_allowed(PaperStateStore())
+                ps = PaperStorage()
+                ps.reset_t0()
+                self._safe_reply("reset-t0 完成，账户已恢复初始状态", incoming)
         except Exception as e:
             self._safe_reply(f"reset-t0 失败: {e}", incoming)
 
@@ -484,7 +507,10 @@ class SimpleHandler(dts.AsyncChatbotHandler):
                 return None
             trade_dates = trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
 
-            last_date = PaperStorage().load_last_trade_date() or ""
+            if resolve_entry_engine() == "v2":
+                last_date = PaperStateStore().load_last_trade_date() or ""
+            else:
+                last_date = PaperStorage().load_last_trade_date() or ""
 
             if last_date:
                 future = [d for d in trade_dates if d > last_date]

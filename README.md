@@ -389,6 +389,114 @@ python scripts/paper_trade.py real --ret-profit-only
 - 成本计算（佣金、印花税、滑点）
 - **实时行情查看**（`real` 子命令，基于 Tushare `realtime_quote` 接口）
 
+v2 P4 纸面宿主已提供显式引擎选择，**缺省及当前生产仍为 legacy**。下列 v2 示例仅适用于隔离环境或已正式切换的环境；生产 legacy 下用其他子命令覆盖 v2 会被拒绝：
+
+```bash
+python scripts/paper_trade.py run --trade-date 20261030 --engine legacy
+python scripts/paper_trade.py positions --trade-date 20261030 --engine v2
+python scripts/paper_trade.py model-info --engine v2
+python scripts/paper_trade.py adjust --engine v2 cash --trade-date 20261030 --set 500000
+```
+
+`v2` 的 adjust 修改权威 `engine_state.bin` 并重建旧布局投影，不直接改 `account.json`；从 v2 回到 legacy 必须经过 D11 回滚清单与后续运行标记校验。树莓派/SMB 只读仅发布完整代。真实 `config --engine v2` 还须 `--switch-evidence` 指向门 1/5/6/7 全过的收口证据，并在当时显式给出 `--authorize-production-switch`。
+
+T5 工具默认 dry-run（只打印计划）。真实执行需逐日显式授权分钟数，并登记窗口级总授权：
+
+```bash
+# 0) 首跑前逐源缺口扫描（只读，不写数据、不驱动任何臂）
+python scripts/v2_p4/t5_daily_driver.py --mode preflight \
+  --start-date <扫描出的首缺日> --target-date <首跑日> \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> --execute
+
+# 1) Q11-A：逐真实交易日恢复现役旧链（D4 → paper_trade.py run）
+python scripts/v2_p4/t5_daily_driver.py --mode restart --trade-date <真实交易日> \
+  --run-id <RUN_ID> --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --execute --authorized-minutes <本次授权> --authorized-total-minutes <窗口总授权>
+
+# 2) 第 10 个有效日后冻结门 1（必须显式给恢复台账；台账 >10 条时另给 --restart-segment-end）
+python scripts/v2_p4/t5_gate1_identity.py \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> --model-version <现役模型> \
+  --restart-ledger data/frozen_reference/v2_p4/<RUN_ID>/q11a_restart_ledger.json --freeze
+
+# 2b) Q11-SIM 等效（仅用户明确批准时；历史 10 日、隔离账户、逐日独立进程）
+python scripts/v2_p4/t5_q11_sim.py --mode prepare --source-paper data/paper \
+  --root data/paper_q11sim/<RUN_ID>/paper \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> --start-date <历史起始日> --days 10
+python scripts/v2_p4/t5_q11_sim.py --mode run-all --authorized-by-user \
+  --root data/paper_q11sim/<RUN_ID>/paper \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> --start-date <历史起始日> --days 10
+python scripts/v2_p4/t5_q11_sim.py --mode finalize --root data/paper_q11sim/<RUN_ID>/paper \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> --start-date <历史起始日> --days 10
+python scripts/v2_p4/t5_gate1_identity.py --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --paper-root data/paper_q11sim/<RUN_ID>/paper --model-version <现役模型> \
+  --restart-ledger data/frozen_reference/v2_p4/<RUN_ID>/q11a_sim_ledger.json \
+  --q11-mode sim \
+  --q11-sim-authorization data/frozen_reference/v2_p4/<RUN_ID>/q11a_sim_authorization.json \
+  --freeze
+
+# 2c) SHADOW_SIM/SLA_SIM（仅用户明确批准时；10 个历史交易日三臂 + 实测墙钟）
+python scripts/v2_p4/t5_shadow_sim.py --mode prepare \
+  --gate1 <门1 verification_summary.json> --frozen-paper <Q11-SIM 冻结纸面根> \
+  --work-root data/paper_shadow/<RUN_ID>/arms \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --start-date <历史起始日> --days 10
+python scripts/v2_p4/t5_shadow_sim.py --mode run-all --authorized-by-user \
+  --gate1 <门1 verification_summary.json> --frozen-paper <Q11-SIM 冻结纸面根> \
+  --work-root data/paper_shadow/<RUN_ID>/arms \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --start-date <历史起始日> --days 10
+python scripts/v2_p4/t5_shadow_sim.py --mode finalize \
+  --gate1 <门1 verification_summary.json> --frozen-paper <Q11-SIM 冻结纸面根> \
+  --work-root data/paper_shadow/<RUN_ID>/arms \
+  --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --start-date <历史起始日> --days 10
+
+# 3) 影子期逐真实交易日：三臂 + 现役账户同频推进（Q11-d）
+python scripts/v2_p4/t5_daily_driver.py --mode shadow --trade-date <真实交易日> \
+  --run-id <RUN_ID> --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --work-root data/paper_shadow/<RUN_ID>/arms \
+  --gate1 data/frozen_reference/v2_p4/<RUN_ID>/verification_summary.json \
+  --active-production --execute \
+  --authorized-minutes <本次授权> --authorized-total-minutes <窗口总授权>
+```
+
+口径与边界：
+
+- `restart` 只把「D4 未降级 + 账户已推进 + 真实日历日 + run_completed」的日子计入累计台账；失败日
+  写入 `sla/restart/<日>.json` 与 `q11a_restart_attempts.json` 保留现场，不计数、不补填。
+- 影子模式未加 `--active-production` 时按**演练**处理：记录写入 `sla/drill/`，不计入门 5/6 窗口。
+- 同一真实交易日只允许由本驱动执行一次（D4 → 现役臂 → neutral → v2 → 比较/登记）；不得用计划任务、
+  Bot 或 CLI 并发补数据或驱动同一账户。现役臂已成功而影子失败的当日保留事实并按系统原因重计窗口，
+  不回滚已发生成交。
+- D4 步骤落盘为 SLA 字段（`ensure_raw/ensure_clean/cs_infer/panel_label_refresh/readiness/arms`），
+  `snapshot` 单列前置步骤；重试/缺口/降级取自协调者真实产物，产物缺失按降级处理。
+- 数据水位只到**前一交易日**：当日数据不得采集（例如 20261030 允许的最高水位为 20261029）；D4 的
+  `--target-date` 必须按此规则设置，盘中未发布分区不得强行写入。
+- Q11-SIM / SHADOW_SIM / SLA-SIM 只在用户明确批准时使用：分别替代旧链连续 10 日重启、
+  10 日三臂影子与逐日墙钟，均不覆盖 live 网络/实时钟证据，也不能替代门 7 真实演练、
+  门 8 全量/收口或生产切换授权。
+- TuShare/AKShare 抓数时必须临时关闭代理；`download_raw` 与 `daily_data_coordinator` 默认清除
+  `HTTP(S)_PROXY/ALL_PROXY` 并设置 `NO_PROXY=*`，如需保留代理可显式设 `LAZYBULL_DOWNLOAD_BYPASS_PROXY=0`。
+- 三臂首次初始化由 `t5_three_arm.prepare_three_arms` 完成：legacy 两臂复制冻结源，v2 臂复用
+  `t5_migration.migrate_isolated`（staging → 校验 → 发布），初始化记录见
+  `data/paper_shadow/<RUN_ID>/arms/arms_initialized.json`。已初始化后只核对身份与完整代，不重迁/不重锚。
+- gate 7 真实演练取证：`python scripts/v2_p4/t5_gate7_rehearsal.py --mode real --checklist <清单> --evidence-dir <证据根>`，
+  操作清单与逐项要求见 [门 7 真实演练手册](docs/guide/t5_gate7_real_rehearsal_manual.md)；合成结果仍为 `SYNTHETIC_PASS`，
+  不能升级为正式通过。
+- 收口汇总只读本次实测证据，缺证据标 `MISSING` 并计入阻塞原因：
+
+```bash
+python scripts/v2_p4/t5_closeout.py --evidence-dir data/frozen_reference/v2_p4/<RUN_ID> \
+  --run-id <RUN_ID> --runs-batch data/runs/<paper_shadow 批次> \
+  --focused-tests-report <本次聚焦测试 JSON> --full-tests-report <本次全量 pytest JSON> \
+  --complexity-report <本次复杂度 JSON>
+```
+
+当前 T5 工具链已修通（R1~R6），D4 已追平到允许水位 20261029；20261029 就绪门因 Q3
+`free_cashflow` 全空导致 FCF 覆盖降至 31.8% 而失败。Q11-A、真实影子/SLA 与门 7 真实演练
+仍未产生真实窗口；在这些门与用户当时显式授权齐备前，不得把生产配置切换为 v2。执行状态见
+P4 实施规划 §24.10/§24.11/§24.12。
+
 详见 [纸面交易使用指南](docs/guide/paper_trading_guide.md)
 
 #### 运行回测
@@ -853,10 +961,10 @@ downside_penalty 挂载按裁决摘除，λ>0 显式 fail-fast）。实施规划
 `docs/plans/v2/p2a_implementation_plan_20261006.md`（本地）。**注意：P2a 未切换生产链路**——
 现役训练/回测/纸面仍走旧内核，v2 内核经 P2b/P3/P4 推进接入。
 
-**v2 单袖合并器（P2b，v0.206.0）：** `core/decision/portfolio_merger.py` 提供
-A1 单袖目标直通与 S6 单袖指令透传；混合袖输入显式 fail-fast。回测宿主通过只读适配器
-接入真实 `merge()`，引擎类级 `merge_port=None` 默认关闭，只有下列显式重放驱动可开启；
-开启/关闭共用 P2a B0 单一配置源，不新增生产 CLI 或全局配置开关：
+**v2 单袖合并器（P2b 交付，P4 T3 原生链接通）：** `core/decision/portfolio_merger.py`
+提供 A1 单袖目标直通与 S6 单袖指令透传；混合袖输入显式 fail-fast。P4 T3 起由
+`hosts/native_engine.py` 在宿主边界构造 `TargetPortfolio` / `Account` 并直接调用合并器，
+旧 dict 适配器与 `merge_port` 已删除；`legacy_bypass` 仅保留给下列冻结回归边：
 
 ```bash
 # 关闭臂（14 折）；预检可追加 --splits 0,1,2
@@ -876,8 +984,8 @@ python scripts/v2_p2b/compare_merger_batches.py \
 `--input-identity-verified` 只允许在两臂均已由 `replay_merger` 完成运行前后完整
 preflight 后使用；它只是向比对器显式声明门 1 已完成，**不是跳过或替代门 1 的豁免**。
 
-**边界：P2b 仍未切换生产链路**——多袖净额化、虚拟账本、三恒等式与订单级真实接线
-归 P6.5，纸面同源和过渡适配器删除归 P4；本阶段不宣称收益改善。
+**边界：仍未切换生产链路**——多袖净额化、虚拟账本、三恒等式与订单级真实多袖接线
+归 P6.5；P4 只交付单袖原生边界，不宣称收益改善。
 
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
@@ -928,6 +1036,24 @@ clean 行情，应用相同的 ST、上市天数和停牌/无行情筛选；评�
 复跑 vs `p2b_t5_closed_20261017_203508` 成对精确 PASS。三臂证据根
 `data/frozen_reference/v2_p3/`。**注意：P3 仍未切换生产链路**——v2 panel/labels 供
 P4 消费，现役训练/回测/纸面继续走 cs_train/cs_infer 与旧内核。
+
+**v2 纸面宿主（P4 T2，开发中）：** `v2/hosts/paper/factory.py::create_paper_host`
+提供隔离根装配与单日驱动能力，状态以引擎快照为权威、旧纸面账本文件为投影；整日写锁
+限制单写入者，崩溃恢复在同日或次日启动时补齐投影与发布标记。数据就绪门覆盖 panel、
+clean 行情、事件 freshness 与 derived 实际产出；cs_infer freshness 回退会按股票键合入
+最终模型输入。当前仅供影子/验收工具使用，**生产纸面入口与默认链路尚未切换**。
+
+**v2 到期义务清偿（P4 T3，已闭合）：** 新宿主 normalize/Kelly 统一回测侧语义；行业映射、
+停牌日历与行情读取由回测/纸面宿主显式注入，core/common 不反向依赖 `v2/store`。
+正常 v2 回测缺省经原生 `TargetPortfolio` 调用单袖 merge，显式 `legacy_bypass` 仅用于
+冻结回归边；纸面 S6 在提交前消费同一指令序列，回测 S6 仅作 T3 证明性证据，其成交
+反投影不得复用于 paper_replay。P2b dict 过渡件已删除；`cs_train_verify` 仅作为保活至
+旧链路物理删除的过渡验收工具。T4/T5 尚未验收，生产纸面默认链路不变。
+
+**v2 历史回放：** `schedule_mode="replay"` 的 `replay_calendar` 只声明驱动窗口，
+`trading_calendar` 可包含窗口后的已知交易日。调仓以窗口首日为锚，末日可在没有
+未来行情时生成次交易日计划；成交与 NAV 只记录窗口内日期。连续参照可显式传入
+`run(..., trading_dates_full=完整交易日历)` 使用相同口径，省略该参数保持原回测行为。
 
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
@@ -1043,6 +1169,9 @@ pytest
 pytest tests/test_cost.py
 pytest tests/test_features.py
 pytest tests/test_cleaner.py
+
+# P4 回放与宿主接线回归（全部使用隔离合成数据）
+pytest tests/test_v2_p4_t4_replay.py tests/test_v2_p4_t4_compare.py tests/test_v2_p4_t3_native_merge.py
 
 # 默认临时目录不可访问时，在仓库 temp/ 下指定本次运行的独立目录
 pytest tests/test_v2_p3_t5_arm_runner.py --basetemp=temp/pytest_t5_arm_runner

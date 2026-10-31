@@ -20,6 +20,7 @@ from src.lazybull.features.ensure.downloads import (
     _refresh_cashflow_revisions_if_due,
     _try_download_cashflow,
 )
+from src.lazybull.data.tushare_client import CASHFLOW_DEFAULT_FIELDS
 from src.lazybull.features.ensure.incremental import _drop_duplicates_keep_updated
 from src.lazybull.ml.walk_forward.summary import _live_cashflow_quality_cols
 
@@ -378,6 +379,9 @@ def test_download_cashflow_skip_does_not_fake_full_refresh_watermark(monkeypatch
     )
 
     assert captured["force"] is False
+    assert captured["fields"] == CASHFLOW_DEFAULT_FIELDS
+    for column in ("free_cashflow", "update_flag", "f_ann_date", "report_type"):
+        assert column in CASHFLOW_DEFAULT_FIELDS
     assert storage.load_sync_watermark(_CASHFLOW_REVISION_FULL_REFRESH_WATERMARK) == "20260101"
 
 

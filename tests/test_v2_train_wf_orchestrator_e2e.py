@@ -1803,7 +1803,9 @@ class TestRunsBatchHostAdapter:
         runs_summary = pd.read_parquet(batch_dir / "summary.parquet")
         assert runs_summary["wf_run_id"].iloc[0] == wf_run_id
         assert int(runs_summary["model_version"].iloc[0]) == 1
-        summary_df = pd.read_csv(summary_csv, encoding="utf-8-sig")
+        summary_df = pd.read_csv(
+            summary_csv, encoding="utf-8-sig", dtype={"data_state_id": str}
+        )
         assert summary_df["data_state_id"].iloc[0] == state_payload["data_state_id"]
         assert int(summary_df["model_version"].iloc[0]) == 1
 

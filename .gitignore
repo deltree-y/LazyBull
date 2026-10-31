@@ -91,6 +91,7 @@ data/frozen_reference/
 # 禁止顺手 ignore；不写任何 ignore 规则 = 默认跟踪，本注释即明文登记。
 # data/ledger/  （不 ignore；docs/contracts/hypothesis_ledger_schema.md §2）
 data_f1b7bac
+data/paper_*
 .venv312/*
 
 # Logs（项目共识：所有临时 log 文件统一写仓库根 logs/ 下，见 CLAUDE.md §7.7 与

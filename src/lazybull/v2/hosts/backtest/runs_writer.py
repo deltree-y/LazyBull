@@ -52,6 +52,7 @@ from src.lazybull.v2.evidence.runs_schema import (
     DAILY_CONTRACT_COLS,
     SNAP_CONTRACT_COLS,
     TRADES_CONTRACT_COLS,
+    validate_host_mode,
 )
 
 #: trades 引擎内部键 → 契约列名（契约 §5）
@@ -315,6 +316,7 @@ def _build_batch_meta(
     arms: Iterable[str],
     source: str,
     meta_notes: Dict[str, str],
+    host_mode: str,
 ) -> Dict[str, object]:
     """batch_meta.json 组装（契约 §2 全字段）。
 
@@ -333,7 +335,7 @@ def _build_batch_meta(
         "schema_version": 1,
         "batch_id": batch_id,
         "created_at": pd.Timestamp.now().isoformat(),
-        "host_mode": "backtest",
+        "host_mode": validate_host_mode(host_mode),
         "source": source,
         "code_state": code_state,
         "data_state": data_state,
@@ -380,6 +382,7 @@ def write_runs_batch(
     arms: Iterable[str] = (),
     source: str = "v2_p2a_native_replay",
     extra_meta_notes: Optional[Dict[str, str]] = None,
+    host_mode: str = "backtest",
 ) -> Path:
     """把一批逐折回测结果写为 runs 契约批次目录，并用读入桥自校验。
 
@@ -397,6 +400,7 @@ def write_runs_batch(
         source: 产物来源标识
         extra_meta_notes: P2b 可选证据 notes（键和值均须为字符串）；缺省 None
             时 P2a 产物键集与内容不变，与内建 topk 键冲突直接失败。
+        host_mode: runs 契约三值宿主模式；缺省 ``backtest``，保持既有产物语义不变。
 
     Returns:
         批次目录路径（``runs_root/<batch_id>``）
@@ -464,7 +468,7 @@ def write_runs_batch(
     summary = _build_summary(ordered, config, batch_id, data_state_id)
     summary.to_parquet(out_dir / "summary.parquet", index=False)
     batch_meta = _build_batch_meta(
-        batch_id, summary, code_state, data_state, baseline_ref, arms, source, meta_notes
+        batch_id, summary, code_state, data_state, baseline_ref, arms, source, meta_notes, host_mode
     )
     (out_dir / "batch_meta.json").write_text(
         json.dumps(batch_meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

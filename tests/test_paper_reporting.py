@@ -33,7 +33,7 @@ def paper_config(monkeypatch):
     """注入最小纸面交易配置（未指定 model_version，取最新模型）。"""
     config = {"model_version": None, "top_n": 20, "rebalance_freq": 5}
     monkeypatch.setattr(
-        "src.lazybull.paper.reporting.PaperStorage",
+        "src.lazybull.v2.hosts.paper.reporting.PaperStorage",
         lambda: _FakePaperStorage(config),
     )
     return config

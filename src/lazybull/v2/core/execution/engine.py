@@ -34,11 +34,8 @@ exposure 参数，天然 fail-fast（传 ``exposure_table=...`` 抛 TypeError，
 - ``Signal`` / ``CostModel`` / ``StopLossConfig`` 改指 v2 复制件
   （仅作 ``__init__`` 签名类型标注）。
 
-P2b-T2 修订（方案 F12 §4.10 / 评审 R8 方案 A）：类体新增唯一类级默认
-``merge_port = None``（迁移期合并端口，关闭态）——不改构造器、MRO、实例状态
-初始化或账户所有权（实例 ``vars`` 零新增，t4/t7 锚不动）；显式开启时由 v2
-replay 组合根在构造完成后装配 hosts 适配器实例（``BacktestEngineML`` 继承）。
-P4 原生 Account/TargetPortfolio 边界接通后删除该类级槽位。
+P4-T3：P2b ``merge_port`` 类级槽位与旧 dict 接缝已删除；原生合并由
+hosts 子类注入公共 ``PortfolioMerger`` 协议，不进入 core 状态所有权。
 """
 
 from typing import Dict, List, Optional
@@ -125,12 +122,6 @@ class BacktestEngine(
     # 常量：每年交易日数量（用于年化波动率计算）
     TRADING_DAYS_PER_YEAR = 252
 
-    # P2b-T2 迁移期合并端口（方案 F12 §4.10 / 评审 R8 方案 A）：唯一类级默认
-    # None = 关闭态；只有显式开启时，组合根才在构造完成后执行
-    # ``engine.merge_port = adapter``（实例属性，hosts 适配器）。
-    # P4 原生边界接通后删除。
-    merge_port = None
-
     def __init__(
         self,
         universe: Universe,
@@ -150,7 +141,8 @@ class BacktestEngine(
         sell_timing: str = "open",
         enable_position_completion: bool = True,
         completion_window_days: int = 3,
-        data_storage=None,  # 新增：数据存储实例（用于读取 raw/suspend 数据）
+        data_storage=None,  # 宿主注入的停牌读取协议对象
+        industry_reader=None,  # 宿主注入的申万行业表读取函数
         max_weight_per_stock: Optional[float] = None,  # 新增：单股最大权重
         max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
         stock_basic: Optional[pd.DataFrame] = None,  # 新增：股票基本信息（用于行业约束）
@@ -160,6 +152,7 @@ class BacktestEngine(
         kelly_max_leverage: float = 0.25,  # 单只股票 Kelly 仓位上限（占总资产）
         enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
         min_buy_value_ratio: float = 0.0,  # 买入后最小持仓市值占平均仓位市值比例（0=关闭）
+        enable_trailing_early_rebalance: bool = True,  # 拖尾（盈利延续）提前调仓开关（live 复刻置 False）
     ):
         """初始化回测引擎
 
@@ -185,7 +178,8 @@ class BacktestEngine(
             sell_timing: 卖出时机，'open' 表示开盘价卖出（默认），'close' 表示收盘价卖出
             enable_position_completion: 是否启用仓位补齐功能，默认True
             completion_window_days: 补齐窗口期（交易日），默认3天
-            data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
+            data_storage: 宿主注入的停牌读取协议对象（提供 load_raw_by_date）
+            industry_reader: 宿主注入的申万行业表读取函数；启用行业约束时必填
             max_weight_per_stock: 单个股票最大权重（0-1），None 表示不启用限权，启用后会在信号生成时对权重进行限制并归一化
             max_per_industry: 单个行业最大持仓数量，None 或 0 表示不启用行业约束
             stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
@@ -216,6 +210,7 @@ class BacktestEngine(
             enable_position_completion=enable_position_completion,
             completion_window_days=completion_window_days,
             data_storage=data_storage,
+            industry_reader=industry_reader,
             max_weight_per_stock=max_weight_per_stock,
             max_per_industry=max_per_industry,
             stock_basic=stock_basic,
@@ -225,6 +220,7 @@ class BacktestEngine(
             kelly_max_leverage=kelly_max_leverage,
             enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
             min_buy_value_ratio=min_buy_value_ratio,
+            enable_trailing_early_rebalance=enable_trailing_early_rebalance,
             pending_order_event_sink=self._record_pending_order_event,
         )
 

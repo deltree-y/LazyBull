@@ -84,15 +84,31 @@ class BacktestPendingExecutionMixin:
             )
 
             if tradeable:
-                # 可交易，尝试执行
+                # 可交易不等于成交：只有真实成交才清理义务。
+                trades_before = len(self.trades)
                 if order.action == "buy":
                     self._buy_stock_direct(
                         date, order.stock, order.target_value, signal_date=order.signal_date
                     )
-                    self.pending_order_manager.mark_success(date, order.stock, "buy")
                 elif order.action == "sell":
                     self._sell_stock_direct(date, order.stock)
-                    self.pending_order_manager.mark_success(date, order.stock, "sell")
+                executed = len(self.trades) > trades_before and any(
+                    trade.get("stock") == order.stock
+                    and trade.get("action") == order.action
+                    and trade.get("date") == date
+                    for trade in self.trades[trades_before:]
+                )
+                if executed:
+                    self.pending_order_manager.mark_success(date, order.stock, order.action)
+                else:
+                    self.pending_order_manager.add_order(
+                        stock=order.stock,
+                        action=order.action,
+                        current_date=date,
+                        signal_date=order.signal_date,
+                        target_value=order.target_value,
+                        reason="可交易但未成交（资金/整手/阈值约束）",
+                    )
             else:
                 # 仍不可交易，更新延迟订单
                 self.pending_order_manager.add_order(

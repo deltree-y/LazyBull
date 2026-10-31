@@ -24,7 +24,7 @@ P2b-T3 差异登记：新增迁移期合并模式的构造后装配helper。缺�
 """
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 
@@ -36,10 +36,11 @@ from src.lazybull.common.config import get_stock_selection_models_root
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.v2.common.cost import CostModel
 from src.lazybull.v2.common.trading_config import TradingConfig
+from src.lazybull.v2.core.decision.portfolio_merger import SingleSleevePortfolioMerger
 from src.lazybull.v2.core.execution.ml_signal_feed import BacktestEngineML
 from src.lazybull.v2.core.signal.factory import create_signal
 from src.lazybull.v2.core.signal.ml_signal import MLSignal
-from src.lazybull.v2.hosts.backtest.merger_adapter import LegacyMergerAdapter
+from src.lazybull.v2.hosts.native_engine import NativeMergeBacktestEngineML
 
 MERGER_SLEEVE_ID = "value"
 LEGACY_BYPASS = "legacy_bypass"
@@ -47,30 +48,26 @@ SINGLE_SLEEVE_PASSTHROUGH = "single_sleeve_passthrough"
 MERGER_MODES = frozenset({LEGACY_BYPASS, SINGLE_SLEEVE_PASSTHROUGH})
 
 
-def validate_merger_mode(merger_mode: Optional[str]) -> Optional[str]:
-    """校验迁移期合并模式；未知模式显式失败，禁止回退 bypass。"""
+def validate_merger_mode(merger_mode: Optional[str]) -> str:
+    """解析合并模式：正常 v2 缺省进入原生单袖，bypass 仅限显式冻结回归边。"""
     if merger_mode is not None and merger_mode not in MERGER_MODES:
         raise ValueError(
-            f"未知 P2b 合并模式 {merger_mode!r}；合法取值={sorted(MERGER_MODES)}，"
-            "缺省 None 表示旧 P2a 调用，禁止静默回退 legacy_bypass"
+            f"未知 P2b 合并模式 {merger_mode!r}；合法取值={sorted(MERGER_MODES)}；"
+            "缺省 None = single_sleeve_passthrough，legacy_bypass 必须显式声明"
         )
-    return merger_mode
-
-
-def configure_merger_mode(engine: BacktestEngineML, merger_mode: Optional[str]):
-    """在引擎构造后按显式模式装配适配器；关闭态保持实例属性零新增。"""
-    mode = validate_merger_mode(merger_mode)
-    if mode != SINGLE_SLEEVE_PASSTHROUGH:
-        return None
-    adapter = LegacyMergerAdapter(MERGER_SLEEVE_ID)
-    engine.merge_port = adapter
-    return adapter
+    return SINGLE_SLEEVE_PASSTHROUGH if merger_mode is None else merger_mode
 
 
 def get_merger_call_count(engine: BacktestEngineML) -> int:
-    """读取本折适配器的真实 merge 调用数；无实例端口时计 0。"""
-    port = vars(engine).get("merge_port")
-    return 0 if port is None else int(port.call_count)
+    """读取原生合并器真实 merge 调用数；legacy/bypass 计 0。"""
+    merger = vars(engine).get("portfolio_merger")
+    return 0 if merger is None else int(merger.merge_call_count)
+
+
+def get_merger_net_call_count(engine: BacktestEngineML) -> int:
+    """读取原生 S6 真实调用数；legacy/bypass 计 0。"""
+    merger = vars(engine).get("portfolio_merger")
+    return 0 if merger is None else int(merger.net_call_count)
 
 
 def infer_rebalance_freq_from_label(label_column: Optional[str], default: int = 20) -> int:
@@ -145,15 +142,18 @@ def create_backtest_engine_from_config(
     features_by_date: dict,
     stock_basic: pd.DataFrame,
     data_storage,
+    industry_reader: Optional[Callable[[], Optional[pd.DataFrame]]] = None,
     initial_capital: Optional[float] = None,
     sell_timing: Optional[str] = None,
     verbose: bool = False,
     completion_window_days: int = 5,
     enable_pending_order: bool = True,
     cost_model: Optional[CostModel] = None,
+    merger_mode: Optional[str] = None,
 ) -> BacktestEngineML:
-    """根据统一 TradingConfig 构造 BacktestEngineML。"""
-    return BacktestEngineML(
+    """根据统一 TradingConfig 构造引擎；缺省使用原生单袖，显式 legacy 才绕过。"""
+    mode = validate_merger_mode(merger_mode)
+    engine_kwargs = dict(
         universe=universe,
         signal=signal,
         features_by_date=features_by_date,
@@ -178,3 +178,12 @@ def create_backtest_engine_from_config(
         min_buy_value_ratio=trading_config.min_buy_value_ratio,
         enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
     )
+    if industry_reader is not None:
+        engine_kwargs["industry_reader"] = industry_reader
+    if mode == SINGLE_SLEEVE_PASSTHROUGH:
+        return NativeMergeBacktestEngineML(
+            **engine_kwargs,
+            portfolio_merger=SingleSleevePortfolioMerger(),
+            sleeve_id=MERGER_SLEEVE_ID,
+        )
+    return BacktestEngineML(**engine_kwargs)

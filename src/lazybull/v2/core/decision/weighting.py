@@ -5,10 +5,10 @@
 ``_estimate_stock_variance``（T0 规划 §3.3）。方法转函数、显式入参替代
 self；公开语义、数值操作顺序、默认值逐字保留。
 
-D5 边界：本模块为**回测侧**语义（全分数求和 / 静默等权回退 / 方差窗口取
-``kelly_vol_window`` 属性）；纸面侧（``paper/runner/signals.py`` /
-``paper/runner/pricing.py``）语义分歧属实，**迁移期禁止合并**，统一 =
-P4 前置预登记裁决项（F11 登记）。
+P4-T3 边界（Q3 裁决）：新回测与纸面宿主统一使用本模块的**回测侧**语义
+（全分数求和 / 总和非正等权 / 未知 sizing 静默等权 / 方差窗口取
+``kelly_vol_window``）。保活旧纸面链（``paper/runner/signals.py`` /
+``paper/runner/pricing.py``）行为冻结，仅作历史统计与等价 Oracle，不改道。
 
 依赖处置（§3.5 登记表）：
 - ``compute_kelly_weights`` / ``estimate_variance_from_prices`` 委托

@@ -11,6 +11,14 @@ INCOME_DEFAULT_FIELDS = (
     "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type," "n_income_attr_p,update_flag"
 )
 
+#: 现金流质量因子与版本化持久化所需的现金流字段（含供应商 free_cashflow）。
+#: 必须显式传给 cashflow_vip：接口默认字段不含 free_cashflow，Q3 分区会整列空。
+CASHFLOW_DEFAULT_FIELDS = (
+    "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,update_flag,"
+    "net_profit,c_fr_sale_sg,n_cashflow_act,c_pay_acq_const_fiolta,"
+    "st_cash_out_act,n_cashflow_inv_act,free_cashflow"
+)
+
 
 class ClientFundamentalMixin:
     """TushareClient 基本面 mixin。"""
@@ -93,16 +101,7 @@ class ClientFundamentalMixin:
             现金流量表 DataFrame
         """
         if fields is None:
-            fields = (
-                "ts_code,ann_date,f_ann_date,end_date,"
-                "net_profit,"
-                "c_fr_sale_sg,"
-                "n_cashflow_act,"
-                "c_pay_acq_const_fiolta,"
-                "st_cash_out_act,"
-                "n_cashflow_inv_act,"
-                "free_cashflow"
-            )
+            fields = CASHFLOW_DEFAULT_FIELDS
         kwargs: dict = {"fields": fields}
         if ts_code is not None:
             kwargs["ts_code"] = ts_code
@@ -127,16 +126,7 @@ class ClientFundamentalMixin:
             全市场现金流量表 DataFrame
         """
         if fields is None:
-            fields = (
-                "ts_code,ann_date,f_ann_date,end_date,"
-                "net_profit,"
-                "c_fr_sale_sg,"
-                "n_cashflow_act,"
-                "c_pay_acq_const_fiolta,"
-                "st_cash_out_act,"
-                "n_cashflow_inv_act,"
-                "free_cashflow"
-            )
+            fields = CASHFLOW_DEFAULT_FIELDS
         return self.query("cashflow_vip", fields=fields, period=period)
 
     def get_income_by_period(

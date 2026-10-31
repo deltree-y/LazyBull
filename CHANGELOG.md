@@ -2,6 +2,474 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.208.34] - 2026-10-31
+
+### Closed
+
+- T5 技术验收正式闭合：门 1/5/6/7/8 全 PASS，`blocked_reasons=[]`。
+- 门5 `t5_sim_final4_20261031` 10/10 PASS、0 差异；门7 `t5_gate7_final5_20261031` 12 PASS + SMB WAIVED。
+- 全量 4452 passed、T5 定向 170 passed、复杂度双口径 PASS。
+- 闭合记录：`data/frozen_reference/v2_p4/t5_release_final_20261031/t5_closure_status.json`。
+- 生产仍 legacy，未切换、未迁移生产账户、未执行最终单 commit。
+
+## [0.208.33] - 2026-10-31
+
+### Fixed
+
+- runs 收口同时核对 `daily.parquet` 完整日期集合及总资产/现金/持仓市值，成交仍逐值核对；正确成交+旧净值/额外无成交日会被拒绝。
+- 完整 `instruction_rows` 写入与 buy_plan 解耦：纯卖、空买、混合计划均保存 12 列；修复纯卖且 pending 非空时的 `UnboundLocalError`。
+- 迁移纯卖指令同样保存完整行集；恢复前校验 12 列及 `ts_code/action/shares/price_type/source_date`，缺失明确拒绝，不静默补 NaN。
+
+### Validation
+
+- T5 定向 170 passed；T4 replay/live 24 passed；全量 **4452 passed / 0 failed / 1249.07s**。
+- 门5 `t5_sim_final4_20261031` 10/10 PASS、0 差异；门7 `t5_gate7_final5_20261031` 12 PASS + SMB WAIVED。
+- 收口 `READY_FOR_FINAL_AUTHORIZATION`，门1/5/6/7/8 PASS，blocked 空；生产 legacy、未提交。
+
+## [0.208.32] - 2026-10-31
+
+### Fixed
+
+- T1 原槽位对已有持仓按固化 `instruction_shares` 加仓，保留原买入日；普通重复买入仍跳过。
+- 补位上限改为 legacy 语义：attempts=5 仍生成第 5 次指令，超过 5 次才停止。
+- 恢复直接返回权威 `instruction_rows` 完整 12 列；迁移同步保存完整行集，缺行集且有固化股数时 fail-closed。
+- runs 收口按 accumulator 实际日期/成交内容核对，贴标签旧批次被拒绝。
+
+### Validation
+
+- 最终 run `t5_sim_final4_20261031`：门 5 10/10 PASS、`difference_total=0`。
+- 门 7 `t5_gate7_final5_20261031`：13 项 12 PASS + 设备 WAIVED，同轨迹延迟 PASS。
+- 全量 pytest **4452 passed / 0 failed / 1254.64s**；T5 定向 **170 passed**。
+- 收口 `READY_FOR_FINAL_AUTHORIZATION`，门 1/5/6/7/8 PASS；生产 legacy、未提交。
+
+## [0.208.31] - 2026-10-31
+
+### Fixed
+
+- 收口 runs 校验新增 run_id/窗口/天数/SHADOW_SIM/SLA_SIM 身份要求，显式旧批次不再被接受。
+- 半提交恢复从权威 `instruction_shares` 补齐缺失买入行及 price_type，避免重算先过滤导致丢行。
+- 多槽位补位按股票保存 original_signal_date/attempts，逐票判断五次上限。
+- SIM containment `account_still_baseline` 显式 N/A + 原因。
+
+### Validation
+
+- 最终收口：门 1/5/6/7/8 全 PASS，`READY_FOR_FINAL_AUTHORIZATION`，新 runs 批次经 loader 接受。
+- 全量 4449 passed；定向 169 passed；复杂度双口径 exit=0。
+- 生产仍 legacy，未切换、未提交。
+
+## [0.208.30] - 2026-10-31
+
+### Added
+
+- 新增 T5 最终统一证据根 `data/frozen_reference/v2_p4/t5_release_20261031/`，绑定最终代码态的门 1/5/6/7/8、10 日门 5、SLA-SIM、runs 批次、定向 168 项与全量 4448 项。
+- 新增 live 模式 T4 专项测试：固定股数成交、T1 失败→T0 补位→T2 执行；replay 继续保留旧权重基线。
+
+### Validation
+
+- 全量 pytest：**4448 passed / 0 failed / 1243.22s（20:43）**。
+- T5 定向：**168 passed**；复杂度双口径 `exit=0`、新增硬超限 0。
+- 收口：`verdict=READY_FOR_FINAL_AUTHORIZATION`，门 1/5/6/7/8 全 PASS，`blocked_reasons=[]`。
+- 生产仍 `legacy`，未切换、未提交；最终确认/切换待用户指令。
+
+## [0.208.29] - 2026-10-31
+
+### Changed
+
+- 将 `buy_execution.py` 的补位辅助函数拆到 `v2/core/execution/completion.py`；把 `plan_residual_completion` 的候选/reason 计算拆成模块 helper，`_buy_stock_direct` 的股数/现金缩量拆成 `_size_buy_shares`。
+- 将 `host.py` 的 `inject_instruction_shares`、`resolve_t0_status` 移到 `instruction_projection.py`。
+
+### Validation
+
+- 复杂度双口径：`src/lazybull` 与 `src/lazybull+scripts` 均 `exit=0`，新增硬超限 **0**。
+- 全部 T5 + T4 live/replay：**190 passed / 21.17s**。
+- 门 5 仍为 `t5_sim_final2` 的 10/10 PASS；最终全量与收口绑定待刷新。
+
+## [0.208.28] - 2026-10-31
+
+### Added
+
+- 新增 live 模式专项测试 `tests/test_v2_p4_t4_replay.py`：
+  - `test_live_t0_freezes_instruction_shares_and_t1_executes_them`：T0 指令股数写入 pending 信号，T1 以固化股数为上限成交（现金不足允许缩量），至少一个槽位精确成交。
+  - `test_live_t1_failure_creates_t0_completion_and_t2_execution`：目标涨停失败后生成 T0 补位指令，T2 按补位指令成交。
+- T4 replay 继续使用旧权重口径，live 纸面保留固化股数 + 残余补位语义；两模式显式隔离。
+
+### Validation
+
+- `tests/test_v2_p4_t4_replay.py`：**22 passed / 15.25s**（原 20 项 replay + 2 项 live 专项）。
+
+## [0.208.27] - 2026-10-30
+
+### Added
+
+- 新增门 7 同账户延迟探针 `scripts/v2_p4/t5_gate7_delayed_probe.py`：用 20260803 真实停牌股 `600238.SH` 注入补位信号，v2 形成延迟队列；adjust 后回滚并把 v2 `unfilled_slots` 转为 legacy `pending_buys`；20260804 legacy 续跑，延迟买单保留。
+- 门 7 新证据 `t5_gate7_recheck_20261030` 现为 **PASS**（`trade_delayed_order` 与回滚项使用同一账户轨迹）。
+- 新增 `docs/plans/v2/p4_t5_execution_equivalence_design_20261030.md`：T1 按指令股数成交 + T1 失败→T0 补位信号→T2 买入的设计稿，仅设计未改核心代码。
+
+### Validation
+
+- 延迟探针 PASS：`delayed_present=true`，legacy 20260804 续跑、pending 保留、1 笔卖出成交。
+- T5+T4 仍为 **188 passed / 18.45s**；最终全量基线仍为 **4446 passed / 20:41**（本版本新增为阶段探针/文档，未改核心执行）。
+- 门 5 仍 BLOCKED；生产 legacy，未切换、未提交。
+
+## [0.208.26] - 2026-10-30
+
+### Fixed
+
+- **R1-01**：迁移以最后完整 t0/t1 运行日区分历史已消费指令与未来未执行指令；仅迁移未来卖单，历史卖单不重激活，已失败 pending sell 去重。真实探针：未来 `20260717` 卖单保留，历史 5 月卖单未出现。
+- **R2-03**：门 7 回滚恢复切换前 `exposure/policy/replenish` 配置；回滚仍使用同一账户副本。同轨迹延迟项因该轨迹无延迟队列保持 FAIL，不跨轨迹拼证据。
+- **R2-04**：测试报告失败数优先否决、空计数拒绝；复杂度必须同时有 `src` 与 `src+scripts` 两口径且均 exit=0/new_hard=0。
+- **R2-05**：门 7 Bot 保留真实 `execute_trade` 分发，仅注入隔离账户/数据根；错误回复不再计 PASS。
+- **R2-07**：收口窗口必须唯一、连续、真实交易日；重复日/非交易日/缺中间日拒绝。
+- **R1-02**：门 7 日志、工作根、业务日、run ID 由运行参数决定；新证据根 `t5_gate7_recheck_20261030`，旧日志无法恢复但不再覆盖。
+- **R1-03**：阶段工具补 `复杂度豁免` 标记；复杂度双口径 exit=0、新增硬超限 0。
+
+### Validation
+
+- 全部 T5+T4：**188 passed / 18.45s**；最终代码态全量 pytest **4446 passed / 0 failed / 20:41**；R1-01 真实迁移探针通过。
+- 新门 7：12 项 PASS、`device_smb_read` WAIVED、`trade_delayed_order` FAIL（同轨迹无延迟队列）。
+- 收口仍 `BLOCKED`：门 5 残余 neutral-only 补位重试差异；未扩大白名单、未切换生产、未 commit。
+
+## [0.208.25] - 2026-10-30
+
+### Fixed
+
+- **R2-P4-T5-02**：v2 决策指纹按真实 `YYYYMMDD` 键读取特征；`V2DecisionCapture` 与 `ObservingMerger` 共用同一目标列表。新单日探针实测 `features_rows=5177`、`targets=1`，不再全 null/空列表。
+- **R2-P4-T5-03**：门 7 回滚项改为真实回滚投影 + manifest + 下一交易日旧链续跑；实测 19 持仓/现金 11,158，20260803 legacy 续跑成功、18 笔成交。
+- **R2-P4-T5-04**：门 8 纳入技术就绪硬条件；全量/聚焦/复杂度/runs/containment 违规与冻结段漂移均有否决效力，并写入阻塞原因。
+- **R2-P4-T5-05**：门 7 Bot 项改为实际调用 `bot_service` 五个处理器（trade/positions/model/help/reset-t0），本地接收器，不对外发消息。
+- **R2-P4-T5-06**：v2 `add-shares` 保留原买入日，不再重置持有期到期时点；补日期断言。
+- **R2-P4-T5-07**：SHADOW_SIM finalize 硬性要求 10 日；收口拒绝少于 10 日的当前窗口；补 9 日全 PASS 反例。
+
+### Review Blocked
+
+- **R2-P4-T5-01**：白名单方向代码已改为仅 v2-only 补位买 / neutral-only 调仓卖；实际 15 笔差异方向相反（v2-only 卖 10、neutral-only 买 5），已写 `gate5/reviewer2_direction_audit.json` 并让旧门 5 PASS 失效。用户裁决**不扩大白名单**后，已定位并修复 v2 独有卖单根因：迁移误把历史卖出 instruction 激活为 `pending_condition_sells`（002383 自 2026-05-29 重复卖）。新 run `t5_sim_review_20261030` 的 7/17 已无该卖单，7/20/21 仅剩 neutral-only 补位重试指令；v2 补位候选/时序与 legacy replacement 仍不一致，门 5 保持 BLOCKED，未用反向白名单或未验证核心改动凑通过。
+
+### Validation
+
+- 定向回归 **50 passed / 4.27s**；收口 `BLOCKED`（gate5 未完成，gate1/6/7/8 PASS）。生产仍 legacy，未切换、未 commit。
+
+## [0.208.24] - 2026-10-30
+
+### Added
+
+- 门 7 `device_smb_read` 按用户 2026-10-30 明确决定记 `WAIVED`（附批准原文/时间与无设备原始日志）；工具只对该项接受豁免，结果列 `items_waived`，不伪装设备 PASS。
+
+### Fixed
+
+- `paper_shadow` 批次 `bt_total_return` 改为窗口 `nav` 首尾比，满足 runs loader §9.2。
+- SIM 累积台账按 `date` / `(date,stock,action)` 取最终真实记录后写批，满足同日同票单行 §9.4；批次 `p4_t5_t5_sim_20261030_paper_shadow` 通过 loader。
+- SIM containment 补齐 `data_state_decision_phase_unchanged` / `shadow_arms_wrote_production` 契约字段。
+
+### Validation
+
+- 收口：门 1/5/6/7/8 全 `PASS`，`verdict=READY_FOR_FINAL_AUTHORIZATION`，`blocked_reasons=[]`。
+- 定向回归（门 7 豁免/影子批次/收口）**20 passed / 14.50s**；最终代码态全量 pytest **4436 passed / 0 failed / 1260.16s（21:00）**。
+- 生产仍 `engine=legacy`，未切换、未 commit。
+
+## [0.208.23] - 2026-10-30
+
+### Added
+
+- 新增 `scripts/v2_p4/t5_gate7_real_run.py`：在隔离副本上真实执行门 7 的 12 项（run/positions/real/model/config/adjust/bot/迁移/延迟订单/回滚/并发/旧模型），原始输出落 `gate7/logs/`。
+- 门 7 真实校验结果：**12/13 PASS**，仅 `device_smb_read` 因无真实 SMB/树莓派配置失败；未伪造设备项。
+
+### Validation
+
+- 全量 pytest：**4434 passed / 0 failed / 1239.87s（20:39）**，JUnit 原始报告 + JSON 转换。
+- 收口：门 1/5/6 `PASS`，门 7 `REAL_REHEARSAL_INCOMPLETE`（`device_smb_read`），门 8 `BLOCKED`（`paper_shadow` runs 批次缺失）。生产 `engine=legacy`，未切换、未 commit。
+
+## [0.208.22] - 2026-10-30
+
+### Added
+
+- **SHADOW_SIM/SLA_SIM（用户 2026-10-30 批准，架构方案 F19）**：10 个连续历史交易日三臂影子 + 逐日实测墙钟作为门 5/6 等效证据；仍执行 v2 vs legacy_neutral 完整输入/逐笔硬判定，只允许白名单结构差异（v2 补位买 `execution_backfill`、neutral 调仓卖 `holding_path`），其余保持 `unexplained`。
+- 新增 `scripts/v2_p4/t5_shadow_sim.py`：三臂逐日独立子进程、市场数据 stat 守卫、SLA-SIM 记录、门 5 汇总与因果证据落盘。
+- 迁移修复：pending 文件兼容 dict/list；当前账户末日以 `account.json` 覆盖同日旧 NAV；T0 指令透传 `desired_position_count`，修复 v2 首日 0 成交。
+
+### Fixed
+
+- 门 5 指令比较使用真实三臂键名（`legacy_active/legacy_neutral/v2_shadow`），不再硬编码 `active/neutral/v2`。
+- 指令 reason 规范化仅去除展示用 `(权重=...)` 后缀，避免把等价指令判为差异。
+
+### Validation
+
+- `20260717~20260730`：门 5 **10/10 PASS**、15 笔差异全部有证据、`unexplained=0`；SLA-SIM **10/10 PASS**，平均 16.015s、最大 18.109s。
+- T5 **156 passed / 19.08s**；复杂度双口径 `exit=0`、新增硬超限 0。
+- 收口门 1/5/6 `PASS`；门 7 `REAL_REHEARSAL_INCOMPLETE`、门 8 `BLOCKED`。runs 批次写出被 loader 的 NAV 一致性校验拒绝，未伪造通过。生产仍 legacy，未切换、未 commit。
+
+## [0.208.21] - 2026-10-30
+
+### Added
+
+- **Q11-SIM 等效口径（用户 2026-10-30 批准，架构方案 F18）**：允许 10 个连续历史交易日的旧链逐日独立进程重启作为 Q11-A 等效证据，门 1 显式标 `Q11_SIM`，并携带 `historical_data_only / not_live_network_evidence / not_real_clock_evidence / not_production_account_advance` 限制；live 判据不变。
+- 新增 `scripts/v2_p4/t5_q11_sim.py`：隔离复制生产纸面账户，逐日独立子进程运行旧链；数据根禁写/禁网；无成交日以运行/决策记录计完成，有成交必须推进账户；输出逐日证据、累计台账、授权文件与限制声明。
+- `t5_gate1_identity` 新增 `--q11-mode sim` 与 `--q11-sim-authorization`，SIM 必须通过 10 日连续性、historical_sim 标记、独立重启、原始证据与授权校验。
+
+### Validation
+
+- Q11-SIM 实测窗口 `20260703~20260716`：10/10 日、30 笔成交、零网络/零数据写；门 1 `PASS`、`gate1_frozen=true`、`gate1_mode=Q11_SIM`，证据根 `data/frozen_reference/v2_p4/t5_q11sim_20261030_r2/`。
+- T5 全量 **155 passed / 5.76s**（含 Q11-SIM 6 项）；门 1 SIM + 判据相关 28 项全绿；复杂度双口径 `exit=0`、新增硬超限 0；生产账户未读写、生产 `engine=legacy`。
+- 边界：SIM 不替代门 5 影子、门 6 SLA、门 7 真实演练、门 8 收口，也不压缩真实影子窗口 max(10 交易日,14 自然日)。
+
+## [0.208.20] - 2026-10-30
+
+### Fixed
+
+- **T5 收口数据态兼容**：`t5_closeout._data_state_view` 同时接受门 1 的字符串水位（如 `raw_daily="20261026"`）与 D4 的 `{"max": ...}` 形态；此前真实证据会因 `str.get` 抛 `AttributeError`。新增形态矩阵测试，收口器仍按冻结起点/每日合法更新分段，不改变判据。
+- **T5 修复后真实复跑（新证据根 `t5_rerun_20261030`）**：只读 preflight 实测 20261027~20261030 的 9 个源/层全部缺失（`first_missing_day=20261027`）；门 1 冻结因缺恢复台账 fail-fast，进度预检为 `BLOCKED_Q11A`（0/10，账户 `last_update=20260603`）。未启动旧链恢复、影子或门 7 真实演练，未写生产账户。
+- **D4 追平（水位上限 20261029）**：20261027~20261029 的 raw 日分区、clean、cs_infer、panel/labels 已完成并通过逐源 preflight（9 个源/层 3/3，`all_clear=true`）；20261030 按用户新规则不再采集。下载链路已实测临时清除 `HTTP(S)_PROXY` 并设置 `NO_PROXY=*`。协调器修复同一 run 从 dry-run 转 execute 时残留 `dry_run=true` 的证据标记缺陷。
+- **20261029 就绪门阻塞与修复**：`2026-09-30` 现金流分区 `free_cashflow` 全为空，`zscore_fcf_yield` 覆盖率 10/26 79.2% → 10/27 66.9% → 10/28 50.0% → 10/29 31.8%，就绪门以 68.2% 缺失率失败。已修复 `download_cashflow` 未显式请求 `free_cashflow` 等字段的问题（统一 `CASHFLOW_DEFAULT_FIELDS` 并锁定测试），但接口探测显示 `cashflow_vip` Q3 前 5 行仍 0/5 非空、普通 `cashflow` 对单只股票也返回 null，确认为 TuShare 当前季度尚未发布该字段。未放宽阈值/白名单或改变财务 PIT 语义；按“不得获取当日数据”约束，Q3 重下与 27~29 重建留待下一允许水位日。
+
+### Validation
+
+- T5 聚焦 **149 passed / 5.28s**（JUnit 原始报告 + JSON 转换，0 failed）；协调器/修复链 **34 passed / 8.78s**；现金流字段/因子接线/下载器 **57 passed / 2.38s**；复杂度双口径 `exit=0`、新增硬超限 0。
+- D4 实测：raw/clean/cs_infer/panel 最大水位均 20261029，20261030 分区不存在；10/29 数据逐源 PASS，但就绪门 FAIL（FCF 覆盖 31.8%）。
+- 新 run 收口：门 1 `BLOCKED_Q11A`、门 5/6 `NOT_STARTED_OR_INCOMPLETE`、门 7 `REAL_REHEARSAL_INCOMPLETE`、门 8 `BLOCKED`；聚焦测试与复杂度 PASS，全量 pytest/runs 批次 MISSING；生产仍 `engine=legacy`。
+
+## [0.208.19] - 2026-10-30
+
+### Fixed
+
+- **v2 P4 T5 工具接缝修复（R1~R6）**：按 `docs/plans/v2/p4_t5_blocker_repair_plan_20261030.md` 修通 T5 验收工具的真实调用链，未启动 T5 真实恢复/影子窗口，未改模型、参数、数据与生产账户，原阻塞证据 `t5_20261030_105316` 全部保留。
+- **R1 恢复台账进入门 1**：`t5_gate1_identity` 新增 `--restart-ledger / --freeze / --restart-segment-end`；申请冻结而未给台账直接 `FileNotFoundError`（不再静默当 0/10），台账超 10 条须显式指定被验证连续段（不删不改原台账），账户末日必须与被验证段末日对齐，`t0_status` 为空不再算成功，已冻结身份不可改写（一致只写 `gate1_progress_precheck.json`，漂移直接拒绝）。
+- **R2 D4/SLA 步骤与台账形态统一**：新增 `scripts/v2_p4/t5_daily_evidence.py`，把 `snapshot/raw/clean/cs_infer/panel/verify` 映射为 `ensure_raw/ensure_clean/cs_infer/panel_label_refresh/readiness` + `arms`（snapshot 单列前置步骤）；重试/缺口/降级取自协调者真实产物，产物缺失 fail-closed 记降级；累计台账 `list[record]`、逐日文件单 `record`、窗口加载器平坦 `list[record]`（嵌套列表报错、旧 `[record]` 单层转换留来源）；驱动在 D4/臂/比较异常时先落当日记录再抛原异常。
+- **R3 v2 影子首臂接既有迁移**：`prepare_three_arms` 的 v2 臂改由 `t5_migration.migrate_isolated` 经 staging → 校验 → 发布完成首次迁移，持久化 `engine=v2`/`exposure_policy=null` 并回读校验；账户投影按 1e-6 语义等价，估值可绑定门 1 冻结时点；初始化记录 `arms_initialized.json` 绑定门 1 身份与各臂完整代，次日只核对身份续跑，半初始化目录拒绝覆盖。
+- **R4 启动准备与 Q11-d 现役调度**：新增 `--mode preflight` 逐源缺口扫描（只读）；影子 `--active-production` 为正式证据前提（未绑定走 `sla/drill`），驱动前核对 engine=legacy/账户末日/完整 run 标记与同日不重复；containment 改为逐相位快照，现役合法写与影子零污染分开；新增窗口级机器预算台账（单日上限/总上限/已耗/剩余，`--authorized-total-minutes` 真实执行必填），业务日期改用 `Asia/Shanghai`。
+- **R5 收口读本次实测证据**：`t5_closeout` 去掉写死计数与空 `runs_batches`，改读本次测试/复杂度报告、runs 批次（`load_runs_batch` 读回）、SLA 当前有效段与门 5 同日集合、门 7 真实取证；数据态区分冻结起点/每日合法更新/决策段共同快照/冻结段，缺证据标 `MISSING` 并计入阻塞原因；`statuses` 区分技术就绪/用户授权/实际切换/最终提交。
+- **R6 门 7 真实取证入口**：`t5_gate7_rehearsal` 新增 `--mode real --checklist`，13 项逐项校验（字段齐全、原始输出存在、写类项不得以生产根为输入），输出 `gate7/real_rehearsal_result.json`（`synthetic_only=false`），缺项即 `INCOMPLETE`；新增操作手册 `docs/guide/t5_gate7_real_rehearsal_manual.md`。
+- 全量回归暴露的既有失败一并修复：`paper_trade.py` 接 v2 后的在用闭包基线显式更新（静态 265 / 在用 269 / 全仓 371 / 不在用 102，底稿同步刷新）；T5 迁移清单的 rollback-only 引用使 scripts 引用面 12→13（处置脚本清单仍 12 项），测试显式登记。
+
+### Validation
+
+- T5 聚焦测试 **148 passed / 5.32s**；T2 宿主/状态/崩溃恢复/T4 回放与比较 **139 passed / 63.36s**；全量 pytest **4425 passed / 1250.32s（20:50）**，无 failed/error。
+- 复杂度双口径（`--paths src/lazybull` 与 `--paths src/lazybull scripts`，显式 baseline）均 `exit=0`、新增硬超限 0、棘轮键零新增。
+- 修复后仍未产生真实证据：Q11-A 有效恢复日 0/10、门 5/6 真实窗口 0 日、门 7 真实演练 0 项、门 8 仍 BLOCKED；本版本只交付工具能力与合成验证，状态为「工具修复完成，可进入 T5 真实恢复」。
+
+## [0.208.18] - 2026-10-30
+
+### Added
+
+- **v2 P4 T5 隔离实现**：新增门 1 数据态/模型/执行/工作树/环境/账户 MTM 身份与 Q11-A 连续恢复校验；三臂同快照隔离、D4 日级单协调、完整决策输入指纹与八类差异归因、真实日历 SLA，以及 live 裁剪下的 `paper_shadow` 逐日累积和 runs 出口。
+- CLI/Bot 六族命令与五指令统一 `engine=legacy|v2` 解析，缺省 legacy；v2 `run / positions / real / model-info / adjust` 走 PaperHost/权威状态服务，legacy 回退需 D11 清单，树莓派只读增加完整代守卫。生产未切换时禁止用 CLI v2 覆盖绕过门禁，真实 `config --engine v2` 须门 1/5/6/7 全过及当时显式授权。
+- 新增账户「文件 × 载体 × 校验」迁移清单、legacy→v2 状态映射、adjust 纯规则与回滚投影；实际隔离迁移必须通过 D10 现价验证，NAV 跳空语义保持。全合成连贯 rehearsal 已覆盖成交、延迟订单、权威 adjust、并发与回滚续跑，结果仅 `SYNTHETIC_PASS`。
+
+### Blocked
+
+- 证据 `t5_20261030_105316`：数据态与参考一致、20/20 持仓有效，但 Q11-A **0/10**，门 1 `BLOCKED_Q11A`；真实门 5/6 窗口未开始，门 7 真实迁移/回滚/并发/兼容演练未完成，门 8 BLOCKED。未复制三臂起跑、未生成影子 runs 批、未切换生产或提交。
+
+### Validation
+
+- T5 **97 passed**；PaperHost/状态/恢复/T4/LCD **280 passed**；CLI/Bot/纸面/LCD **231 passed**；门 7 连贯/状态恢复 **104 passed**。复杂度双口径 `exit=0`、新增硬超限 0、棘轮键零新增。全量 pytest 未获 >10 分钟授权，未实测。实施规划升 v22 §24.10。
+
+## [0.208.17] - 2026-10-29
+
+### Changed
+
+- **v2 P4 T4 正式闭合（用户裁决）**：门 3 正式窗口变更为 `[20260703, 20261026]` 双侧共同排除 `20261019`，共 75 个交易日；该排除仅限历史回放，不扩展为全局就绪或 T5 影子/live 缺数豁免。
+- 新增正式闭合证据 `t4_close_20261029_2210`：引用 P2-01 最新门 2 PASS 与 75 日比对结果，成交 129/129、持仓 1266/1266、NAV max|Δ|=0、并列互换 0，行域/D7/runs/containment 全通过。历史 FAIL/AUX 证据及工具标签不改写。
+- D5/门 3 正文、实施规划 v21 §24.9 与 T5 输入清单已同步。P2-02/P2-03 按既定范围不处理，不表述为技术已修复；T5 可启动但尚未启动，生产默认仍为 legacy，未独立 commit。
+
+## [0.208.16] - 2026-10-29
+
+### Fixed
+
+- **P4 T4 P2-01 回放末日次日计划缺失**：回放逐日执行使用窗口首日起的完整已知
+  交易日历，调仓排期仍以窗口首日为锚；末日即使没有下一交易日行情，也能生成并
+  持久化次日买入计划，成交与 NAV 只推进声明窗口。live 排期沿用原口径。
+- 连续 `run()` 新增显式可选 `trading_dates_full` 参数，供 T4 连续参照与纸面回放
+  使用相同执行日历；缺省仍按原回测窗口裁剪，不改变旧基线。执行日历重复、乱序
+  或与驱动窗口不一致时直接报错。
+- 新增 7 项隔离回归，覆盖无未来行情的末日计划、窗口中部起点、完整快照恢复、
+  双宿主窗口内一致性及完整日历校验。P2-02 数据身份检查与 P2-03 NAV 比较器未改动。
+- 验证：T4 专项 **30 passed**、相关回归 **451 passed / 0 failed**；black/isort 与
+  复杂度双口径均通过，新增硬超限 0、复杂度基线未改动。
+- 新 run 复验：门 2 真实 21 日 **19 笔成交/290 行持仓一致、NAV Δ=0**；按用户认可
+  排除 `20261019` 后的 75 日比对 **129 笔成交/1266 行持仓一致、NAV Δ=0**（工具标签
+  AUX_PASS）。两窗口的成交/NAV 与各自原证据逐值一致；7 月 31 日末日计划已从缺失
+  变为真实入队并落盘。执行登记见 P4 实施规划 v20 §24.8。
+
+## [0.208.15] - 2026-10-29
+
+### Fixed
+
+- **P4 T4 评审期间回归夹具同步**：T3 原生合并接线测试使用 `object.__new__(PaperHost)`
+  构造宿主，补齐 T4 新增排期字段的合法默认值 `schedule_mode="live"`，恢复该测试对
+  行业 reader 与共享合并器接线的验证；生产实现与原有断言不变。
+
+## [0.208.14] - 2026-10-29
+
+### Added
+
+- **T4 源修复尝试与 75 日辅助比对**：TuShare 单日/区间重试及东方财富北向历史源均无 `20261019` 真实记录，无法在不伪造值的前提下补数；未写 raw/cs_infer/panel，数据态与生产纸面未变。证据归并至 `t4_aux75_20261029_2120`。
+- `t4_gate_runner.py` 新增必须成对指定的 `--exclude-dates` / `--auxiliary-exclusion`：paper 与 backtest 使用同一 75 日日历共同排除该日，默认仍执行原 76 日门，未显式选择辅助模式即排除会 fail-fast。
+- 辅助结果 **AUX_PASS（非正式门 3）**：成交 **129/129 笔逐位一致**、并列互换 0、持仓 **1266/1266 行一致**、NAV max|Δ|=0；75 日行域、D7 指纹、runs 读回及 containment 全通过。正式 D5-甲 76 日门 3 未闭合，T4/T5 状态不因辅助结果自动改变。
+- 新增 3 项排除参数反例测试；T4 测试 **23 passed**、相关回归 **324 passed**，复杂度双口径 exit=0、新增硬超限 0。实施规划升 v19 §24.7。
+
+## [0.208.13] - 2026-10-29
+
+### Added
+
+- **v2 P4 T4 回放实现与门 2 证据（门 3 尚未闭合）**：新增 `hosts/paper/replay.py`，以窗口锚逐日执行 `restore → run_t0 → run_t1(fills) → export/checkpoint`；回放完整保留成交、归因、持仓与 NAV 状态，live 持久化锚和裁剪语义不变。排期/投影提取至 `schedule.py`，未改 legacy 链路或生产纸面状态。
+- `runs_writer` 新增缺省为 `backtest` 的 `host_mode` 参数；`runs_schema/runs_loader` 对 `backtest / paper_replay / paper_shadow` 三值闭集 fail-fast。新增双宿主逐笔/并列互换、NAV 1e-6、逐日持仓、行域与 D7 执行指纹比对工具及 20 项隔离测试。
+- **门 2 PASS**（证据 `t4_20261029_2025`）：真实 21 日、风险预算开、close 卖出、非空停牌日历下，连续 run vs 逐日磁盘恢复成交 19/19、持仓 290/290、NAV max|Δ|=0；生产数据与纸面 containment、禁网及写守卫均 PASS。
+
+### Blocked
+
+- **门 3 于 `20261019` 被现行就绪门阻断**（证据 `t4_20261029_2035`）：13 个北向模型列全空，raw `moneyflow_hsgt` 当日分区缺失且 cs_infer 对应列全空。该源侧缺口虽已登记，T4 未获日级就绪豁免授权；未扩 `SPARSE_TOLERATED_COLUMNS`、未删日/填值/放宽判据，也未进入逐笔、NAV 或 runs 读回等价判定。T4 不宣告完成，T5 未启动。
+- 最终相关回归 **321 passed**（含新增 20 项；全量预期 4,247，因 >10 min 未获全量授权而未实测）；复杂度双口径 exit=0、新增硬超限 0。实施规划升 v18 §24，登记失败重跑、差异台账、实耗与恢复命令。
+
+## [0.208.12] - 2026-10-29
+
+### Fixed
+
+- **v2 就绪门第 4 条「已知稀疏列」误判（用户裁决 C）**：`daily_assembly` 新增
+  `SPARSE_TOLERATED_COLUMNS`（现役仅 `cons_target_upside`）——命中列当日缺失率超
+  `COLUMN_MISSING_RATE_MAX=0.6` **不再构成缺口**，但仍要求**实际在场**且**非全空
+  （100% 仍失败）**；缺失率照常写入 `ReadinessReport.column_missing_rates`，超阈事实
+  按 WARNING 落日志（可留证）。
+  口径依据：旧链 60% 规则在**训练入口**且按**整训练帧池化**（`prepare.py:94,818`；
+  该列池化 57.2%~57.7% < 0.6 ⇒ 保留进 v24022），推理侧只对「全空」硬拒、>50% 仅告警
+  （`signals/ml_signal.py`）；训练窗内 **19.7% 的交易日本身即 >60%**。原先逐日截面 0.6
+  判据属「就绪门误判」（§15.6 系统原因），会使 v2 每个交易日都不出信号。
+- **M-P4-1 就绪门复跑 PASS**：`verification_summary` = `verdict/data_verdict/readiness_verdict`
+  三项 PASS（`t2_daily_dryrun --date 20261026` 行数 5,211 ∈ [4,681.8, 5,722.2]）⇒
+  **T4 开工硬门 #6 解除**（T4 仍须用户明确启动）。
+- 测试：`tests/test_v2_p4_t2_daily_assembly.py` 新增 `TestSparseToleratedColumn` 6 项
+  （白名单精确集 / 超阈放行且留证 / 非白名单仍失败 / 全空仍失败 / 缺席仍失败 / 端到端），
+  43→**49 passed**；T2 宿主相关 `host+daily_assembly+factory` = **97 passed**；复杂度
+  双口径 exit=0、新增硬超限 0。
+- 后续义务入册（实施规划 §23.8 / §1.2-10）：**B 方案** = 按列「训练期覆盖率 + 容差」
+  替换全局 0.6 并让白名单清零，节点 = **P4 收口后维护窗口、与 Q8-B 部署训练首验同批**
+  （不在 T5 实施，避免击穿影子窗口的数据态/模型身份冻结）。
+
+## [0.208.11] - 2026-10-29
+
+### Changed
+
+- **v2 P4 M-P4-1「首次数据追平与就绪检查」执行完毕（数据侧）**：目标日冻结口径
+  2026-10-26 追平——raw 12 个日分区族各 **55/55 日** 闭合、公告类按水位续传、6 个季分区
+  新建 `20260930` 并刷新 `20260630`；clean `daily/daily_basic/moneyflow` 55×3 全闭合
+  （行数 5,529~5,572/日）；`cs_infer` 补 76 日（旧链 `require_label=False` 口径，407 列统一）；
+  panel 新增 55 日 × 8 族（265→320，零删除，core 5,175~5,212 行）；labels 到期追赶
+  **55 日 sealing**（`sealed_through` 20260702→20260917，末尾 21 日按 `E20≤水位` 保持 forming）；
+  manifest 分区 3,416→3,856、`label_refreshes` 0→55、**repairs 零新增**；`cs_train` 与
+  `data/paper/` 全未改动。
+- 新增 **D4 单一协调入口** `scripts/v2_p4/daily_data_coordinator.py`（snapshot/raw/clean/
+  cs_infer/panel/verify 六阶段 + checkpoint 断点 + 逐源校验，只编排不实现构建语义）与
+  `tests/test_v2_p4_mp41_coordinator.py`（14 项）；实现规划升 v16 §23。
+- **就绪门未通过（如实登记，未放水）**：`t2_daily_dryrun --date 20261026` 唯一缺口
+  `cons_target_upside` 缺失率 66.8% > 60% 阈值；归因为分析师覆盖自然漂移（report_rc 已至
+  20261026、2026-10 tp 覆盖 69.3% 与历史同区间一致；该列在 20260703/20260731 即已超阈），
+  T2 §18 已留 M-P4-1 裁决 ⇒ T4 开工硬门 #6 未解除，待 A/B/C 裁决。
+- 遗留缺口显式登记：`moneyflow_hsgt` 20261019（源侧确无数据，历史同类 10 例）、`dividend` /
+  `top_inst` / `pledge_stat`（用户裁决不补，两侧消费方命中均 0）。
+- 总墙钟 **9.95 h**（预估 8.6~9.6 h，超 0.35 h，归因三处已登记）；未启动 T4/T5、
+  未切换生产链路、未独立 commit。
+
+## [0.208.10] - 2026-10-28
+
+### Changed
+
+- **v2 P4 T3 正式闭合**：reviewer1 复核通过且六项文档收口完成；reviewer2
+  第二次复审通过，close 回测、逐折配置校验与停牌身份三项 P2 全闭合，无残留或新增
+  P1/P2。实施规划升 v15 §22，登记最终证据、T4 输入与 M-P4-1 开工硬门。
+- 最终基线保持 T3 **62 passed**、相关 **802 passed**、全量 **4,227 passed / 0 failed**；
+  native 14 折、显式 legacy 回归边、781 输入身份及 517 文件工作树绑定均 PASS。
+- 未启动 T4，未执行数据追平、paper_replay/runs_writer、影子/SLA 或生产切换；
+  T1~T5 一次收口提交边界不变，本版本未独立 commit。
+
+## [0.208.9] - 2026-10-28
+
+### Fixed
+
+- **T3 reviewer1/2 再复审三项 P2**：close 卖出与 T3 证据投影隔离，正常原生回测不再
+  因无 close OrderType 而在成交后报错；证据角色显式记为 skipped，S6/样本计数为零。
+- **门 2b 反变异加固**：`merger_mode` / `merger_sleeve_id` 改为逐折期望值校验，
+  split13 的错误模式与袖标识均会失败，不再仅按「新侧多键」文本放行。
+- **E2 输入身份补齐**：在真实 SuspendCalendar 读取点捕获 32 个实际停牌分区，
+  输入清单由 749 增至 781，读取前后及跨次漂移均 fail-fast；38 批统计结果不变。
+- 完成 reviewer1 六项文档收口：旧 S6 计数与调用点、E2 实际窗口、旧计数取代注记、
+  NAV 豁免函数名、意见归属、默认 native 持仓字段前置。另修复一项纯数字
+  `data_state_id` 的既有测试读取类型脆弱点。
+
+### Validation
+
+- T3 四文件 **62 passed**，相关回归 **802 passed**；全量首轮 1 项测试类型断言失败，
+  修复并复跑后 **4,227 passed / 0 failed**。
+- 新 native 14 折与显式 legacy 回归边 PASS；两个配置键逐折核验，517 文件执行前后
+  工作树摘要一致。复杂度双口径新增硬超限 0，inuse 守恒 PASS。
+- 实施规划升 v14 §21，状态为可复审；未启动 T4、未独立提交、未切换生产纸面链路。
+
+## [0.208.8] - 2026-10-28
+
+### Fixed
+
+- **v2 P4 T3 四专家评审处置**：正常 v2 回测缺省真正进入原生单袖 merge，
+  `LEGACY_BYPASS` 仅保留给显式冻结回归边；PaperHost 的 S6 前移至 run_record、
+  提交与返回之前，任何非直通变异在提交前失败，避免空化/重排/重归一静默发布。
+- **回测 S6 证据边界**：投影更名为 `project_t3_evidence_orders`，修正 lot 初始化、
+  风险 trim、close 与 closed-bar 拒绝语义；明确只作 T3 证明、不参与执行且禁止 T4 复用。
+  runs meta 记录实际 merge/S6 次数和样本数，不再保留无法反查的 `_native_orders`。
+- **证据可复算性**：新增 E2 历史统计、门 2b 工作树绑定与机器汇总三个正式工具。
+  E2 现保存 split11~13 的 38 批/380 行逐批观测及 749 个输入文件身份；默认 native
+  14 折实测 merge=175、S6=14、证据订单=3,214，显式 legacy 冻结回归边同代码态 PASS。
+- **依赖与文档核销**：NAV AST 豁免收窄到两个既有函数；E4 表改用真实 reader/loader
+  和测试符号；清除无证据的 501/77 统计，补充单 lot、last_price 非估值、负权重及
+  run_t1 不重复 S6 等边界。实施规划升 v13 §20。
+
+### Validation
+
+- T3 四文件 **61 passed**，相关回归 **800 passed**，全量 **4,225 passed / 0 failed**。
+- 默认 native 14 折 + LEGACY_BYPASS 回归边 + 517 文件执行前后工作树摘要绑定 PASS；
+  真实纸面 dry-run 与生产根 containment PASS。
+- 复杂度双口径 exit=0、新增硬超限 0；inuse 静态 202 / 在用 206 / 全仓 365 /
+  不在用 159 守恒。生产纸面默认链路未切换，未独立提交。
+
+## [0.208.7] - 2026-10-28
+
+### Changed
+
+- **v2 P4 T3 到期义务清偿**：新宿主 normalize/Kelly 统一回测侧语义——全分数求和、
+  总和 ≤0 等权、未知 sizing 静默等权；历史约 1.5 年 38 个信号批次完成只读统计，
+  当前窗口与假设窗口敏感性分列，分歧分支按 Q3-A 裁决归一。旧纸面保活链行为未改。
+- **宿主数据读取注入**：行业映射、停牌日历与行情读取改由回测/纸面宿主注入函数或协议，
+  core/common 不反向依赖 `v2/store`；`store/label_refresh.py` 等 F18 配置依赖点已逐项核销。
+- **原生单袖合并链**：新增 `v2/hosts/native_engine.py`，回测与 PaperHost 直接经
+  `TargetPortfolio` / `Account` / `Order` 调用 merge/S6；按 Q6-B 删除 P2b dict 适配器、
+  `LegacyTargetMergePort`、`merge_port` 与 bypass 接缝，保留 `LEGACY_BYPASS` 及两个回归边入口。
+- `cs_train_verify` 明确为保活至旧链路物理删除的过渡验收工具；评分主体读取面维持
+  Q7-A 现状。实施规划升 v12，状态为 **T3 可评审**，未发起独立评审、未独立提交。
+
+### Validation
+
+- T3 义务测试 **57 passed**，P2a/P2b/P3 与 P4 相关回归 **794 passed**，全量
+  **4,219 passed / 0 failed**；T3 后门 2b 的 B0 replay 与冻结回归边均 PASS。
+- 复杂度双口径 exit=0、新增硬超限 0、棘轮键零新增；inuse 静态 202 / 在用 206 /
+  全仓 365 / 不在用 159，守恒 PASS。生产纸面默认链路仍未切换，T4/T5 未提前验收。
+
+## [0.208.6] - 2026-10-28
+
+### Fixed
+
+- **v2 P4 T2 三专家复审处置**：修复同一 `PaperStateStore` 异线程绕过整日锁及 CAS 后
+  交错覆盖，增加持锁线程所有权与活跃锁心跳；故障后首次直接推进次日时，按快照内原
+  `run_kind` 补齐旧代发布标记。恢复不再因成本配置变化永久阻断，也不再因
+  `initial_capital` 变化回溯改写已发布 NAV；仅缺失或身份不符的投影才补建。
+- **就绪门输入闭包**：cs_infer freshness 回退值按 `ts_code` 真正合入最终推理帧，
+  缺省衰减策略与 MLSignal 一致，集成模型按各子模型实际策略/列集求依赖并集；derived
+  列改为「族声明 + 完整列名生产者 + 最终有效产出」三重校验，禁止仅按前缀放行。
+- **协议治理**：`docs/contracts/protocols.md` 登记 **F12 = v0.12**（生效），同步
+  `PaperHost.run_t1` 的 fills 提交前核对语义、`Optional` 签名与契约索引。
+
+### Changed
+
+- 写锁职责拆分为 `v2/hosts/paper/write_lock.py`，NAV 恢复逻辑独立提取；复杂度双口径
+  新增硬超限 0，在用闭包守恒更新为静态 202 / 在用 206 / 全仓 365 / 不在用 159。
+- P4 T2 八文件全套 **221 passed**，协议/等价/旧纸面兼容相关 **204 passed**，
+  最终全量回归 **4,186 passed / 0 failed**；真实 v24022 单日 dry-run 与生产根
+  containment 均通过。实施规划升 v11 并登记三专家复审逐项处置与最终通过结论，
+  **P4 T2 正式闭合**；两项非阻塞建议转 T5 清单，生产纸面默认链路仍未切换。
+
 ## [0.208.5] - 2026-10-26
 
 ### Changed

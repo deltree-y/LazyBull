@@ -3,33 +3,30 @@
 提供统一的停牌判断接口，基于 raw/suspend 数据
 
 v2 迁移复制件（P2a-T1，行为冻结）：与旧模块 ``common/suspend_calendar.py``
-双源并存至 v2 切换；差异仅限 import 改指（data.storage 为只读过渡依赖，见下）。
+双源并存至 v2 切换。P4-T3 E4 起仅依赖宿主注入的窄读取协议，不再 import
+或缺省创建旧 ``data.storage.Storage``；缓存、异常与 S/R 判定语义不变。
 """
 
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Protocol, Tuple
 
 import pandas as pd
 from loguru import logger
 
-# 只读过渡依赖（T0 规划 §3.5）：data.storage 不复制，
-# 去除节点 = P4（F14）数据面切换 panel（D2）。
-from src.lazybull.data.storage import Storage
+
+class SuspendDataReader(Protocol):
+    """停牌日历所需的最小只读能力（由回测/纸面宿主注入）。"""
+
+    def load_raw_by_date(self, dataset: str, trade_date: str) -> Optional[pd.DataFrame]:
+        """按日读取原始数据集；分区不存在时返回 None。"""
+        ...
 
 
 def get_suspend_calendar(
-    data_storage: Optional[Storage] = None,
-) -> Tuple["SuspendCalendar", Storage]:
-    """从存储实例构建停牌日历（回测引擎与纸面 broker 共用）.
-
-    Args:
-        data_storage: Storage 实例；为 None 时创建默认实例.
-
-    Returns:
-        (calendar, resolved_storage)：resolved_storage 为实际使用的 Storage,
-        供调用方回写自身缓存，保持两侧“缺失时默认创建”的行为一致。
-    """
+    data_storage: SuspendDataReader,
+) -> Tuple["SuspendCalendar", SuspendDataReader]:
+    """以宿主注入的读取能力构建停牌日历；缺失注入 fail-fast。"""
     if data_storage is None:
-        data_storage = Storage()
+        raise ValueError("停牌日历需要宿主注入 SuspendDataReader，禁止缺省创建 Storage")
     return SuspendCalendar(data_storage), data_storage
 
 
@@ -47,11 +44,11 @@ class SuspendCalendar:
     - 当日 suspend 数据文件缺失或无法加载 => 抛出异常
     """
 
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: SuspendDataReader):
         """初始化停牌日历
 
         Args:
-            storage: Storage 实例，用于读取 raw/suspend 数据
+            storage: 宿主注入的窄只读协议对象，用于读取 raw/suspend 数据
         """
         self.storage = storage
         # 按 trade_date 缓存已加载的停牌数据

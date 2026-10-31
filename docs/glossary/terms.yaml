@@ -943,3 +943,86 @@ terms:
     source: P4 实施规划 v5 §3-D5；runs 产物契约 §2 host_mode
     related: [run_step, 基线保持门, 行域]
     introduced: "2026-10-26"
+
+  - term: Ledger
+    aliases: [物理账本, 唯一入账入口]
+    one_liner: v2 内核现金/持仓/成交日志的唯一入账入口（apply_fills + 幂等键/重复拒绝/乱序拒绝），决策与执行均不得直接改账户
+    layman: 公司里只有财务能记账——业务员（执行器）只能把成交单交给财务，自己动账本就是 bug
+    example: F23 三处直接改账户入口（建仓/加仓/卖出）全部改道；重复幂等键入账即拒绝
+    source: P4 实施规划 §3-D2 + §4.1（v2/core/accounting/ledger.py，P4 T1）
+    related: [EngineState, 幂等键, 行为冻结]
+    introduced: "2026-10-27"
+
+  - term: 幂等键
+    aliases: [fill_key, idempotency key]
+    one_liner: 每笔入账的稳定身份（引擎内部 = 日期|方向|股票|序号；纸面外部回填由宿主供给），账本据此拒绝重复入账
+    layman: 每张成交单有唯一单号，同一张单号交两次，第二次直接拒收——重启重放不会重复记账
+    example: make_fill_key 单点格式；恢复后重新提交同一 fill_key ⇒ LedgerError
+    source: P4 实施规划 §3-D2 最小故障恢复约定（P4 T1 落地）
+    related: [Ledger, EngineState]
+    introduced: "2026-10-27"
+
+  - term: LiveAnchorState
+    aliases: [live 持久化锚定状态]
+    one_liner: live 排期的持久化锚（批次0锚定日 + 实际成功日 + 计划日 + 配置指纹），随 EngineState 快照同代落盘，禁止驱动首日重锚
+    layman: 纸面每天从哪里接着排班，写在档案里而不是看今天是几号——换了日历起点也不许偷偷重排
+    example: K=1 按实际成功日计交易日判到期；配置变更提案—成功 T0 后才提交；漏批逐日追赶最早未完成批次
+    source: P4 实施规划 §3-D1 排期来源二分 + F25（v2/core/execution/live_schedule.py，P4 T1）
+    related: [run_step, EngineState, 分批调仓契约]
+    introduced: "2026-10-27"
+
+
+  # ========== v2 P4（2026-10-27，T2 登记） ==========
+  - term: PaperHost
+    aliases: [纸面宿主]
+    one_liner: v2 纸面交易宿主（v2/hosts/paper）：PaperHost 协议 run_t0/run_t1 落地，每日经 run_step 原子驱动 + 持久化锚定排期 + 状态落盘旧 data/paper 布局
+    layman: 把"回测引擎每天跑一天"的动作包装成纸面交易每天的真实运转——生成指令、记账、存盘，全走同一颗内核脑子
+    example: run_t0(date) 产次日指令文件 + Order 序列；run_t1(date, fills) 把当日成交核对入账；同日重复 T0 幂等不重复执行
+    source: P4 实施规划 §5-T2 + §17.3 映射表；v2/hosts/paper/host.py（P4 T2）
+    related: [run_step, EngineState, PaperStateStore, LiveAnchorState]
+    introduced: "2026-10-27"
+
+  - term: PaperStateStore
+    aliases: [纸面宿主状态库]
+    one_liner: v2 引擎运行时状态 ↔ 旧 data/paper/ 布局的读写适配（隔离根 + 单写入者写锁 + 同代原子提交点 + 半提交受控恢复 + SMB 远端只读）
+    layman: 新引擎的"档案管理员"——把引擎记忆按老档案柜的格子摆好，谁改档案都要先领钥匙、一次写完才算数
+    example: commit_day 写序 = 先落 engine_state.bin（提交点）再写 account.json 等投影；崩溃后半提交代可识别并受控修复
+    source: P4 实施规划 §3-D2/D8 + §4.1；v2/hosts/paper/state_store.py（P4 T2）
+    related: [PaperHost, EngineState, 同代原子提交点]
+    introduced: "2026-10-27"
+
+  - term: 同代原子提交点
+    aliases: [atomic commit point]
+    one_liner: 纸面状态多文件写入的收口规则：同代批次先写临时区、提交点（engine_state.bin 权威快照）落盘才算生效；半提交代重启时识别并受控恢复
+    layman: 一天的所有改动打包成"一整批"，批次的"封口章"没盖上前都不算数——盖了章才生效，没盖完就识别出来按章重来
+    example: 禁止按文件存在认定成功；账户/成交/队列只应用一次；SMB 只读读者不把半代数据当完整快照
+    source: P4 实施规划 §3-D2 最小故障恢复约定（P4 T2 落地于 state_store.commit_day）
+    related: [PaperStateStore, EngineState, 幂等键]
+    introduced: "2026-10-27"
+
+  - term: 指令投影
+    aliases: [instruction projection]
+    one_liner: v2 引擎当日 T0 产出（买入计划/条件卖出/止损/延迟订单）→ 旧 instructions/<T+1>.parquet 布局的物理投影（先卖后买、(action,ts_code) 去重、既有优先合并）
+    layman: 引擎脑子里的"明日计划"按老格式打印出来贴在墙上——用户和旧工具照单操作，门 5 拿它做新旧两臂比对
+    example: 买入按 总资产×权重/收盘 整手预算；卖出整仓；补位上限 5 次；keep_buy_date 恒 False（政策退役）
+    source: P4 实施规划 §3-D8 + §15.3 状态映射表（指令文件 = 投影）
+    related: [PaperStateStore, PaperHost, 影子三臂]
+    introduced: "2026-10-27"
+
+  - term: 完整代发布标记
+    aliases: [generation publication marker]
+    one_liner: 纸面状态一代（某日）完整发布的判定标记 = runs/{run_kind}_{date}.json 存在（写序最后一步）；读侧（含 SMB 远端/树莓派展示）只把有记录的代视为完整代
+    layman: 一天的改动是一整批货，runs 记录是贴在门口的"已签收"单——没贴单说明货可能只卸了一半，等系统补卸完再看
+    example: 半提交崩溃后宿主重启经 _ensure_generation_complete 以权威快照重建缺失投影再补写记录；SMB 读侧缺记录的代不得据以做持久结论
+    source: P4 T2 评审处置（2026-10-28，reviewer1 P1-1 / reviewer2 T2-01 修复）——state_store.py 模块 docstring「完整代发布标记与崩溃恢复分工」
+    related: [同代原子提交点, PaperStateStore, PaperHost]
+    introduced: "2026-10-28"
+
+  - term: paper_shadow
+    aliases: [纸面影子, 影子三臂]
+    one_liner: v2 PaperHost 在隔离根参与真实日历影子窗口的 runs host_mode；逐日保存未裁剪成交/归因/持仓/组合值，历史回放不得冒充 SLA
+    layman: 新引擎在隔壁房间跟着真实交易日每天做一遍，单子拿来和旧 neutral 对账；没跑满真实窗口就不能说已验收
+    example: 验收边仅为 v2_shadow vs legacy_neutral；现役 legacy+e2online_r 只留信息性产物；T5 当前 Q11-A=0/10，尚无真实 paper_shadow 批次
+    source: runs 产物契约 F3 host_mode；P4 实施规划 v22 §24.10；v2/hosts/paper/shadow.py
+    related: [PaperHost, 完整代发布标记, 指令投影]
+    introduced: "2026-10-30"

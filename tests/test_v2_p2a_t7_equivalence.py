@@ -149,6 +149,7 @@ def test_create_engine_kwargs_equivalence(monkeypatch):
     """
     monkeypatch.setattr(old_runtime, "BacktestEngineML", _EngineCapture)
     monkeypatch.setattr(new_runtime, "BacktestEngineML", _EngineCapture)
+    monkeypatch.setattr(new_runtime, "NativeMergeBacktestEngineML", _EngineCapture)
     monkeypatch.setattr(old_runtime, "CostModel", _FakeCostModel)
     monkeypatch.setattr(new_runtime, "CostModel", _FakeCostModel)
 
@@ -178,9 +179,12 @@ def test_create_engine_kwargs_equivalence(monkeypatch):
     )
     assert len(_EngineCapture.instances) == 2
     kw_old, kw_new = (i.kwargs for i in _EngineCapture.instances)
-    assert set(kw_old) == set(kw_new)
+    native_only = {"portfolio_merger", "sleeve_id"}
+    assert set(kw_new) - native_only == set(kw_old)
     for key in kw_old:
         assert _kwargs_equal(kw_old[key], kw_new[key]), f"kwargs[{key}] 不一致"
+    assert kw_new["sleeve_id"] == "value"
+    assert isinstance(kw_new["portfolio_merger"], new_runtime.SingleSleevePortfolioMerger)
     # 成本模型缺省时各自实例化本侧 CostModel（此处为同一 stub 类）
     assert isinstance(kw_old["cost_model"], _FakeCostModel)
     assert isinstance(kw_new["cost_model"], _FakeCostModel)
@@ -1537,7 +1541,19 @@ _ALLOWED_OLD_IMPORT_PREFIXES = (
     "src.lazybull.ml.walk_forward.utils",  # 只读过渡（切分生成），去除节点 P3
     "src.lazybull.ml.walk_forward.data_state",  # 只读过渡（数据态采集），去除节点 P3
     "src.lazybull.ml.model_registry",  # 只读过渡（若用到），去除节点 P3
+    # P4-T2 纸面宿主迁移件的只读过渡依赖登记（行为冻结；随旧链路物理删除而去除）：
+    "src.lazybull.common.constants",  # 只读过渡：SHARE_LOT_SIZE 常量（一手=100股），永久沿用
+    "src.lazybull.common.date_utils",  # 只读过渡：calc_holding_trade_days 交易日持有天数（与旧链同源共用），永久沿用
+    "src.lazybull.common.smb_client",  # 只读过渡：SMBFileReader 类型（state_store SMB 只读旁路），随 SMB 旁路存续
 )
+
+#: 仅 v2/hosts/paper 可用的旧侧依赖前缀（T2 评审处置：按路径限定，保持方向约束判别力——
+#: 未来 hosts/backtest 等其它宿主引入旧 paper 即拦）
+_PAPER_ONLY_OLD_IMPORT_PREFIXES = (
+    "src.lazybull.paper",  # 只读过渡：reporting/performance/config_adapter 读旧链布局/类型/退役键常量，去除节点=旧链路物理删除（观察期后）
+)
+
+_PAPER_HOST_DIR = _V2_HOSTS_DIR / "paper"
 
 # 退役 exposure 三 mixin 冻结集（41 项）的扫描口径子集：剔除 T5 文档化排除
 # "record"（通用局部变量同名）与 D6 归属的 5 个 fail-fast 签名参数名。
@@ -1664,11 +1680,11 @@ def _import_candidates_of(path: Path, importer_package: Optional[str] = None) ->
     return candidates
 
 
-def _is_allowed_old_import(candidate: str) -> bool:
-    return any(
-        candidate == prefix or candidate.startswith(prefix + ".")
-        for prefix in _ALLOWED_OLD_IMPORT_PREFIXES
-    )
+def _is_allowed_old_import(candidate: str, path: Optional[Path] = None) -> bool:
+    prefixes = _ALLOWED_OLD_IMPORT_PREFIXES
+    if path is not None and _PAPER_HOST_DIR in path.parents:
+        prefixes = prefixes + _PAPER_ONLY_OLD_IMPORT_PREFIXES
+    return any(candidate == prefix or candidate.startswith(prefix + ".") for prefix in prefixes)
 
 
 def test_retired_symbol_extraction_consistency():
@@ -1683,7 +1699,11 @@ def test_retired_symbol_extraction_consistency():
 
 
 def test_hosts_import_direction_whitelist():
-    """v2/hosts 全部文件：v2 以外的 src.lazybull.* import 必须落在旧侧白名单。"""
+    """v2/hosts 全部文件：v2 以外的 src.lazybull.* import 必须落在旧侧白名单。
+
+    路径限定（T2 评审处置）：``src.lazybull.paper`` 前缀仅 hosts/paper 可用，
+    其它宿主（如未来 hosts/backtest）引入旧 paper 即拦。
+    """
     sources = sorted(_V2_HOSTS_DIR.rglob("*.py"))
     assert sources, "v2/hosts 扫描面为空（异常）"
     hits: Dict[str, List[str]] = {}
@@ -1693,7 +1713,7 @@ def test_hosts_import_direction_whitelist():
             for c in _import_candidates_of(path)
             if c.startswith("src.lazybull")
             and not c.startswith("src.lazybull.v2")
-            and not _is_allowed_old_import(c)
+            and not _is_allowed_old_import(c, path)
         ]
         if bad:
             hits[str(path.relative_to(_REPO_ROOT))] = bad

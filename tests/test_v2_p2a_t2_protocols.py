@@ -22,7 +22,7 @@ import-linter 属契约 §9 落档清单欠账，另行登记。
 import ast
 import inspect
 from pathlib import Path
-from typing import Mapping, Sequence, get_type_hints
+from typing import Mapping, Optional, Sequence, get_type_hints
 
 import pandas as pd
 
@@ -339,7 +339,9 @@ class TestFullSignatureLock:
             (
                 _SELF,
                 ("date", _POK, _EMPTY, TradeDate),
-                ("fills", _POK, _EMPTY, Sequence[Fill]),
+                # 2026-10-28 P4 T2 评审处置（用户裁决）：fills = 提交前核对通道，
+                # Optional 缺省 None = 引擎行情记账为权威（协议勘误，见规划 §18.10）
+                ("fills", _POK, None, Optional[Sequence[Fill]]),
             ),
             _NONE_TYPE,
         )
@@ -499,7 +501,7 @@ class _StubPaperHost:
     def run_t0(self, date: TradeDate) -> Sequence[Order]:
         return []
 
-    def run_t1(self, date: TradeDate, fills: Sequence[Fill]) -> None:
+    def run_t1(self, date: TradeDate, fills: Optional[Sequence[Fill]] = None) -> None:
         return None
 
 
@@ -578,7 +580,7 @@ class _WrongPaperHostReturnType:
 class _ReorderedPaperHost:
     """反例：参数换序（fills 先于 date）。"""
 
-    def run_t1(self, fills: Sequence[Fill], date: TradeDate) -> None:
+    def run_t1(self, fills: Optional[Sequence[Fill]] = None, date: TradeDate = None) -> None:  # noqa: E501（反例：参数换序；date 默认值为语法占位）
         return None
 
 
@@ -678,10 +680,10 @@ class TestSourceMutationRegression:
         """PaperHost.run_t1 源码参数换序（date/fills 互换）⇒ 锁定失败。"""
         src = (_PROTOCOLS_DIR / "hosts.py").read_text(encoding="utf-8")
         old_block = (
-            "    def run_t1(self, date: TradeDate, fills: Sequence[Fill]) -> None:"
+            "    def run_t1(self, date: TradeDate, fills: Optional[Sequence[Fill]] = None) -> None:"
         )
         new_block = (
-            "    def run_t1(self, fills: Sequence[Fill], date: TradeDate) -> None:"
+            "    def run_t1(self, fills: Optional[Sequence[Fill]], date: TradeDate) -> None:"
         )
         assert old_block in src, "源码签名行格式与预期不符，需同步更新本变异测试"
         mutated = self._mutated_protocol_method(src, [(old_block, new_block)])

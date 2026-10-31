@@ -24,13 +24,54 @@ D8 提取式拆分：旧 ``run`` 在复杂度基线在册（func_lines / mccabe 
 
 依赖：本模块无项目内 import（旧文件同样只依赖 time / typing / pandas / loguru），
 无改指项。
+
+P4-T1 修订（D1 单日步进）：提取共同日级阶段入口 ``run_step(date,
+trading_dates_full, price_data)``——``run`` 改为「初始化 + 循环调用 step」，
+连续路径的语句执行顺序 / 数值操作 / 日志逐位不变（门 2b/门 2 双重证明）。
+结构性变更点（行为零变化）：① 调仓排期表 ``signal_dates`` 自 run() 局部
+可变变量提升为引擎态 ``self._signal_dates``（D2 快照字段；同一 dict 对象
+继续被 ``_run_signal_day``/``_try_early_rebalance`` 以参数传递原地改写）；
+② ``_run_total_days`` = 驱动窗口日数（进度日志分母，驱动上下文注入）；
+③ 延迟日志 sink 生命周期由「run 全程一次」改为「每日一次」（T0.5b 已证
+输出等价：sink 过滤语义逐日相同，日界 ``_deferred_day_logs`` 重置不变）；
+④ 新一轮分隔线文案提为模块常量 ``_CYCLE_SEPARATOR``（逐字不变）。
+``run_step`` 调用前提（宿主接线义务）：``_trade_date_index``（以注入日历
+为坐标）/ ``_prepare_price_index(price_data)`` / ``price_data_cache`` /
+``_signal_dates`` / ``_run_total_days`` 已就位；回放 = 窗口锚定（run 内
+``_get_rebalance_dates``），live = 持久化锚定（``live_schedule`` 模块，
+禁止驱动首日重锚）。
+
+P4-T4 P2-01：连续 run 可显式注入完整执行日历，驱动与排期仍受窗口限制；
+回放末日据已知 T+1 日历生成计划，不读取未来行情。缺省不传时保持历史连续行为。
 """
 
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
+
+#: 新一轮回测分隔线文案（自 run() 局部变量提为模块常量，逐字不变）
+_CYCLE_SEPARATOR = (
+    "\n================================================"
+    " 新一轮回测 ================================================="
+)
+
+
+def _resolve_step_calendar(
+    window: List[pd.Timestamp], full_calendar: Optional[List[pd.Timestamp]]
+) -> List[pd.Timestamp]:
+    """显式完整日历保留未来日期；索引仍从驱动窗口首日开始，缺省维持窗口口径。"""
+    if full_calendar is None:
+        return window
+    if full_calendar != sorted(set(full_calendar)):
+        raise ValueError("完整执行日历必须升序且无重复")
+    if not window:
+        return []
+    calendar = [day for day in full_calendar if day >= window[0]]
+    if calendar[: len(window)] != window:
+        raise ValueError("完整执行日历与驱动窗口不一致，禁止遗漏或插入窗口内交易日")
+    return calendar
 
 
 class BacktestRunLoopMixin:
@@ -42,6 +83,8 @@ class BacktestRunLoopMixin:
         end_date: pd.Timestamp,
         trading_dates: List[pd.Timestamp],
         price_data: pd.DataFrame,
+        *,
+        trading_dates_full: Optional[List[pd.Timestamp]] = None,
     ) -> pd.DataFrame:
         """运行回测
 
@@ -50,6 +93,8 @@ class BacktestRunLoopMixin:
             end_date: 结束日期
             trading_dates: 交易日列表
             price_data: 价格数据，需包含 ts_code, trade_date, close, close_adj（可选）
+            trading_dates_full: 显式完整执行日历，含未来日期供 T+1 与到期日解析；
+                仅驱动 start_date~end_date，排期仍按窗口首日锚定。缺省保持旧窗口口径。
 
         Returns:
             净值曲线DataFrame
@@ -59,9 +104,10 @@ class BacktestRunLoopMixin:
         # 筛选回测期间的交易日
         trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
         total_days = len(trading_dates)
+        step_calendar = _resolve_step_calendar(trading_dates, trading_dates_full)
 
         # 创建日期到索引的映射，优化查找效率
-        date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+        date_to_idx = {date: idx for idx, date in enumerate(step_calendar)}
         # 在线政策 provider（P2-5）需要当日交易日位置（剩余持有交易日口径与快照一致）
         self._trade_date_index = date_to_idx
 
@@ -72,7 +118,10 @@ class BacktestRunLoopMixin:
         self.price_data_cache = price_data
 
         # 获取调仓日期（信号生成日期）→ {日期: tranche_idx}
-        signal_dates = self._get_rebalance_dates(trading_dates)
+        # P4-T1（D1）：提升为引擎态 self._signal_dates（同一 dict 对象，
+        # 继续经参数传递被 _run_signal_day/_try_early_rebalance 原地改写）
+        self._signal_dates = self._get_rebalance_dates(trading_dates)
+        signal_dates = self._signal_dates
 
         if self.stagger_tranches > 1:
             logger.info(
@@ -84,91 +133,17 @@ class BacktestRunLoopMixin:
 
         # 记录开始时间
         start_time = time.time()
-        deferred_sink_id = logger.add(
-            self._collect_deferred_log,
-            format="{message}",
-            level="DEBUG",
-            colorize=False,
-            filter=lambda record: record["extra"].get("_defer_emit", False),
-        )
-
+        # P4-T1（D1）：驱动窗口日数注入引擎态（run_step 进度日志分母）
+        self._run_total_days = total_days
         try:
             # 按日推进
             # _cycle_anchor_idx 是当前调仓周期的"第1天"在 trading_dates 中的 idx
             # 初始为 0（第一天即第1轮的第1天）；每次信号成功入队列时重置为信号日 idx
             # 这样门控连续阻断的空仓期不会推进 cycle_day
             self._cycle_anchor_idx = 0
-            cycle_separator = (
-                "\n================================================"
-                " 新一轮回测 ================================================="
-            )
-            for idx, date in enumerate(trading_dates):
-                # 新一轮首日：输出分隔线（在所有业务日志之前）
-                if idx == self._cycle_anchor_idx:
-                    self._emit_immediate_log("INFO", cycle_separator)
-                cycle_day = idx - self._cycle_anchor_idx + 1
-                trade_start_idx = len(self.trades)
-                self._deferred_day_logs = []
-                self._reset_daily_warning_items()
-
-                with logger.contextualize(_defer_emit=True):
-                    # 处理延迟订单（先处理延迟订单，再处理新信号）
-                    if self.enable_pending_order:
-                        self._process_pending_orders(date)
-
-                    # 检查止损（T 日检查，T+1 日执行卖出）
-                    if self.stop_loss_monitor:
-                        self._check_stop_loss(date, trading_dates, date_to_idx)
-
-                    # 判断是否为信号生成日
-                    cycle_day = self._run_signal_day(
-                        idx,
-                        date,
-                        cycle_day,
-                        signal_dates,
-                        trading_dates,
-                        price_data,
-                        date_to_idx,
-                        cycle_separator,
-                    )
-
-                    # @2026/01/18: 先卖后买的当日执行序列（D8 提取，见 _run_daily_trade_executions）
-                    self._run_daily_trade_executions(date, trading_dates, date_to_idx)
-
-                    # 空仓提前调仓 / 盈利延续拖尾提前调仓（D8 提取，见 _try_early_rebalance）
-                    cycle_day = self._try_early_rebalance(
-                        idx,
-                        date,
-                        cycle_day,
-                        signal_dates,
-                        trading_dates,
-                        price_data,
-                        date_to_idx,
-                        cycle_separator,
-                    )
-
-                    # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
-                    if self.enable_position_completion:
-                        self._process_position_completion(
-                            date, trading_dates, price_data, date_to_idx
-                        )
-
-                    # 计算当日组合价值
-                    portfolio_value = self._calculate_portfolio_value(date)
-
-                # 日终日志汇总 / 净值快照 / 持仓快照（D8 提取，见 _finalize_day）
-                self._finalize_day(
-                    idx,
-                    date,
-                    trade_start_idx,
-                    total_days,
-                    cycle_day,
-                    portfolio_value,
-                    trading_dates,
-                    date_to_idx,
-                )
+            for date in trading_dates:
+                self.run_step(date, step_calendar, price_data)
         finally:
-            logger.remove(deferred_sink_id)
             self._deferred_day_logs = []
 
         # 生成净值曲线
@@ -182,6 +157,108 @@ class BacktestRunLoopMixin:
         self._log_run_stats()
 
         return nav_df
+
+    def run_step(
+        self,
+        date: pd.Timestamp,
+        trading_dates_full: List[pd.Timestamp],
+        price_data: pd.DataFrame,
+    ) -> None:
+        """共同日级阶段入口（P4-T1，D1）：推进一个交易日。
+
+        连续 ``run`` = 初始化 + 循环调用本方法；纸面宿主逐日驱动 =
+        ``restore_state → run_step（当日）→ export_state → 落盘``。
+        循环体语句顺序 / 数值操作 / 日志与旧 ``run`` 循环体逐字一致
+        （sink 生命周期改为每日一次，T0.5b 已证输出等价）。
+
+        调用前提（宿主接线义务）：``_trade_date_index``（以注入日历为坐标）、
+        ``_prepare_price_index(price_data)``、``price_data_cache``、
+        ``_signal_dates``、``_run_total_days`` 已就位。
+
+        Args:
+            date: 当日交易日（必须在 ``_trade_date_index`` 内）
+            trading_dates_full: 宿主注入的执行日历，回放可保留窗口外已知交易日供 T+1
+                与到期日解析；历史连续回测缺省仍为驱动窗口，live 为完整交易日历。
+            price_data: 价格数据（含 ts_code, trade_date, close, close_adj 等）
+        """
+        idx = self._trade_date_index[date]
+        date_to_idx = self._trade_date_index
+        signal_dates = self._signal_dates
+        # 新一轮首日：输出分隔线（在所有业务日志之前）
+        if idx == self._cycle_anchor_idx:
+            self._emit_immediate_log("INFO", _CYCLE_SEPARATOR)
+        cycle_day = idx - self._cycle_anchor_idx + 1
+        trade_start_idx = len(self.trades)
+        self._deferred_day_logs = []
+        self._reset_daily_warning_items()
+
+        deferred_sink_id = logger.add(
+            self._collect_deferred_log,
+            format="{message}",
+            level="DEBUG",
+            colorize=False,
+            filter=lambda record: record["extra"].get("_defer_emit", False),
+        )
+        try:
+            with logger.contextualize(_defer_emit=True):
+                # 处理延迟订单（先处理延迟订单，再处理新信号）
+                if self.enable_pending_order:
+                    self._process_pending_orders(date)
+
+                # 检查止损（T 日检查，T+1 日执行卖出）
+                if self.stop_loss_monitor:
+                    self._check_stop_loss(date, trading_dates_full, date_to_idx)
+
+                # 判断是否为信号生成日
+                cycle_day = self._run_signal_day(
+                    idx,
+                    date,
+                    cycle_day,
+                    signal_dates,
+                    trading_dates_full,
+                    price_data,
+                    date_to_idx,
+                    _CYCLE_SEPARATOR,
+                )
+
+                # @2026/01/18: 先卖后买的当日执行序列（D8 提取，见 _run_daily_trade_executions）
+                self._run_daily_trade_executions(date, trading_dates_full, date_to_idx)
+
+                # 空仓提前调仓 / 盈利延续拖尾提前调仓（D8 提取，见 _try_early_rebalance）
+                cycle_day = self._try_early_rebalance(
+                    idx,
+                    date,
+                    cycle_day,
+                    signal_dates,
+                    trading_dates_full,
+                    price_data,
+                    date_to_idx,
+                    _CYCLE_SEPARATOR,
+                )
+
+                # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
+                if self.enable_position_completion:
+                    self._process_position_completion(
+                        date, trading_dates_full, price_data, date_to_idx
+                    )
+
+                # 计算当日组合价值
+                portfolio_value = self._calculate_portfolio_value(date)
+
+            # 日终日志汇总 / 净值快照 / 持仓快照（D8 提取，见 _finalize_day）
+            self._finalize_day(
+                idx,
+                date,
+                trade_start_idx,
+                self._run_total_days,
+                cycle_day,
+                portfolio_value,
+                trading_dates_full,
+                date_to_idx,
+            )
+        finally:
+            logger.remove(deferred_sink_id)
+            self._deferred_day_logs = []
 
     def _run_daily_trade_executions(
         self,
@@ -267,8 +344,14 @@ class BacktestRunLoopMixin:
 
         is_empty_position = not self.positions
         is_holding_period_exceeded = bool(self.positions) and cycle_day >= self.holding_period
+        # P4-T1（评审处置 P2-5）：live 形态复刻旧链「仅空仓提前调仓」——
+        # enable_trailing_early_rebalance=False 时拖尾分支不触发（引擎默认 True，
+        # 回测/回放行为不变）
+        trailing_allowed = self.enable_trailing_early_rebalance
 
-        if early_rebalance_guards_ok and (is_empty_position or is_holding_period_exceeded):
+        if early_rebalance_guards_ok and (
+            is_empty_position or (is_holding_period_exceeded and trailing_allowed)
+        ):
             # 旧实现此处计算残留占比但返回值从不被读取（随后重新计算覆盖）；
             # 求值本身带 last_known_price 缓存写回副作用，行为冻结保留调用、不绑定变量
             self._early_rebalance_residual_ratio(date, is_empty_position)

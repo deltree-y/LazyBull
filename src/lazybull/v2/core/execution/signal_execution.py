@@ -16,10 +16,8 @@ D8 提取式拆分（T5 落位时执行）：旧路径基线在册硬超限 ``_g
 （排序候选准备 / T+1 买入日解析 / 行业约束与候选过滤 / 批次目标数量解析 /
 权重归一化与上限 / 信号计划入队），公开签名、数值操作顺序、日志文本逐字保留。
 
-P2b-T2 修订（D3，方案 F12 §4.10）：``_normalize_and_cap_signals`` 内新增迁移期
-合并接缝——``_normalize_signals`` 之后、批次限权之前，``self.merge_port`` 为
-None（默认关闭）时严格跳过（关闭态逐位一致）；开启时经宿主适配器调用真实
-``merge()``，输入为当批归一化权重（当批相对语义，非整袖全账户配置）。
+P4-T3：P2b 旧 dict 端口与 bypass 已删除；默认链保持归一化后直接限权，
+原生单袖 TargetPortfolio 合并由 hosts 子类在同一数值位置显式接入。
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -175,33 +173,12 @@ def _resolve_signal_target_n(
     return target_n, overall_target_n
 
 
-def _normalize_and_cap_signals(
+def _cap_normalized_signals(
     self: "BacktestSignalExecutionMixin",
     signals: Dict[str, float],
-    date: pd.Timestamp,
     tranche_idx: int,
 ) -> Dict[str, float]:
-    """归一化权重并按批次资金比例套单股权重上限（D8 提取件，顺序不变）。
-
-    P2b-T2 接缝（D3 唯一接缝）：归一化之后、批次限权之前可选经过迁移期
-    合并端口；``merge_port=None``（默认关闭）严格跳过，关闭态逐位一致。
-    """
-    # 归一化权重（子类可覆写 _normalize_signals 以实现 ATR 加权等策略）
-    signals = self._normalize_signals(signals, date)
-
-    # P2b-T2 迁移期合并接缝：开启时经宿主适配器调用真实 merge()；
-    # 输入为当批归一化权重（当批相对语义，非整袖/全账户资产配置）。
-    # 条件卖出补位与 T+1 槽位顺位计划是执行阶段局部计划，不经此接缝（D3）。
-    if self.merge_port is not None:
-        signals = self.merge_port.merge_legacy_batch_targets(
-            weights=signals,
-            date=date,
-            cash=self.current_capital,
-            total_value=self._last_rebalance_nav,
-            positions=self.positions,
-            initial_capital=self.initial_capital,
-        )
-
+    """按批次资金比例套单股权重上限（原生合并前后的共用实现）。"""
     if self.max_weight_per_stock is not None and signals:
         tranche_weight_cap = resolve_tranche_weight_cap(
             self.max_weight_per_stock,
@@ -212,8 +189,18 @@ def _normalize_and_cap_signals(
             max_weight_per_stock=tranche_weight_cap,
             verbose=self.verbose,
         )
-
     return signals
+
+
+def _normalize_and_cap_signals(
+    self: "BacktestSignalExecutionMixin",
+    signals: Dict[str, float],
+    date: pd.Timestamp,
+    tranche_idx: int,
+) -> Dict[str, float]:
+    """默认链：归一化后直接限权；原生合并由 hosts 子类显式接入。"""
+    signals = self._normalize_signals(signals, date)
+    return _cap_normalized_signals(self, signals, tranche_idx)
 
 
 def _queue_signal_plan(
@@ -257,6 +244,12 @@ def _queue_signal_plan(
 
 class BacktestSignalExecutionMixin:
     """提供信号生成与候选规划相关实现。"""
+
+    def _normalize_and_cap_signals(
+        self, signals: Dict[str, float], date: pd.Timestamp, tranche_idx: int
+    ) -> Dict[str, float]:
+        """可覆写的宿主权重链接缝；默认实现无数值变化。"""
+        return _normalize_and_cap_signals(self, signals, date, tranche_idx)
 
     def _get_industry_counts(self, stocks: set) -> Dict[str, int]:
         """统计已有持仓在行业约束中的占用数量。"""
@@ -500,7 +493,7 @@ class BacktestSignalExecutionMixin:
                 )
             return
 
-        signals = _normalize_and_cap_signals(self, signals, date, tranche_idx)
+        signals = self._normalize_and_cap_signals(signals, date, tranche_idx)
 
         decision_trace = _queue_signal_plan(
             self,

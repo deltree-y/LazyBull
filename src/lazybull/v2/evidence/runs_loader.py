@@ -36,6 +36,7 @@ from src.lazybull.v2.evidence.runs_schema import (
     CHAIN_NAV_CONTRACT_COLS,
     FOLD_FILE_CONTRACT_COLS,
     SUMMARY_REQUIRED_COLS,
+    validate_host_mode,
 )
 
 #: §9.2 后半对账容差（契约明文 1e-6）
@@ -105,7 +106,9 @@ def _check_trades(trades: pd.DataFrame, name: str) -> None:
     """契约 §9.1（action 闭集 + 卖出行 buy_date）+ §9.4（同日同股同向唯一）。"""
     bad_action = ~trades["action"].isin(["buy", "sell"])
     if bad_action.any():
-        raise ValueError(f"{name}: action 含非法值: {trades.loc[bad_action, 'action'].unique().tolist()}")
+        raise ValueError(
+            f"{name}: action 含非法值: {trades.loc[bad_action, 'action'].unique().tolist()}"
+        )
     sells = trades[trades["action"] == "sell"]
     bad_sell = sells["buy_date"].isna() | (sells["buy_date"] > sells["trade_date"])
     if bad_sell.any():
@@ -142,7 +145,8 @@ def _check_chain_nav(chain: pd.DataFrame, summary: pd.DataFrame) -> None:
 
 
 def _check_batch_meta(batch_meta: Dict[str, object], summary: pd.DataFrame) -> None:
-    """契约 §9.3：config_fingerprint 重算一致 + data_state_id 与逐折 summary 列一致。"""
+    """契约 §2/§9.3：host_mode 闭集 + 指纹与数据态一致性硬校验。"""
+    validate_host_mode(batch_meta.get("host_mode"))
     config = batch_meta.get("config")
     expected = batch_meta.get("config_fingerprint")
     if not isinstance(config, dict) or not expected:
@@ -158,9 +162,7 @@ def _check_batch_meta(batch_meta: Dict[str, object], summary: pd.DataFrame) -> N
         raise ValueError("batch_meta.data_state.data_state_id 缺失（契约 §9.3 数据态血缘必需）")
     col = summary["data_state_id"].dropna().unique()
     if len(col) != 1 or str(col[0]) != str(ds_id):
-        raise ValueError(
-            f"data_state_id 不一致: batch_meta={ds_id} vs summary 列 {col.tolist()}"
-        )
+        raise ValueError(f"data_state_id 不一致: batch_meta={ds_id} vs summary 列 {col.tolist()}")
 
 
 def _check_fold_seams(chain: pd.DataFrame) -> None:
@@ -178,7 +180,9 @@ def _check_fold_seams(chain: pd.DataFrame) -> None:
             raise ValueError(
                 f"跨折衔接断裂: 折 {a} 末行 nav={last_a['nav']} ≠ 折 {b} 首行 nav={first_b['nav']}"
             )
-        if pd.api.types.is_string_dtype(chain["date"]) and str(last_a["date"]) != str(first_b["date"]):
+        if pd.api.types.is_string_dtype(chain["date"]) and str(last_a["date"]) != str(
+            first_b["date"]
+        ):
             raise ValueError(
                 f"跨折日期衔接断裂: 折 {a} 末日 {last_a['date']} ≠ 折 {b} 首日 {first_b['date']}"
             )
@@ -202,7 +206,9 @@ def _check_daily_trades_xref(fold: RunsFold, chain_seg: pd.DataFrame) -> None:
             )
     # 折内 total_value 起止比与 chain_nav 折内 nav 起止比一致
     daily_sorted = daily.sort_values("trade_date")
-    tv_ratio = float(daily_sorted["total_value"].iloc[-1]) / float(daily_sorted["total_value"].iloc[0])
+    tv_ratio = float(daily_sorted["total_value"].iloc[-1]) / float(
+        daily_sorted["total_value"].iloc[0]
+    )
     seg = chain_seg.sort_values("date")
     nav_ratio = float(seg["nav"].iloc[-1]) / float(seg["nav"].iloc[0])
     # 容差 1e-3（相对）：daily 自快照重建，与引擎净值口径存在实测 ~3e-4 稳定系统差
@@ -225,13 +231,12 @@ def _load_fold_dir(fold_dir: Path) -> Optional[RunsFold]:
     fold = RunsFold(split_index=split_idx)
     trades_path = fold_dir / "trades.parquet"
     if not trades_path.exists():
-        raise FileNotFoundError(
-            f"{fold_dir} 缺 trades.parquet（契约三态=必须报错）"
-        )
+        raise FileNotFoundError(f"{fold_dir} 缺 trades.parquet（契约三态=必须报错）")
     fold.trades = pd.read_parquet(trades_path)
     _check_ascii_columns(fold.trades, f"folds/{fold_dir.name}/trades")
-    _check_column_set(fold.trades, FOLD_FILE_CONTRACT_COLS["trades"],
-                      f"folds/{fold_dir.name}/trades")
+    _check_column_set(
+        fold.trades, FOLD_FILE_CONTRACT_COLS["trades"], f"folds/{fold_dir.name}/trades"
+    )
     _check_trades(fold.trades, f"folds/{fold_dir.name}/trades")
     for name in ("daily", "attribution", "holdings_snapshot", "topk_detail"):
         p = fold_dir / f"{name}.parquet"
@@ -253,8 +258,11 @@ def load_runs_batch(batch_dir: Path) -> RunsBatch:
     summary_path = batch_dir / "summary.parquet"
     chain_path = batch_dir / "chain_nav.parquet"
     # 必需文件缺失 ⇒ 报错（契约 §9 三态=必须报错）
-    for p, name in ((meta_path, "batch_meta.json"), (summary_path, "summary.parquet"),
-                    (chain_path, "chain_nav.parquet")):
+    for p, name in (
+        (meta_path, "batch_meta.json"),
+        (summary_path, "summary.parquet"),
+        (chain_path, "chain_nav.parquet"),
+    ):
         if not p.exists():
             raise FileNotFoundError(f"{batch_dir} 缺必需文件 {name}（契约三态=必须报错）")
 

@@ -16,10 +16,10 @@
   逐位比对，R4-T1-01 处置：同列表自引用断言无法捕获原地重排）；混合
   ``source_sleeve``（反向/同向/自拆）fail-fast，错误含 sleeve 集合与阶段。
   S6 证据为单元级；真实接线证据归 T2/T3 分别登记（门 6）。
-- D 组（结构兼容与端口锁定）：``SingleSleevePortfolioMerger`` 对
+- D 组（结构兼容与过渡件删除）：``SingleSleevePortfolioMerger`` 对
   ``PortfolioMerger`` 协议 runtime_checkable 结构兼容 + 完整签名等同
   （参数名/种类/注解/**顺序**/返回，范式同 test_v2_p2a_t2_protocols.py）；
-  ``LegacyTargetMergePort`` 签名锁定（关键字-only 参数序列与注解）；core 模块
+  P4-T3 起反向断言旧 ``LegacyTargetMergePort`` 与适配器文件不存在；core 模块
   不得 import hosts（F11 §4.10 依赖方向；轻量锁覆盖完整路径/父包/裸/相对
   四类导入形态并附逃逸形反例，残余边界归 T3 门 2 AST 工具）。
 - E 组（反变异自证）：原地重排、原地改浮点、偷偷归一化、复制新对象、读取
@@ -53,10 +53,7 @@ from src.lazybull.v2.common.types import (
     Weight,
 )
 from src.lazybull.v2.core.decision import portfolio_merger as merger_mod
-from src.lazybull.v2.core.decision.portfolio_merger import (
-    LegacyTargetMergePort,
-    SingleSleevePortfolioMerger,
-)
+from src.lazybull.v2.core.decision.portfolio_merger import SingleSleevePortfolioMerger
 
 _TSC_A = TSCode("600000.SH")
 _TSC_B = TSCode("000001.SZ")
@@ -333,40 +330,34 @@ def test_protocol_structural_compatibility():
     )
 
 
-def test_legacy_target_merge_port_signature_locked():
-    """LegacyTargetMergePort 签名锁定：关键字-only 参数序列、注解与返回类型。
-
-    端口只接收明确列出的只读旧状态字段（weights/date/cash/total_value/
-    positions/initial_capital）并返回权重 dict；签名漂移即报警。
-    """
-    expected_params = (
-        ("self", _POK, _EMPTY, None),
-        ("weights", _KW_ONLY, _EMPTY, Dict[str, float]),
-        ("date", _KW_ONLY, _EMPTY, pd.Timestamp),
-        ("cash", _KW_ONLY, _EMPTY, float),
-        ("total_value", _KW_ONLY, _EMPTY, Optional[float]),
-        ("positions", _KW_ONLY, _EMPTY, Mapping[str, Mapping[str, Any]]),
-        ("initial_capital", _KW_ONLY, _EMPTY, float),
-    )
-    params, ret = _full_signature(LegacyTargetMergePort.merge_legacy_batch_targets)
-    assert params == expected_params
-    assert ret == Dict[str, float]
+def test_legacy_transition_symbols_removed():
+    """P4-T3：旧内部端口、dict 适配方法与本文件路径均不再存在。"""
+    assert not hasattr(merger_mod, "LegacyTargetMergePort")
+    adapter = Path(merger_mod.__file__).parents[2] / "hosts" / "backtest" / "merger_adapter.py"
+    assert not adapter.exists()
 
 
-def test_legacy_port_structural_check():
-    """端口 runtime_checkable 结构检验：符名存则过、缺则拒。"""
-
-    class _ConformingStub:
-        def merge_legacy_batch_targets(
-            self, *, weights, date, cash, total_value, positions, initial_capital
-        ):
-            return weights
-
-    class _NonConformingStub:
-        pass
-
-    assert isinstance(_ConformingStub(), LegacyTargetMergePort)
-    assert not isinstance(_NonConformingStub(), LegacyTargetMergePort)
+def test_merge_and_net_call_counts_track_real_calls():
+    """计数仅在结构校验后的真实 merge/S6 调用递增，拒绝路径不计数。"""
+    merger = SingleSleevePortfolioMerger()
+    target = TargetPortfolio("value", {TSCode("A"): Weight(1.0)}, _D0)
+    account = Account(Money(0.0), {}, Money(0.0), 1.0)
+    assert merger.merge({"value": target}, account) is target
+    orders = [
+        Order(
+            TSCode("A"),
+            OrderSide.BUY,
+            Shares(100),
+            OrderType.MARKET_OPEN,
+            OrderReason.REBALANCE,
+            "value",
+        )
+    ]
+    assert merger.net_across_sleeves(orders) is orders
+    assert (merger.merge_call_count, merger.net_call_count) == (1, 1)
+    with pytest.raises(ValueError):
+        merger.merge({}, account)
+    assert merger.merge_call_count == 1
 
 
 def _hosts_import_offenders(src: str) -> list:

@@ -29,7 +29,7 @@ def _init_repo(tmp_path):
     _write(repo, "scripts/v2_p2b/tool.py", "VALUE = 1\n")
     _write(repo, "src/lazybull/backtest/engine.py", "OLD = 1\n")
     _write(repo, "src/lazybull/v2/core/execution/base.py", "VALUE = 1\n")
-    _write(repo, "src/lazybull/v2/hosts/backtest/merger_adapter.py", "# adapter\n")
+    _write(repo, "src/lazybull/v2/hosts/native_engine.py", "# native boundary\n")
     _write(repo, "src/lazybull/v2/common/types.py", "# types\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "base")
@@ -109,7 +109,7 @@ def test_ast_catches_each_dynamic_import_form(tmp_path):
             "import importlib\n"
             "module = importlib.import_module('src.lazybull.v2.hosts.backtest.runtime')\n"
         ),
-        "relative_from": "from ...hosts import merger_adapter\n",
+        "relative_from": "from ...hosts import native_engine\n",
     }
     for name, source in cases.items():
         repo, _ = _init_repo(tmp_path / name)
@@ -132,6 +132,27 @@ def test_ast_catches_constructor_and_nav_aliases(tmp_path):
     violations = tool.check_ast_boundaries(repo)
     assert any("值对象构造" in item for item in violations)
     assert any("不得自行除以 initial_capital" in item for item in violations)
+
+
+def test_nav_exemptions_are_function_scoped_and_keep_positive_detection(tmp_path):
+    repo, _ = _init_repo(tmp_path)
+    for relative, allowed in (
+        ("src/lazybull/v2/hosts/paper/performance.py", "calculate_annualized_return"),
+        ("src/lazybull/v2/hosts/paper/reporting.py", "load_position_snapshot"),
+    ):
+        _write(
+            repo,
+            relative,
+            f"def {allowed}(current_value, initial_capital):\n"
+            "    return current_value / initial_capital\n"
+            "def rogue_new_formula(total_value, initial_capital):\n"
+            "    return total_value / initial_capital\n",
+        )
+    violations = tool.check_ast_boundaries(repo)
+    nav_hits = [item for item in violations if "不得自行除以 initial_capital" in item]
+    assert len(nav_hits) == 2
+    assert any("performance.py:4" in item for item in nav_hits)
+    assert any("reporting.py:4" in item for item in nav_hits)
 
 
 def test_environment_versions_are_separate_from_code_digest(monkeypatch, tmp_path):

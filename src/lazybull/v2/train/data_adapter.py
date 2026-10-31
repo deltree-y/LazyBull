@@ -15,7 +15,7 @@
   （``validate_label_day_readiness_and_collect``），其校验已全量读取的三表标签帧
   直接复用于六标签装配（``_assemble_label_columns``），消除 T1 版 readiness 与
   ``store.load_labels`` 双通道重复全量读；输出语义与 T1 版逐位一致。
-- ``cs_train_verify``（验收专用过渡例外，P3 规划 §3.1/§3.3，去除节点 = P4 评审）：
+- ``cs_train_verify``（P4 Q6-B：保活至旧链路物理删除的过渡验收工具）：
   显式开关默认关；须显式声明验收用途（G-code 配对参照 / 固定旧模型回归边）；
   纸面 / 实盘 / 纸面宿主代码路径不可达（调用栈校验）；输出必须与现役
   ``ml/train_core/split.py::load_features_data`` 逐值一致（含六标签与键集，

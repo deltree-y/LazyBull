@@ -46,6 +46,17 @@ from src.lazybull.paper import format_model_info as shared_format_model_info
 from src.lazybull.paper import (
     load_position_snapshot,
 )
+from src.lazybull.v2.hosts.paper.entrypoints import (
+    assert_legacy_rollback_allowed,
+    assert_production_switch_allowed,
+    format_v2_model_info,
+    format_v2_positions,
+    load_v2_account_state,
+    resolve_entry_engine,
+    run_v2_day,
+)
+from src.lazybull.v2.hosts.paper.state_service import adjust_v2_account, reset_v2_t0
+from src.lazybull.v2.hosts.paper.state_store import PaperStateStore
 
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
@@ -63,8 +74,20 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     return shared_format_model_info(models_dir=models_dir)
 
 
-def run_model_info(_args):
+def _is_v2(args) -> bool:
+    return getattr(args, "engine_mode", "legacy") == "v2"
+
+
+def _guard_legacy(args) -> None:
+    if not _is_v2(args):
+        assert_legacy_rollback_allowed(PaperStateStore())
+
+
+def run_model_info(args):
     """模型信息命令"""
+    if _is_v2(args):
+        logger.info(format_v2_model_info())
+        return
     logger.info("=" * 80)
     logger.info("模型信息")
     logger.info("=" * 80)
@@ -102,10 +125,21 @@ def run_config(args):
     replenish = getattr(args, "exposure_replenish", None)
     if replenish is not None:
         new_config["exposure_replenish"] = bool(replenish)
+    if getattr(args, "engine", None) is not None:
+        new_config["engine"] = args.engine
+        if args.engine == "legacy":
+            assert_legacy_rollback_allowed(PaperStateStore())
 
     # 加载已有配置作为基础，仅覆盖与默认值不同的字段（即用户明确指定的参数）
     storage = PaperStorage()
     existing_config = storage.load_config() or {}
+    if new_config.get("engine") == "v2" and existing_config.get("engine", "legacy") != "v2":
+        evidence = getattr(args, "switch_evidence", None)
+        if not evidence:
+            raise ValueError("真实切换必须提供 --switch-evidence <T5收口证据目录>")
+        assert_production_switch_allowed(
+            Path(evidence), authorized=bool(getattr(args, "authorize_production_switch", False))
+        )
     default_config = TradingConfig().to_dict()
     config = dict(existing_config)
     for k, v in new_config.items():
@@ -137,6 +171,13 @@ def run_main(args):
     logger.info("=" * 80)
     logger.info(f"交易日期: {args.trade_date}")
 
+    if _is_v2(args):
+        result = run_v2_day(args.trade_date, model_version=args.model_version)
+        for line in result.push_text.splitlines():
+            logger.info(line)
+        logger.info(format_v2_positions(result.corrected_date, store=PaperStateStore()))
+        return
+    _guard_legacy(args)
     try:
         runtime = create_paper_trade_runtime(args.model_version)
     except RuntimeError as exc:
@@ -197,6 +238,9 @@ def view_positions(args):
     """查看当前持仓。"""
     logger.info("=" * 80)
     logger.info("查看纸面交易持仓")
+    if _is_v2(args):
+        logger.info(format_v2_positions(args.trade_date, store=PaperStateStore()))
+        return
     print_positions(args.trade_date)
 
 
@@ -233,6 +277,16 @@ def run_adjust_delete_position(args):
     logger.info(f"Cut-off 日期: {args.trade_date}")
     logger.info(f"股票代码: {args.ts_code}")
 
+    if _is_v2(args):
+        account = adjust_v2_account(
+            PaperStateStore(),
+            command="delete-position",
+            trade_date=args.trade_date,
+            values={"ts_code": args.ts_code},
+        )
+        logger.info(f"v2 持仓删除完成，现金: {account['cash']:,.2f}")
+        return
+    _guard_legacy(args)
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
@@ -286,6 +340,20 @@ def run_adjust_update_position(args):
     logger.info(f"新股数: {args.shares}")
     logger.info(f"新买入价格: {args.buy_price:.2f}")
 
+    if _is_v2(args):
+        account = adjust_v2_account(
+            PaperStateStore(),
+            command="update-position",
+            trade_date=args.trade_date,
+            values={
+                "ts_code": args.ts_code,
+                "shares": args.shares,
+                "buy_price": args.buy_price,
+            },
+        )
+        logger.info(f"v2 持仓更新完成，现金: {account['cash']:,.2f}")
+        return
+    _guard_legacy(args)
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
@@ -345,6 +413,16 @@ def run_adjust_add_shares(args):
     logger.info(f"加仓股数: {args.shares}")
     logger.info(f"加仓价格: {args.price:.2f}")
 
+    if _is_v2(args):
+        account = adjust_v2_account(
+            PaperStateStore(),
+            command="add-shares",
+            trade_date=args.trade_date,
+            values={"ts_code": args.ts_code, "shares": args.shares, "price": args.price},
+        )
+        logger.info(f"v2 加仓完成，现金: {account['cash']:,.2f}")
+        return
+    _guard_legacy(args)
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
@@ -413,6 +491,16 @@ def run_adjust_cash(args):
     logger.info(f"Cut-off 日期: {args.trade_date}")
     logger.info(f"新现金金额: {args.set:,.2f}")
 
+    if _is_v2(args):
+        account = adjust_v2_account(
+            PaperStateStore(),
+            command="cash",
+            trade_date=args.trade_date,
+            values={"set": args.set},
+        )
+        logger.info(f"v2 现金设置完成: {account['cash']:,.2f}")
+        return
+    _guard_legacy(args)
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
@@ -514,10 +602,42 @@ def _create_realtime_runner() -> Tuple[PaperTradingRunner, Dict]:
     return runner, config
 
 
+def _run_real_v2() -> None:
+    """v2 实时持仓只读展示；账户来自 v2 投影，报价复用 TuShare 实时接口。"""
+    from src.lazybull.data.tushare_client import TushareClient
+
+    account = load_v2_account_state(PaperStateStore())
+    positions = account.positions
+    if not positions:
+        logger.info("当前无持仓")
+        return
+    try:
+        rt_df = TushareClient(verbose=False).get_realtime_quote(",".join(positions))
+    except Exception as exc:
+        logger.error(f"获取实时行情失败: {exc}")
+        return
+    if rt_df is None or rt_df.empty:
+        logger.error("实时行情数据为空")
+        return
+    config = PaperStorage().load_config() or {}
+    summary = build_realtime_portfolio_summary_from_quotes(
+        positions=positions,
+        cash=account.cash,
+        initial_capital=float(config.get("initial_capital", 500000.0)),
+        current_date=pd.Timestamp.today().strftime("%Y%m%d"),
+        rt_df=rt_df,
+    )
+    display_time = _extract_latest_quote_time(rt_df) or pd.Timestamp.now().strftime("%H:%M:%S")
+    logger.info(f"v2 实时持仓 [{display_time}]: {summary}")
+
+
 def run_real(args):
     """实时行情命令：获取持仓实时数据并展示"""
     from src.lazybull.data.tushare_client import TushareClient
 
+    if _is_v2(args):
+        _run_real_v2()
+        return
     runner, _ = _create_realtime_runner()
     positions = runner.account.get_positions()
 
@@ -756,7 +876,13 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
 
 
 def run_reset_t0(args):
-    """重置纸面交易，清空所有交易数据恢复为新账户"""
+    """重置最近 T0 与延迟队列；v2 不重置账户现金/持仓。"""
+    if _is_v2(args):
+        day = pd.Timestamp.today().strftime("%Y%m%d")
+        reset_v2_t0(PaperStateStore(), trade_date=day)
+        logger.info("v2 最近 T0 与延迟队列已重置，账户现金/持仓保持不变")
+        return
+    _guard_legacy(args)
     storage = PaperStorage()
 
     logger.info("=" * 80)
@@ -771,6 +897,16 @@ def run_reset_t0(args):
     logger.info("=" * 80)
 
 
+def _resolve_cli_engine(args) -> str:
+    """解析入口引擎，并禁止生产 legacy 下用 v2 覆盖绕过正式切换。"""
+    engine = resolve_entry_engine(cli_override=getattr(args, "engine", None))
+    if args.command != "config" and getattr(args, "engine", None) == "v2":
+        current = PaperStorage().load_config() or {}
+        if current.get("engine", "legacy") != "v2":
+            raise RuntimeError("生产尚未正式切换；禁止用 --engine v2 覆盖绕过门禁，请用隔离 T5 驱动")
+    return engine
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -783,6 +919,11 @@ def main():
     # config 子命令 — 使用公共参数注册函数
     config_parser = subparsers.add_parser("config", help="设置全局配置（持久化）")
     add_trading_args(config_parser, include_price=True, include_exposure=True)
+    config_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
+    config_parser.add_argument("--switch-evidence", help="T5 收口证据目录（真实切换必填）")
+    config_parser.add_argument(
+        "--authorize-production-switch", action="store_true", help="用户当时明确授权真实切换"
+    )
 
     # run 子命令
     run_parser = subparsers.add_parser("run", help="每日运行入口，自动编排执行各项动作")
@@ -792,25 +933,30 @@ def main():
         help="交易日期，格式YYYYMMDD（默认：当前日期）",
     )
     run_parser.add_argument("--model-version", type=int, help="ML模型版本（覆盖配置）")
+    run_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
     # model-info 子命令
-    subparsers.add_parser("model-info", help="查看当前使用的模型信息")
+    model_parser = subparsers.add_parser("model-info", help="查看当前使用的模型信息")
+    model_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
 
     # positions 子命令
     pos_parser = subparsers.add_parser("positions", help="查看当前持仓明细")
     pos_parser.add_argument(
         "--trade-date", required=True, help="参考交易日期（用于获取当前价格），格式YYYYMMDD"
     )
+    pos_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
 
     # real 子命令
     real_parser = subparsers.add_parser("real", help="实时行情：获取持仓的实时数据并展示")
     real_parser.add_argument(
         "--ret-profit-only", action="store_true", help="仅显示收益统计（精简单行输出）"
     )
+    real_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
 
     # adjust 子命令
     adjust_parser = subparsers.add_parser(
         "adjust", help="手工修正账户状态（修正发生在 cut-off 日期的 run 之前）"
     )
+    adjust_parser.add_argument("--engine", choices=("legacy", "v2"), help="纸面执行引擎")
     adjust_subparsers = adjust_parser.add_subparsers(dest="adjust_command", help="修正类型")
 
     # adjust delete-position
@@ -863,6 +1009,7 @@ def main():
     # 初始化日志
     setup_logger(log_level="INFO")
     get_config()  # 确保配置已加载
+    args.engine_mode = _resolve_cli_engine(args)
 
     # 执行命令
     if args.command == "config":

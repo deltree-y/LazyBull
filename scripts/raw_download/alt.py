@@ -15,6 +15,7 @@ from src.lazybull.data.financial_statement_versions import (
     CASHFLOW_VERSIONED_RAW_WATERMARK,
 )
 from src.lazybull.data.report_rc import deduplicate_report_rc, query_report_rc_adaptive
+from src.lazybull.data.tushare_client import CASHFLOW_DEFAULT_FIELDS
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 from .periodic import (
@@ -496,7 +497,7 @@ def download_cashflow(
         start_date=start_date,
         end_date=end_date,
         dedup_cols=list(CASHFLOW_VERSION_DEDUP_COLS),
-        fields=None,
+        fields=CASHFLOW_DEFAULT_FIELDS,
         force=effective_force,
         page_limit=6400,
         partition_by_period=True,

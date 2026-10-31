@@ -1407,11 +1407,11 @@ def test_load_position_snapshot_ensures_trade_date_clean_data(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "src.lazybull.paper.reporting.ensure_clean_data_for_date",
+        "src.lazybull.v2.hosts.paper.reporting.ensure_clean_data_for_date",
         _fake_ensure,
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.reporting._get_rebalance_status",
+        "src.lazybull.v2.hosts.paper.reporting._get_rebalance_status",
         lambda *_args, **_kwargs: "",
     )
 
@@ -1426,11 +1426,11 @@ def test_load_position_snapshot_ensures_trade_date_clean_data(monkeypatch):
     loader.load_clean_daily_by_date.return_value = daily_data
     loader.build_stock_names_dict.return_value = {"000001.SZ": "测试股票1"}
     monkeypatch.setattr(
-        "src.lazybull.paper.reporting.DataLoader",
+        "src.lazybull.v2.hosts.paper.reporting.DataLoader",
         lambda *_args, **_kwargs: loader,
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.reporting.PaperStorage",
+        "src.lazybull.v2.hosts.paper.reporting.PaperStorage",
         lambda *_args, **_kwargs: MagicMock(load_config=lambda: None),
     )
 

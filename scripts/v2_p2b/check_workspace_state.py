@@ -58,7 +58,7 @@ ALLOWED_CHANGED_PATHS = frozenset(
         "src/lazybull/v2/core/decision/portfolio_merger.py",
         "src/lazybull/v2/core/execution/engine.py",
         "src/lazybull/v2/core/execution/signal_execution.py",
-        "src/lazybull/v2/hosts/backtest/merger_adapter.py",
+        "src/lazybull/v2/hosts/native_engine.py",
         "src/lazybull/v2/hosts/backtest/replay.py",
         "src/lazybull/v2/hosts/backtest/runs_writer.py",
         "src/lazybull/v2/hosts/backtest/runtime.py",
@@ -258,7 +258,7 @@ def _constructor_violations(repo_root: Path, path: Path, tree: ast.AST) -> List[
         if isinstance(node, ast.Call) and _symbol_name(node.func) in local_names:
             name = _symbol_name(node.func)
             violations.append(
-                f"{relative}:{node.lineno}: 值对象构造只能位于宿主 merger_adapter（{name}）"
+                f"{relative}:{node.lineno}: 值对象构造只能位于宿主 native_engine（{name}）"
             )
     return violations
 
@@ -267,9 +267,25 @@ def _contains_any_name(node: ast.AST, names: set) -> bool:
     return any(_symbol_name(item) in names for item in ast.walk(node))
 
 
-def _nav_division_violations(repo_root: Path, path: Path, tree: ast.AST) -> List[str]:
+def _nav_division_violations(
+    repo_root: Path,
+    path: Path,
+    tree: ast.AST,
+    exempt_functions: frozenset[str] = frozenset(),
+) -> List[str]:
     capital_names = {"initial_capital"}
     nodes = list(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+
+    def _in_exempt_function(node: ast.AST) -> bool:
+        current = node
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if current.name in exempt_functions:
+                    return True
+        return False
+
     for node in nodes:
         value, targets = _assignment_parts(node)
         if value is not None and _contains_any_name(value, capital_names):
@@ -278,13 +294,15 @@ def _nav_division_violations(repo_root: Path, path: Path, tree: ast.AST) -> List
     violations = []
     for node in nodes:
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            if _contains_any_name(node.right, capital_names):
+            if not _in_exempt_function(node) and _contains_any_name(node.right, capital_names):
                 violations.append(
                     f"{relative}:{node.lineno}: 宿主不得自行除以 initial_capital 派生 NAV"
                 )
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "__truediv__" and any(
-                _contains_any_name(arg, capital_names) for arg in node.args
+            if (
+                not _in_exempt_function(node)
+                and node.func.attr == "__truediv__"
+                and any(_contains_any_name(arg, capital_names) for arg in node.args)
             ):
                 violations.append(f"{relative}:{node.lineno}: 宿主不得通过 __truediv__ 私算 NAV")
     return violations
@@ -296,16 +314,30 @@ def check_ast_boundaries(repo_root: Path = PROJECT_ROOT) -> List[str]:
     v2_root = repo_root / "src" / "lazybull" / "v2"
     if not v2_root.exists():
         return violations
-    adapter = v2_root / "hosts" / "backtest" / "merger_adapter.py"
-    types_file = v2_root / "common" / "types.py"
+    value_object_boundaries = {
+        v2_root / "hosts" / "native_engine.py",
+        v2_root / "hosts" / "paper" / "host.py",
+        v2_root / "train" / "data_adapter.py",
+        v2_root / "common" / "types.py",
+    }
+    # D3 年化唯一实现 / F15 展示快照两个既有公式；旧壳删除时复审收缩。
+    nav_division_exemptions = {
+        v2_root / "hosts" / "paper" / "performance.py": frozenset({"calculate_annualized_return"}),
+        v2_root / "hosts" / "paper" / "reporting.py": frozenset({"load_position_snapshot"}),
+    }
     for path in sorted(v2_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         if (v2_root / "core") in path.parents:
             violations += _import_violations(repo_root, path, tree)
-        if path not in {adapter, types_file}:
+        if path not in value_object_boundaries:
             violations += _constructor_violations(repo_root, path, tree)
         if (v2_root / "hosts") in path.parents:
-            violations += _nav_division_violations(repo_root, path, tree)
+            violations += _nav_division_violations(
+                repo_root,
+                path,
+                tree,
+                nav_division_exemptions.get(path, frozenset()),
+            )
     return violations
 
 

@@ -13,7 +13,7 @@ from .core import (
 )
 from .daily import ClientDailyMixin
 from .dividend import ClientDividendMixin
-from .fundamental import INCOME_DEFAULT_FIELDS, ClientFundamentalMixin
+from .fundamental import CASHFLOW_DEFAULT_FIELDS, INCOME_DEFAULT_FIELDS, ClientFundamentalMixin
 
 
 class TushareClient(
@@ -28,6 +28,7 @@ class TushareClient(
 
 
 __all__ = [
+    "CASHFLOW_DEFAULT_FIELDS",
     "FINA_INDICATOR_DEFAULT_FIELDS",
     "INCOME_DEFAULT_FIELDS",
     "TushareClient",

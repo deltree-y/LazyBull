@@ -1,4 +1,4 @@
-"""单袖组合合并器与 core 内部过渡端口（P2b-T1 新交付件）。
+"""单袖组合合并器（P2b 交付，P4-T3 原生链接通后保留本体）。
 
 契约依据：净额化冻结文档（``docs/contracts/netting_freeze.md`` F3）A 区 A1
 直通退化与状态机 S6；协议 F9（``docs/contracts/protocols.md`` §3.4 与
@@ -24,18 +24,13 @@
 本层不重复运行时校验，非精确权重和也不"顺手修正"（上游既有归一化负责其
 输入不变量；直通测试只证明不改写输入，不证明其可作为真实交易合法输入）。
 
-过渡端口 ``LegacyTargetMergePort``（D4）：core 内部过渡端口，签名只接收明确
-列出的只读旧状态字段并返回权重 dict，禁止把引擎可变实例整体交给适配器；
-由 ``hosts/backtest/merger_adapter.py``（T2）实现，引擎接缝与装配见 T2/T3。
-**P4 原生 Account/TargetPortfolio 边界接通后删除本端口**（F12 到期表），
-单袖合并器本体保留。
+P4-T3：旧 ``LegacyTargetMergePort``、dict 适配器、merge_port 与 bypass 已删除；
+回测/纸面宿主直接以公共值对象调用本合并器。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, runtime_checkable
-
-import pandas as pd
+from typing import Mapping, Sequence
 
 from src.lazybull.v2.common.types import Account, Order, TargetPortfolio
 
@@ -48,7 +43,12 @@ class SingleSleevePortfolioMerger:
 
     ``PortfolioMerger`` 协议（``v2/common/protocols/core.py``）的结构兼容实现：
     不继承协议类，协议签名漂移由测试比对暴露（tests/test_v2_p2b_t1_merger.py）。
+    计数只记录通过结构校验并真实执行的 merge/S6 调用，供两宿主验收。
     """
+
+    def __init__(self) -> None:
+        self.merge_call_count = 0
+        self.net_call_count = 0
 
     def merge(
         self,
@@ -77,6 +77,7 @@ class SingleSleevePortfolioMerger:
                 f"单袖直通合并器拒绝键袖不一致输入（阶段={_STAGE}）：映射键 "
                 f"{sleeve_id!r} != target.sleeve_id {target.sleeve_id!r}"
             )
+        self.merge_call_count += 1
         return target
 
     def net_across_sleeves(
@@ -95,44 +96,5 @@ class SingleSleevePortfolioMerger:
                 f"收到 source_sleeve 集合={sorted(sleeves)}；跨袖净额化 S1~S5/S7 "
                 "（反向抵消/同向分摊/自拆）归 P6.5"
             )
+        self.net_call_count += 1
         return orders
-
-
-@runtime_checkable
-class LegacyTargetMergePort(Protocol):
-    """core 内部过渡端口（P2b D4；P4 原生边界接通后删除，见模块 docstring）。
-
-    引擎侧唯一接缝：``core/execution/signal_execution.py`` 当批归一化之后、
-    批次限权之前（T2 落位）；hosts 只读适配器实现本端口并调用真正的
-    ``SingleSleevePortfolioMerger.merge()``。core 不得 import hosts（F11 §4.10）。
-    """
-
-    def merge_legacy_batch_targets(
-        self,
-        *,
-        weights: Dict[str, float],
-        date: pd.Timestamp,
-        cash: float,
-        total_value: Optional[float],
-        positions: Mapping[str, Mapping[str, Any]],
-        initial_capital: float,
-    ) -> Dict[str, float]:
-        """当批归一化目标权重经合并器后返回权重 dict。
-
-        参数全为明确列出的旧引擎只读状态字段（禁止传引擎可变实例整体）：
-
-        - ``weights``：当批归一化后的候选权重（当批相对语义，非整袖/全账户
-          资产配置，F12 §4.10）；
-        - ``date``：信号日（旧引擎 pd.Timestamp 口径，边界转换归适配器）；
-        - ``cash``：既有 ``current_capital``；
-        - ``total_value``：既有 ``_last_rebalance_nav``（信号生成已计算的同日
-          组合总值快照，非相对 NAV）；缺失（None）时实现侧必须 fail-fast
-          停止该次启用运行（D5）；
-        - ``positions``：旧持仓 dict（只读；聚合视图关键键缺失时实现侧
-          fail-fast，禁止跳过或伪造）；
-        - ``initial_capital``：初始资金（NAV 唯一派生入口归账本层
-          ``core/accounting/nav.py::calculate_nav``，适配器只消费返回值）。
-
-        返回：合并后的权重 dict（P2b 直通语义 = 内容、顺序与数值对象不变）。
-        """
-        ...

@@ -12,15 +12,18 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.lazybull.data.storage import Storage  # 只读过渡依赖（§3.5；去除节点 P4（F14））
 from src.lazybull.v2.common.rules.stagger import compute_tranche_schedule
-from src.lazybull.v2.common.suspend_calendar import SuspendCalendar, get_suspend_calendar
+from src.lazybull.v2.common.suspend_calendar import (
+    SuspendCalendar,
+    SuspendDataReader,
+    get_suspend_calendar,
+)
 
 
 def ensure_suspend_calendar(
     suspend_calendar: Optional[SuspendCalendar],
-    data_storage: Optional[Storage],
-) -> Tuple[SuspendCalendar, Optional[Storage]]:
+    data_storage: SuspendDataReader,
+) -> Tuple[SuspendCalendar, SuspendDataReader]:
     """获取停牌日历实例（延迟创建，共用 common 构建函数）
 
     纯函数形态：原方法把实例缓存在 ``self._suspend_calendar`` 并回写
@@ -28,10 +31,10 @@ def ensure_suspend_calendar(
 
     Args:
         suspend_calendar: 已缓存的停牌日历实例，None 表示尚未创建
-        data_storage: 数据存储实例，None 时由 common 构建函数创建默认实例
+        data_storage: 宿主注入的停牌读取协议对象；缺失时 fail-fast
 
     Returns:
-        (calendar, data_storage)：日历实例与实际使用的存储实例
+        (calendar, data_storage)：日历实例与同一注入读取对象
     """
     if suspend_calendar is None:
         suspend_calendar, data_storage = get_suspend_calendar(data_storage)

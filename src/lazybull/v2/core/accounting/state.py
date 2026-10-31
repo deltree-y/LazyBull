@@ -18,7 +18,7 @@ D6 摘除：旧实现此处的 3 个 exposure mixin 关联初始化不迁——
   ``PendingOrderManager`` 改指 v2 ``core.execution.pending_order``（均 T1/T4 已迁）；
 - ``Signal`` 改指 v2 ``core.signal.base``（T4 同批交付）；
 - ``Universe`` 只读引用旧 ``universe.base``（永久沿用，§3.5）；
-- ``DataLoader`` 只读过渡依赖旧 ``data.loader``（去除节点 P4（F14），D2）；
+- 行业表读取由宿主以 ``industry_reader`` 函数注入（P4-T3 E4；core 不再创建 DataLoader）；
 - ``load_industry_mapping`` 改指 v2 ``core/decision/industry_constraint``
   （T3 已归位；原 T4 期的旧 ``portfolio`` 只读过渡依赖随之去除）。
 """
@@ -28,10 +28,10 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.data.loader import DataLoader  # 只读过渡依赖（§3.5；去除节点 P4（F14））
 from src.lazybull.universe.base import Universe  # 永久沿用（§3.5）
 from src.lazybull.v2.common.cost import CostModel
 from src.lazybull.v2.common.rules.stop_loss import StopLossConfig, StopLossMonitor
+from src.lazybull.v2.core.accounting.ledger import Ledger
 from src.lazybull.v2.core.execution.pending_order import PendingOrderManager
 from src.lazybull.v2.core.signal.base import Signal
 
@@ -55,7 +55,8 @@ def init_engine_state(
     sell_timing: str = "open",
     enable_position_completion: bool = True,
     completion_window_days: int = 3,
-    data_storage=None,  # 数据存储实例（用于读取 raw/suspend 数据）
+    data_storage=None,  # 宿主注入的停牌读取协议对象
+    industry_reader: Optional[Callable[[], Optional[pd.DataFrame]]] = None,
     max_weight_per_stock: Optional[float] = None,  # 单股最大权重
     max_per_industry: Optional[int] = None,  # 单行业最大持仓数量
     stock_basic: Optional[pd.DataFrame] = None,  # 股票基本信息（用于行业约束）
@@ -66,6 +67,7 @@ def init_engine_state(
     enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
     min_buy_value_ratio: float = 0.0,  # 买入后最小持仓市值占平均仓位市值比例（0=关闭）
     pending_order_event_sink: Optional[Callable[[Dict], None]] = None,  # 延迟订单事件回调
+    enable_trailing_early_rebalance: bool = True,  # 拖尾提前调仓开关（live 复刻置 False）
 ) -> None:
     """初始化回测引擎状态（旧 ``BacktestEngine.__init__`` 的状态初始化部分）。
 
@@ -92,7 +94,8 @@ def init_engine_state(
         sell_timing: 卖出时机，'open' 表示开盘价卖出（默认），'close' 表示收盘价卖出
         enable_position_completion: 是否启用仓位补齐功能，默认True
         completion_window_days: 补齐窗口期（交易日），默认3天
-        data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
+        data_storage: 宿主注入的停牌读取协议对象（提供 load_raw_by_date）
+        industry_reader: 宿主注入的申万行业表读取函数；启用行业约束时必填
         max_weight_per_stock: 单个股票最大权重（0-1），None 表示不启用限权，启用后会在信号生成时对权重进行限制并归一化
         max_per_industry: 单个行业最大持仓数量，None 或 0 表示不启用行业约束
         stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
@@ -108,10 +111,14 @@ def init_engine_state(
             ``self._record_pending_order_event``，由组装体接线）
     """
     _init_basics(engine, universe, signal, initial_capital, cost_model, data_storage)
-    _init_constraints(engine, max_weight_per_stock, max_per_industry, stock_basic, verbose)
+    _init_constraints(
+        engine, max_weight_per_stock, max_per_industry, stock_basic, verbose, industry_reader
+    )
     _init_rebalance_timing(engine, rebalance_freq, sell_timing, verbose)
     _init_stagger(engine, stagger_tranches, rebalance_freq, signal, max_weight_per_stock)
-    _init_early_rebalance_state(engine, enable_early_rebalance_on_empty)
+    _init_early_rebalance_state(
+        engine, enable_early_rebalance_on_empty, enable_trailing_early_rebalance
+    )
     _init_risk_budget(engine, enable_risk_budget, vol_window, vol_epsilon)
     _init_pending_order(
         engine, enable_pending_order, max_retry_count, max_retry_days, pending_order_event_sink
@@ -158,6 +165,7 @@ def _init_constraints(
     max_per_industry: Optional[int],
     stock_basic: Optional[pd.DataFrame],
     verbose: bool,
+    industry_reader: Optional[Callable[[], Optional[pd.DataFrame]]],
 ) -> None:
     """组合构建约束参数与校验（含行业映射构建）。"""
     # 组合构建约束参数
@@ -182,8 +190,9 @@ def _init_constraints(
         # v2 core/decision/industry_constraint（T3 已归位改指）
         from src.lazybull.v2.core.decision.industry_constraint import load_industry_mapping
 
-        loader = DataLoader(engine.data_storage)  # 使用数据存储实例创建加载器
-        shenwan_industry = loader.load_shenwan_industry()
+        if industry_reader is None:
+            raise ValueError("启用行业约束时必须由宿主注入 industry_reader")
+        shenwan_industry = industry_reader()
         engine.industry_mapping = load_industry_mapping(shenwan_industry, verbose=verbose)
 
 
@@ -244,9 +253,15 @@ def _init_stagger(
     engine.stagger_tranches = stagger_tranches
 
 
-def _init_early_rebalance_state(engine: Any, enable_early_rebalance_on_empty: bool) -> None:
+def _init_early_rebalance_state(
+    engine: Any, enable_early_rebalance_on_empty: bool, enable_trailing_early_rebalance: bool = True
+) -> None:
     """空仓提前调仓开关与最近一次调仓状态。"""
     engine.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty
+    # P4-T1（评审处置 P2-5）：拖尾（盈利延续）提前调仓开关——默认 True（引擎
+    # 现行行为，回测/回放不变）；live/纸面形态复刻旧链「仅空仓提前调仓」语义
+    # （runtime._resolve_early_rebalance_context：盈亏动态持仓已移除）时置 False
+    engine.enable_trailing_early_rebalance = enable_trailing_early_rebalance
     engine._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
     engine._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
     engine._last_rebalance_nav: Optional[float] = (
@@ -325,6 +340,16 @@ def _init_backtest_state(engine: Any, initial_capital: float) -> None:
         {}
     )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（T0 触发、T1 执行）
     engine._cycle_anchor_idx: int = 0  # 当前调仓周期起点 idx（用于 cycle_day 日志显示）
+    # P4-T1 增列（行为中性）：_signal_dates = 调仓排期表（原 run() 局部可变变量
+    # 提升为引擎态，D1 run_step 提取前提）；_run_total_days = 驱动窗口日数
+    # （进度日志分母）；_trade_date_index = 日历 idx 映射默认值（run()/宿主
+    # 接线时重建）；ledger = 物理账本唯一入账入口（D2）；live_anchor_state
+    # = live 持久化锚定状态（回放形态恒 None）
+    engine._signal_dates: Dict[pd.Timestamp, int] = {}  # 调仓排期表 {日期: tranche_idx}
+    engine._run_total_days: int = 0  # 驱动窗口日数（run()/宿主接线时写入）
+    engine._trade_date_index: Dict[pd.Timestamp, int] = {}  # 日历 idx 映射（接线时重建）
+    engine.live_anchor_state = None  # live 持久化锚定状态（回放形态恒 None）
+    engine.ledger = Ledger()  # 物理账本唯一入账入口（D2）
     engine.portfolio_values: List[Dict] = []  # 组合价值历史
     engine.trades: List[Dict] = []  # 交易记录
     engine.execution_attribution_records: List[Dict] = []  # 信号槽位到实际成交的旁路记录

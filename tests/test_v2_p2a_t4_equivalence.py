@@ -7,8 +7,8 @@ T0 实施规划 v4 §4-T4 验收口径（仿 T1 ``test_v2_p2a_t1_equivalence.py`
 - 估值回退 3 处逐点等价（D4：旧 engine.py:743 / :777 / holdings_snapshot.py:62-66）；
 - 整模块复制件（pending_order / signal.base / holdings_snapshot）行为序列比对。
 
-不依赖真实配置与真实数据：所有输入为合成 fixture；行业约束分支的
-``DataLoader`` / ``get_shenwan_level`` 经 monkeypatch 打为合成 stub。
+不依赖真实配置与真实数据：所有输入为合成 fixture；行业约束分支的旧
+``DataLoader`` / 新宿主 reader / ``get_shenwan_level`` 均使用合成 stub。
 """
 
 import copy
@@ -61,6 +61,19 @@ _EXPOSURE_ATTRS = [
     "pending_exposure_replenishes",
     "exposure_replenish_enabled",
     "exposure_replenish_stats",
+]
+
+# P4-T1 新增引擎属性（D1/D2 状态外置与入账分离；规划 §4.2 / §17 登记：
+# _signal_dates = 排期表提升为引擎态；_run_total_days = 驱动窗口日数；
+# _trade_date_index = 日历映射默认值；ledger = 唯一入账入口；
+# live_anchor_state = live 持久化锚定（回放形态恒 None））
+_P4_T1_ADDED_ATTRS = [
+    "_signal_dates",
+    "_run_total_days",
+    "_trade_date_index",
+    "ledger",
+    "live_anchor_state",
+    "enable_trailing_early_rebalance",  # 评审处置 P2-5：拖尾提前调仓开关（默认 True 行为不变）
 ]
 
 
@@ -785,9 +798,12 @@ def _assert_engine_state_equal(old_engine, new_engine) -> None:
         assert attr not in new_attrs, f"exposure 字段 {attr} 应已摘除"
         assert attr in old_attrs, f"旧引擎应含 exposure 字段 {attr}（前置假设失效）"
     assert old_attrs - new_attrs == set(_EXPOSURE_ATTRS)
-    assert new_attrs - old_attrs == set()
+    # P4-T1 增列：新引擎恰多出 D1/D2 登记属性（行为中性默认值），其余逐值一致
+    assert new_attrs - old_attrs == set(_P4_T1_ADDED_ATTRS)
     # 逐值比对共享属性
     for name in sorted(new_attrs):
+        if name in _P4_T1_ADDED_ATTRS:
+            continue  # P4-T1 新增属性：旧引擎无对应物，跳过逐值比对
         old_val = getattr(old_engine, name)
         new_val = getattr(new_engine, name)
         if name in _SPECIAL_ATTRS:
@@ -875,7 +891,7 @@ def test_init_engine_state_validation_errors_equivalence(synthetic_cost_settings
 
 
 def test_init_engine_state_industry_constraint_branch(monkeypatch, synthetic_cost_settings):
-    """行业约束分支：DataLoader 打为合成 stub，行业映射构建结果一致。"""
+    """行业约束分支：旧侧 DataLoader 与新侧宿主 reader 使用同一合成表。"""
     shenwan = pd.DataFrame(
         {
             "ts_code": ["A", "B", "C"],
@@ -895,12 +911,11 @@ def test_init_engine_state_industry_constraint_branch(monkeypatch, synthetic_cos
     import src.lazybull.portfolio.industry_constraint as old_ic
 
     monkeypatch.setattr(old_engine_mod, "DataLoader", _FakeLoader)
-    monkeypatch.setattr(new_state, "DataLoader", _FakeLoader)
     monkeypatch.setattr(old_ic, "get_shenwan_level", lambda: "l1")
 
     common = dict(max_per_industry=2, stock_basic=_stock_basic_df())
     old_engine = _make_old_engine(**common)
-    new_engine = _make_new_engine(**common)
+    new_engine = _make_new_engine(**common, industry_reader=_FakeLoader(None).load_shenwan_industry)
     _assert_engine_state_equal(old_engine, new_engine)
     assert old_engine.industry_mapping == new_engine.industry_mapping != {}
 
