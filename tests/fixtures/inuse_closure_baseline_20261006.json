@@ -4,15 +4,15 @@
     "D:/my_pro/LazyBull/scripts/compare_walk_forward.py",
     "D:/my_pro/LazyBull/scripts/paper_trade.py"
   ],
-  "static_closure_count": 266,
+  "static_closure_count": 269,
   "dynamic_extra": [
     "src.lazybull.factors.risk.announcement_factors",
     "src.lazybull.factors.risk.derived_factors",
     "src.lazybull.factors.risk.downside_factors",
     "src.lazybull.factors.risk.liquidity_factors"
   ],
-  "inuse_count": 270,
-  "all_modules_count": 372,
+  "inuse_count": 273,
+  "all_modules_count": 375,
   "notin_count": 102,
   "conservation_ok": true,
   "missing_files": [],
@@ -31,7 +31,7 @@
     "signals": 4,
     "trading": 4,
     "universe": 2,
-    "v2": 69
+    "v2": 73
   },
   "inuse_modules": [
     "src.lazybull",
@@ -266,6 +266,7 @@
     "src.lazybull.v2.core.decision.weight_processor",
     "src.lazybull.v2.core.decision.weighting",
     "src.lazybull.v2.core.execution.buy_execution",
+    "src.lazybull.v2.core.execution.completion",
     "src.lazybull.v2.core.execution.engine",
     "src.lazybull.v2.core.execution.engine_utils",
     "src.lazybull.v2.core.execution.live_schedule",
@@ -284,12 +285,15 @@
     "src.lazybull.v2.hosts.native_engine",
     "src.lazybull.v2.hosts.paper.adjustment_rules",
     "src.lazybull.v2.hosts.paper.config_adapter",
+    "src.lazybull.v2.hosts.paper.coverage_gate",
+    "src.lazybull.v2.hosts.paper.coverage_history",
     "src.lazybull.v2.hosts.paper.daily_assembly",
     "src.lazybull.v2.hosts.paper.entrypoints",
     "src.lazybull.v2.hosts.paper.factory",
     "src.lazybull.v2.hosts.paper.host",
     "src.lazybull.v2.hosts.paper.instruction_projection",
     "src.lazybull.v2.hosts.paper.performance",
+    "src.lazybull.v2.hosts.paper.readiness_evidence",
     "src.lazybull.v2.hosts.paper.recovery",
     "src.lazybull.v2.hosts.paper.reporting",
     "src.lazybull.v2.hosts.paper.schedule",
@@ -302,8 +306,7 @@
     "src.lazybull.v2.store.manifest_wal",
     "src.lazybull.v2.store.row_domain",
     "src.lazybull.v2.store.store_identity",
-    "src.lazybull.v2.store.write_lock",
-    "src.lazybull.v2.core.execution.completion"
+    "src.lazybull.v2.store.write_lock"
   ],
   "notin_modules": [
     "src.lazybull.backtest.eval_panel",

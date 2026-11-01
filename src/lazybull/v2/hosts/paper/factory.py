@@ -47,6 +47,7 @@ from src.lazybull.data import DataLoader, Storage
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.v2.common.cost import CostModel
 from src.lazybull.v2.common.model_registry import ModelRegistry
+from src.lazybull.v2.common.model_schema import read_drift_exempt
 from src.lazybull.v2.common.protocols.core import PortfolioMerger
 from src.lazybull.v2.common.trading_config import TradingConfig
 from src.lazybull.v2.core.signal.ensemble_signal import EnsembleSignal
@@ -63,6 +64,7 @@ from src.lazybull.v2.hosts.paper.config_adapter import (
 )
 from src.lazybull.v2.hosts.paper.daily_assembly import (
     DERIVED_FAMILY_SWITCHES,
+    CoverageMember,
     DerivedProducer,
 )
 from src.lazybull.v2.hosts.paper.host import PaperHost
@@ -176,6 +178,39 @@ def _derive_signal_metadata(signal: Any) -> Tuple[List[str], Dict[str, Any]]:
     """
     columns, params, _ = _derive_signal_metadata_details(signal)
     return columns, params
+
+
+def _derive_coverage_members(signal: Any) -> List[CoverageMember]:
+    """信号 → 门 4 逐成员 coverage 判定面（B 方案，reviewer1 复审 N2 落点）。
+
+    成员标识 = 各子模型 metadata ``version_str``；列集/参数不被跨臂混合
+    （逐成员按**各自实际列集与 train_params** 判定，EnsembleSignal 递归 A/B；
+    freshness_members 2 元组既有消费方零改动——本通道为独立第三通道）。
+    注入桩信号无模型元数据通道 ⇒ PaperHostError（与 details 同口径）。
+    """
+    if isinstance(signal, EnsembleSignal):
+        return [
+            *_derive_coverage_members(signal.signal_a),
+            *_derive_coverage_members(signal.signal_b),
+        ]
+    if isinstance(signal, MLSignal):
+        signal._load_model()
+        metadata = signal.metadata or {}
+        member_id = str(metadata.get("version_str") or "unknown")
+        train_params = dict(metadata.get("train_params") or {})
+        columns = list(signal.feature_columns or [])
+        return [
+            CoverageMember(
+                member_id=member_id,
+                columns=columns,
+                train_params=train_params,
+                drift_exempt=read_drift_exempt(train_params),
+            )
+        ]
+    raise PaperHostError(
+        f"注入信号类型 {type(signal).__name__} 无模型元数据通道；"
+        "测试/影子注入桩信号时须显式传 feature_columns=/train_params="
+    )
 
 
 def _extract_open_dates(frame: Optional[pd.DataFrame]) -> List[str]:
@@ -497,11 +532,15 @@ def create_paper_host(
     if signal is None:
         signal = create_signal(trading_config, models_dir=models_dir, verbose=verbose)
     freshness_members = None
+    coverage_members = None
     if feature_columns is None:
         derived_columns, derived_params, freshness_members = _derive_signal_metadata_details(signal)
         feature_columns = derived_columns
         if train_params is None:
             train_params = derived_params
+        # B 方案：门 4 逐成员判定面与 freshness 同源派生（信号装配路径；
+        # 显式注入 feature_columns 的测试/影子臂 ⇒ None ⇒ 就绪门缺省单成员）
+        coverage_members = _derive_coverage_members(signal)
     data_storage, loader = _resolve_data_faces(data_root, data_storage, loader, verbose)
     if stock_basic is None:
         stock_basic = _load_stock_basic(loader)
@@ -527,6 +566,7 @@ def create_paper_host(
         freshness_members=freshness_members,
         derived_families_provided=derived_families_provided,
         derived_producers=derived_producers,
+        coverage_members=coverage_members,
         engine_mode=engine_mode,
         verbose=verbose,
         data_loader=loader,

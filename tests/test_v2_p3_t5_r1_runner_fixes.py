@@ -608,6 +608,10 @@ def _frame_rows(day: str, day_idx: int) -> Dict[str, list]:
         payload[col] = [_cell_value(day_idx, code_idx, col_idx) for code_idx in range(len(_CODES))]
     for col in _FILTER_COLS:
         payload[col] = [0] * len(_CODES)
+    # B 方案：选股过滤列（v2 prepare μ 采集前提——缺席即显式报错）
+    payload["amount_ma20"] = [1.0e4] * len(_CODES)
+    payload["total_mv"] = [1.0e8] * len(_CODES)
+    payload["sw_l1_code"] = ["801780"] * len(_CODES)
     for label_idx, col in enumerate(_LABEL_COLS):
         payload[col] = [
             round(0.02 * (label_idx + 1) + day_idx * 0.001 + code_idx * 0.0001, 6)
@@ -645,6 +649,11 @@ def _build_panel_root(root: Path):
         {
             **{col: {"group": "core", "source": "test"} for col in _BASE_COLUMNS},
             **{col: {"group": "core", "source": "test"} for col in _FILTER_COLS},
+            # B 方案：选股过滤列登记（μ 采集前提）
+            **{
+                col: {"group": "core", "source": "test"}
+                for col in ("amount_ma20", "total_mv", "sw_l1_code")
+            },
         }
     )
     store.manifest.save()
@@ -652,7 +661,12 @@ def _build_panel_root(root: Path):
         rows = _frame_rows(day, day_idx)
         for group in PANEL_GROUPS:
             if group == "core":
-                core_cols = ("trade_date", "ts_code") + tuple(_BASE_COLUMNS) + tuple(_FILTER_COLS)
+                core_cols = (
+                    ("trade_date", "ts_code")
+                    + tuple(_BASE_COLUMNS)
+                    + tuple(_FILTER_COLS)
+                    + ("amount_ma20", "total_mv", "sw_l1_code")
+                )
                 payload = {col: rows[col] for col in core_cols}
             else:
                 # readiness 要求八族当日齐备（非 core 族仅键列）

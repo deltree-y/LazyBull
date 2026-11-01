@@ -37,6 +37,10 @@ from scripts.v2_p4.t05b_spike_runner import (
 )
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.v2.common.cost import CostModel
+from src.lazybull.v2.common.model_schema import (
+    FEATURE_MISSING_RATE_SCHEMA_VERSION,
+    SELECTION_FILTER_COLUMNS,
+)
 from src.lazybull.v2.common.types import (
     Fill,
     Money,
@@ -70,6 +74,36 @@ _TRADED = _CODES[:4]
 _CALENDAR_STRS = pd.bdate_range("2026-07-06", periods=30).strftime("%Y%m%d").tolist()
 _CALENDAR = [pd.Timestamp(day) for day in _CALENDAR_STRS]
 _MODEL_COLUMNS = ["ret_1", "ret_5", "ret_20", "bp", "turnover_rate"]
+
+
+def _coverage_train_params(columns):
+    """B 方案夹具：为「列集 ∪ 选股过滤列」构造合法 coverage（μ=0 ⇒ 阈值 0.10）。
+
+    合成 panel 帧全稠密 ⇒ 就绪门门 4 通过；crash_recovery / replay 等直构造
+    PaperHost 的套件经本助手注入（train_params={} 会触发 metadata_missing
+    fail-closed——设计内行为，负例见 daily_assembly 套件）。
+    """
+
+    def _dense_stats() -> dict:
+        return {
+            "mean": 0.0,
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0,
+            "n_days": 250,
+            "p99_unstable": True,
+        }
+
+    return {
+        "feature_missing_rate_schema_version": FEATURE_MISSING_RATE_SCHEMA_VERSION,
+        "feature_missing_rate": {
+            col: _dense_stats() for col in [*columns, *SELECTION_FILTER_COLUMNS]
+        },
+        "feature_missing_rate_stat": {"row_domain": "train_filtered_main_board"},
+    }
+
 
 #: 纸面扁平配置（合成；top_n=2 / freq=5 / K=1 / 等权 / close 买 open 卖）
 _FLAT_CONFIG = {
@@ -193,7 +227,7 @@ def _make_host(
         trading_calendar=list(_CALENDAR),
         engine_kwargs=engine_kwargs,
         feature_columns=list(_MODEL_COLUMNS),
-        train_params={},
+        train_params=_coverage_train_params(_MODEL_COLUMNS),
         engine_mode="v2",
         verbose=False,
     )
@@ -761,7 +795,7 @@ class TestCreatePaperHost:
             data_storage=storage,
             panel_store=_make_panel_store(tmp_path / "store"),
             feature_columns=list(_MODEL_COLUMNS),
-            train_params={},
+            train_params=_coverage_train_params(_MODEL_COLUMNS),
         )
 
     def test_factory_assembles_and_drives(self, tmp_path):

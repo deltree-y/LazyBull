@@ -26,14 +26,21 @@ import pytest
 
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.v2.common.freshness import FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+from src.lazybull.v2.common.model_schema import (
+    FEATURE_MISSING_RATE_ERR_METADATA_INVALID,
+    FEATURE_MISSING_RATE_ERR_METADATA_MISSING,
+    FEATURE_MISSING_RATE_ERR_SCHEMA_UNSUPPORTED,
+    FEATURE_MISSING_RATE_SCHEMA_VERSION,
+)
 from src.lazybull.v2.common.types import FeatureQuery, PanelFrame, TradeDate
 from src.lazybull.v2.core.signal.ml_signal import MLSignal
 from src.lazybull.v2.hosts.paper.daily_assembly import (
-    COLUMN_MISSING_RATE_MAX,
+    COVERAGE_ERR_ALL_NAN,
+    COVERAGE_ERR_KEY_MISSING,
+    COVERAGE_ERR_RATE_EXCEEDED,
+    COVERAGE_ERR_UNCOVERED,
     PRICE_DESIRED_COLUMNS,
     SELECTION_FILTER_COLUMNS,
-    SPARSE_TOLERATED_COLUMNS,
-    _check_missing_rates,
     assemble_daily_data,
     compare_cs_infer_vs_panel,
 )
@@ -176,8 +183,42 @@ def _make_store_with_extra_columns(tmp_path, extra_columns: dict) -> PanelDataSt
     return store
 
 
+def _distribution(p95: float, p99: float | None = None, *, max_value: float | None = None) -> dict:
+    """B′ 夹具：单列分布摘要（p50/p90 取 p95，max 缺省 = p99/p95）。"""
+    p99 = p95 if p99 is None else p99
+    max_value = p99 if max_value is None else max_value
+    return {
+        "mean": p95,
+        "p50": p95,
+        "p90": p95,
+        "p95": p95,
+        "p99": p99,
+        "max": max_value,
+        "n_days": 1000,
+        "p99_unstable": False,
+    }
+
+
+def _coverage_params(columns, mu: float = 0.0) -> dict:
+    """B′ 夹具：为给定列集构造合法分布（单阈值形态 p95=p99=mu）。"""
+    return {
+        "feature_missing_rate_schema_version": FEATURE_MISSING_RATE_SCHEMA_VERSION,
+        "feature_missing_rate": {col: _distribution(mu) for col in columns},
+        "feature_missing_rate_stat": {"row_domain": "train_filtered_main_board"},
+    }
+
+
+#: 判定域（合成帧 ts_code 形态 000000.SZ~000199.SZ 的超集；行集不受影响）
+_DOMAIN = frozenset(f"{i:06d}.SZ" for i in range(200))
+
+
 def _assemble(store, loader, **overrides):
-    """默认全就绪形态的组装调用（覆写参数走关键字）。"""
+    """默认全就绪形态的组装调用（覆写参数走关键字）。
+
+    B′ 夹具：train_params 未显式携带 ``feature_missing_rate`` 时自动为
+    「feature_columns ∪ 选股过滤列」注入分布（p95=p99=0 ⇒ 合成稠密帧全 pass）；
+    显式携带的用例（负例/边界）不被覆盖；判定域缺省注入合成超集。
+    """
     params = {
         "date": _TARGET,
         "store": store,
@@ -185,8 +226,14 @@ def _assemble(store, loader, **overrides):
         "trading_dates": list(_CALENDAR),
         "feature_columns": list(_MODEL_COLUMNS),
         "train_params": {},
+        "coverage_domain_codes": _DOMAIN,
     }
     params.update(overrides)
+    train_params = dict(params.get("train_params") or {})
+    if "feature_missing_rate" not in train_params:
+        columns = list(params["feature_columns"])
+        train_params.update(_coverage_params([*columns, *SELECTION_FILTER_COLUMNS]))
+        params["train_params"] = train_params
     return assemble_daily_data(**params)
 
 
@@ -407,40 +454,43 @@ class TestColumnSources:
 
 
 class TestMissingRate:
-    def test_column_missing_rate_over_threshold_fails(self, tmp_path):
-        # 当日 bp 列 4/5 行 NaN = 0.8 > 0.6
-        store = _make_store(tmp_path, nan_spec=("bp", 4))
+    def test_single_column_over_p99_is_error_only_no_block(self, tmp_path):
+        # B′（决策 A1）：单列超 p99 只记 error 告警，不阻断（ok 仍 True）
+        store = _make_store(tmp_path, nan_spec=("bp", 4))  # 0.8 > μ=0 的 p99
         assembly = _assemble(store, _make_loader(tmp_path))
         report = assembly.readiness
-        assert report.ok is False
+        assert report.ok is True
+        assert report.coverage_blocked is False
+        verdict = next(v for v in report.coverage_verdicts if v["column"] == "bp")
+        assert verdict["severity"] == "error"
+        assert verdict["error_code"] == COVERAGE_ERR_RATE_EXCEEDED
+        assert any(a["column"] == "bp" for a in report.coverage_alerts)
         assert report.column_missing_rates["bp"] == pytest.approx(0.8)
-        assert any("缺失率超阈" in gap and "bp" in gap for gap in report.gaps)
-        # 其余列缺失率仍记录且未超阈
-        assert report.column_missing_rates["ret_1"] == pytest.approx(0.0)
 
-    def test_column_missing_rate_at_threshold_passes(self, tmp_path):
-        # 当日 bp 列 3/5 行 NaN = 0.6 ≤ 阈值 0.6，恰通过
-        store = _make_store(tmp_path, nan_spec=("bp", 3))
-        assembly = _assemble(store, _make_loader(tmp_path))
-        assert assembly.readiness.column_missing_rates["bp"] == pytest.approx(
-            COLUMN_MISSING_RATE_MAX
-        )
-        assert assembly.readiness.ok is True
-
-    def test_expected_column_absent_from_assembled_frame_fails(self, tmp_path):
-        # 桩 store：bp 已登记但返回帧缺该列（真实 reindex 语义不可达的分支）
+    def test_expected_column_absent_is_error_only_not_block(self, tmp_path):
+        # 决策 A1：列不在组装结果 ⇒ error 日志（uncovered 留证），不阻断
         registered = set(_MODEL_COLUMNS) | set(SELECTION_FILTER_COLUMNS)
         stub = _StubStore(_flat_all_days(drop_columns=["bp"]), registered)
         assembly = _assemble(stub, _make_loader(tmp_path))
         report = assembly.readiness
-        assert report.ok is False
+        assert report.ok is True
         assert "bp" in report.uncovered_columns
-        assert any("未出现在当日组装结果" in gap for gap in report.gaps)
-        # 在场列缺失率仍正常记录
-        assert report.column_missing_rates["ret_1"] == pytest.approx(0.0)
+        assert any(a["code"] == COVERAGE_ERR_UNCOVERED for a in report.coverage_alerts)
 
+
+# 门 4（B 方案）：逐列「当日缺失率 ≤ 训练期缺失率 μ + 10pp」判据矩阵
+# （M-P4-1 裁决 C 的 SPARSE_TOLERATED_COLUMNS 白名单已退场；目标案例
+#  cons_target_upside 66.8% ≤ 57.7%+10pp 自然通过）
+# ---------------------------------------------------------------------------
+
+
+# 门 5：派生族开关与模型 metadata 一致
+# ---------------------------------------------------------------------------
+
+
+class TestFilterColumnHardGate:
     def test_unregistered_filter_column_fails(self, tmp_path):
-        # 桩 store：sw_l1_code 未登记 manifest ⇒ 过滤列未覆盖（防静默跳过陷阱）
+        # reviewer1 P2-6 恢复：过滤列未登记 manifest ⇒ 仍硬拒（防静默跳过过滤）
         registered = set(_MODEL_COLUMNS) | {"amount_ma20", "total_mv"}
         stub = _StubStore(_flat_all_days(), registered)
         assembly = _assemble(stub, _make_loader(tmp_path))
@@ -450,63 +500,23 @@ class TestMissingRate:
         assert any("选股过滤列未登记" in gap for gap in report.gaps)
 
 
-# ---------------------------------------------------------------------------
-# 门 4 例外：已知稀疏列白名单（M-P4-1 裁决 C，2026-10-29）
-# ---------------------------------------------------------------------------
-
-
-class TestSparseToleratedColumn:
-    """``cons_target_upside`` 超阈放行，但全空 / 缺席仍失败（对齐旧链两级语义）。"""
-
-    def test_whitelist_is_exact_registry(self):
-        # 白名单为契约登记物：扩列必须同步规划 §23.8 与契约，禁止静默增长
-        assert SPARSE_TOLERATED_COLUMNS == frozenset({"cons_target_upside"})
-
-    def test_tolerated_column_over_threshold_passes_rate_still_recorded(self):
-        frame = pd.DataFrame({"cons_target_upside": [np.nan] * 4 + [0.1]})
-        rates, missing, gaps = _check_missing_rates(frame, ["cons_target_upside"], 0.6)
-        assert gaps == []
-        assert missing == []
-        # 缺失率仍写入报告（证据留证口径不变）
-        assert rates["cons_target_upside"] == pytest.approx(0.8)
-
-    def test_non_tolerated_column_over_threshold_still_fails(self):
-        frame = pd.DataFrame({"bp": [np.nan] * 4 + [0.01]})
-        rates, _, gaps = _check_missing_rates(frame, ["bp"], 0.6)
-        assert any("缺失率超阈" in gap and "bp" in gap for gap in gaps)
-        assert rates["bp"] == pytest.approx(0.8)
-
-    def test_tolerated_column_all_nan_still_fails(self):
-        # 全空 = 真数据断链（旧链 ml_signal 亦硬拒），白名单不放行 100%
-        frame = pd.DataFrame({"cons_target_upside": [np.nan] * 5})
-        rates, _, gaps = _check_missing_rates(frame, ["cons_target_upside"], 0.6)
-        assert any("cons_target_upside" in gap and "缺失率超阈" in gap for gap in gaps)
-        assert rates["cons_target_upside"] == pytest.approx(1.0)
-
-    def test_tolerated_column_absent_still_fails(self):
-        frame = pd.DataFrame({"bp": [0.01] * 5})
-        _, missing, gaps = _check_missing_rates(frame, ["cons_target_upside", "bp"], 0.6)
-        assert missing == ["cons_target_upside"]
-        assert any("未出现在当日组装结果" in gap for gap in gaps)
-
-    def test_assemble_end_to_end_tolerated_column_ok(self, tmp_path):
-        # cons_* 入选 ⇒ 事件 freshness 闭包同时要求 consensus_freshness_days 在场
-        store = _make_store_with_extra_columns(
-            tmp_path, {"cons_target_upside": 0.2, "consensus_freshness_days": 30.0}
-        )
-        assembly = _assemble(
-            store,
-            _make_loader(tmp_path),
-            feature_columns=[*_MODEL_COLUMNS, "cons_target_upside"],
-        )
+class TestDriftExemptEndToEnd:
+    def test_default_member_picks_registration_from_train_params(self, tmp_path):
+        # 决策 a：登记块经 train_params 进入缺省成员 ⇒ bp 超阈只 warning、不计数
+        store = _make_store(tmp_path, nan_spec=("bp", 4))  # 0.8
+        params = _coverage_params([*_MODEL_COLUMNS, *SELECTION_FILTER_COLUMNS], mu=0.0)
+        params["feature_missing_rate_drift_exempt"] = {
+            "columns": ["bp"],
+            "registered_at": "2026-11-01",
+            "review_condition": "观察期 10 交易日复核",
+        }
+        assembly = _assemble(store, _make_loader(tmp_path), train_params=params)
         report = assembly.readiness
+        verdict = next(v for v in report.coverage_verdicts if v["column"] == "bp")
+        assert verdict["severity"] == "warning"
+        assert verdict["drift_exempt"] is True
+        assert report.coverage_blocked is False
         assert report.ok is True
-        assert report.column_missing_rates["cons_target_upside"] == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
-# 门 5：派生族开关与模型 metadata 一致
-# ---------------------------------------------------------------------------
 
 
 class TestDerivedConsistency:
@@ -790,29 +800,42 @@ class TestSellPriceOpen:
 
 
 # ---------------------------------------------------------------------------
-# P2-4 登记：COLUMN_MISSING_RATE_MAX=0.6 门敏感性边界锁定（只锁测试，不改阈值）
+# B′ 边界锁定：p95=p99=0.5 ⇒ 0.59 pass / 0.61 warning（均不阻断）
 # ---------------------------------------------------------------------------
 
 
 class TestMissingRateBoundary:
     def test_missing_rate_59_percent_passes(self, tmp_path):
-        # 当日 bp 缺失率 59/100 = 0.59 ≤ 0.6 ⇒ 该列不触发未就绪
+        # 当日 bp 缺失率 59/100 = 0.59 ≤ p95(0.5)？否 ⇒ warning 但**不阻断**
         day_rows = {day: 100 for day in _CALENDAR}
         store = _make_store(tmp_path, day_rows=day_rows, nan_spec=("bp", 59))
-        assembly = _assemble(store, _make_loader(tmp_path))
+        assembly = _assemble(
+            store,
+            _make_loader(tmp_path),
+            train_params=_coverage_params([*_MODEL_COLUMNS, *SELECTION_FILTER_COLUMNS], mu=0.5),
+        )
         report = assembly.readiness
         assert report.column_missing_rates["bp"] == pytest.approx(0.59)
         assert report.ok is True
+        verdict = next(v for v in report.coverage_verdicts if v["column"] == "bp")
+        assert verdict["severity"] == "error"  # 0.59 > p99(0.5)，仍不阻断
 
-    def test_missing_rate_61_percent_fails(self, tmp_path):
-        # 当日 bp 缺失率 61/100 = 0.61 > 0.6 ⇒ 触发未就绪且缺口含该列
+    def test_missing_rate_61_percent_is_error_not_block(self, tmp_path):
+        # B′（决策 A1）：0.61 > p99 ⇒ error 告警，不阻断（不再是整日未就绪）
         day_rows = {day: 100 for day in _CALENDAR}
         store = _make_store(tmp_path, day_rows=day_rows, nan_spec=("bp", 61))
-        assembly = _assemble(store, _make_loader(tmp_path))
+        assembly = _assemble(
+            store,
+            _make_loader(tmp_path),
+            train_params=_coverage_params([*_MODEL_COLUMNS, *SELECTION_FILTER_COLUMNS], mu=0.5),
+        )
         report = assembly.readiness
         assert report.column_missing_rates["bp"] == pytest.approx(0.61)
-        assert report.ok is False
-        assert any("缺失率超阈" in gap and "bp" in gap for gap in report.gaps)
+        assert report.ok is True
+        assert report.coverage_blocked is False
+        verdict = next(v for v in report.coverage_verdicts if v["column"] == "bp")
+        assert verdict["severity"] == "error"
+        assert verdict["error_code"] == COVERAGE_ERR_RATE_EXCEEDED
 
 
 # ---------------------------------------------------------------------------

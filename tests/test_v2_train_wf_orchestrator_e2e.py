@@ -127,6 +127,10 @@ def _frame_rows(day: str, day_idx: int, *, salt: float = 0.0) -> Dict[str, list]
         ]
     for col in _FILTER_COLS:
         payload[col] = [0] * len(_CODES)
+    # B 方案：选股过滤列（v2 prepare μ 采集前提——缺席即显式报错）
+    payload["amount_ma20"] = [1.0e4] * len(_CODES)
+    payload["total_mv"] = [1.0e8] * len(_CODES)
+    payload["sw_l1_code"] = ["801780"] * len(_CODES)
     for label_idx, col in enumerate(_LABEL_COLS):
         payload[col] = [
             round(0.02 * (label_idx + 1) + day_idx * 0.001 + code_idx * 0.0001, 6)
@@ -170,6 +174,11 @@ def _populate_store(
         {
             **{col: {"group": "core", "source": "test"} for col in _BASE_COLUMNS},
             **{col: {"group": "core", "source": "test"} for col in _FILTER_COLS},
+            # B 方案：选股过滤列登记（μ 采集前提）
+            **{
+                col: {"group": "core", "source": "test"}
+                for col in ("amount_ma20", "total_mv", "sw_l1_code")
+            },
         }
     )
     store.manifest.save()
@@ -182,7 +191,10 @@ def _populate_store(
             for group in PANEL_GROUPS:
                 if group == "core":
                     core_cols = (
-                        ("trade_date", "ts_code") + tuple(_BASE_COLUMNS) + tuple(_FILTER_COLS)
+                        ("trade_date", "ts_code")
+                        + tuple(_BASE_COLUMNS)
+                        + tuple(_FILTER_COLS)
+                        + ("amount_ma20", "total_mv", "sw_l1_code")
                     )
                     payload = {col: rows[col] for col in core_cols}
                 else:
@@ -314,6 +326,10 @@ def _gem_frame_rows(day: str, day_idx: int) -> Dict[str, list]:
         rows[col].append(_cell_value(day_idx, gem_idx, col_idx))
     for col in _FILTER_COLS:
         rows[col].append(0)
+    # B 方案：选股过滤列同步追加（保持行数一致）
+    rows["amount_ma20"].append(1.0e4)
+    rows["total_mv"].append(1.0e8)
+    rows["sw_l1_code"].append("801780")
     for label_idx, col in enumerate(_LABEL_COLS):
         rows[col].append(round(0.02 * (label_idx + 1) + day_idx * 0.001 + gem_idx * 0.0001, 6))
     return rows
@@ -364,6 +380,10 @@ def _kernel_frame_rows(
         ]
     for col in _FILTER_COLS:
         payload[col] = [0] * len(_CODES)
+    # B 方案：选股过滤列（v2 prepare μ 采集前提——缺席即显式报错）
+    payload["amount_ma20"] = [1.0e4] * len(_CODES)
+    payload["total_mv"] = [1.0e8] * len(_CODES)
+    payload["sw_l1_code"] = ["801780"] * len(_CODES)
     for label_idx, col in enumerate(_LABEL_COLS):
         payload[col] = [
             _kernel_label_value(day_idx, code_idx, label_idx, sign=label_sign)
@@ -1803,9 +1823,7 @@ class TestRunsBatchHostAdapter:
         runs_summary = pd.read_parquet(batch_dir / "summary.parquet")
         assert runs_summary["wf_run_id"].iloc[0] == wf_run_id
         assert int(runs_summary["model_version"].iloc[0]) == 1
-        summary_df = pd.read_csv(
-            summary_csv, encoding="utf-8-sig", dtype={"data_state_id": str}
-        )
+        summary_df = pd.read_csv(summary_csv, encoding="utf-8-sig", dtype={"data_state_id": str})
         assert summary_df["data_state_id"].iloc[0] == state_payload["data_state_id"]
         assert int(summary_df["model_version"].iloc[0]) == 1
 

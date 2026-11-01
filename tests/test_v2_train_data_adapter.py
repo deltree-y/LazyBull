@@ -74,7 +74,14 @@ def _write_daily_partitions(root: Path, days: list[str]) -> None:
 def _make_store(root: Path) -> PanelDataStore:
     store = PanelDataStore(root)
     store.manifest.register_columns(
-        {col: {"group": "core", "source": "test"} for col in _FEATURE_COLUMNS}
+        {
+            **{col: {"group": "core", "source": "test"} for col in _FEATURE_COLUMNS},
+            # B 方案：选股过滤列登记（适配层请求列并集 μ 采集前提）
+            **{
+                col: {"group": "core", "source": "test"}
+                for col in ("amount_ma20", "total_mv", "sw_l1_code")
+            },
+        }
     )
     store.manifest.save()
     return store
@@ -90,6 +97,10 @@ def _append_panel_day(
         if group == "core":
             for col in _FEATURE_COLUMNS:
                 payload[col] = [value + i * 0.001 for i in range(len(_CODES))]
+            # B 方案：选股过滤列（适配层并集请求 ⇒ 必须实际写入）
+            payload["amount_ma20"] = [1.0e4] * len(_CODES)
+            payload["total_mv"] = [1.0e8] * len(_CODES)
+            payload["sw_l1_code"] = ["801780"] * len(_CODES)
         store.append_features(TradeDate.from_str(day), group, pd.DataFrame(payload))
 
 
@@ -279,7 +290,16 @@ class TestPanelModeJoin:
         df = result.df
         assert result.trade_days == 3
         assert len(df) == 3 * len(_CODES)
-        expected_cols = ["trade_date", "ts_code", *_FEATURE_COLUMNS, *LABEL_VALUE_COLUMNS]
+        expected_cols = [
+            "trade_date",
+            "ts_code",
+            *_FEATURE_COLUMNS,
+            # B 方案：适配层请求列并集选股过滤列（输出列序含三列）
+            "amount_ma20",
+            "total_mv",
+            "sw_l1_code",
+            *LABEL_VALUE_COLUMNS,
+        ]
         assert list(df.columns) == expected_cols
         # 六标签原名恢复且 raw/neu 变体取值正确（LABEL_TABLES 顺序 + 夹具步长）
         first = df.iloc[0]

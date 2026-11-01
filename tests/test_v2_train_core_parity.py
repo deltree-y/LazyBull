@@ -40,6 +40,7 @@ from src.lazybull.v2.common.model_schema import (
     CONSENSUS_REVISION_VERSION_COL,
     DIVIDEND_POLICY_SCHEMA_VERSION,
     DIVIDEND_POLICY_VERSION_COL,
+    SELECTION_FILTER_COLUMNS,
 )
 from src.lazybull.v2.train.core import constants as v2_constants
 from src.lazybull.v2.train.core.prepare import prepare_training_data as v2_prepare_training_data
@@ -151,6 +152,10 @@ def _base_frame(n_days: int = 300, seed: int = 42) -> pd.DataFrame:
     df["is_st"] = False
     df["is_suspended"] = False
     df["is_limit_up"] = False
+    # B 方案：选股过滤列（v2 prepare μ 采集前提——缺席即显式报错；legacy 裁剪忽略）
+    df["amount_ma20"] = rng.uniform(1.0e4, 1.0e5, n_rows)
+    df["total_mv"] = rng.uniform(1.0e8, 1.0e9, n_rows)
+    df["sw_l1_code"] = "801780"
     return df
 
 
@@ -237,7 +242,14 @@ def _assert_stats_value_equal(old_val: Any, new_val: Any, path: str) -> None:
 
 
 def assert_prepare_parity(old_result: Tuple, new_result: Tuple) -> None:
-    """九元组逐位一致断言（DataFrame/Series check_exact=True，data_stats 深比较）。"""
+    """九元组逐位一致断言（DataFrame/Series check_exact=True，data_stats 深比较）。
+
+    B 方案（P4 后维护项）有意分叉登记（v2 prepare 不再是纯等价搬运）：
+    ① v2 训练帧保留选股过滤列（``SELECTION_FILTER_COLUMNS``，分布采集前提；
+    legacy 裁剪忽略）⇒ 比较前从 v2 侧帧剔除；② v2 data_stats 新增
+    ``feature_missing_rate_distribution`` / ``feature_missing_rate_stat_basis``
+    两键 ⇒ 键集比较排除 + 正向断言其合法性（采集链路锁定的唯一 parity 面）。
+    """
     assert len(old_result) == 9, f"旧实现返回元数异常: {len(old_result)}"
     assert len(new_result) == 9, f"新实现返回元数异常: {len(new_result)}"
     (
@@ -263,19 +275,60 @@ def assert_prepare_parity(old_result: Tuple, new_result: Tuple) -> None:
         new_df_val_original,
     ) = new_result
 
+    def _align_frames(left_frame, right_frame):
+        # v2 needed_cols 集合含过滤列 ⇒ 迭代序与 legacy 不同：双侧剔除过滤列后
+        # 按左序列序重排（显式缝用例为 v2-vs-v2 形态，双侧均可能携带）
+        def _strip(frame):
+            drop = [c for c in SELECTION_FILTER_COLUMNS if c in getattr(frame, "columns", [])]
+            return frame.drop(columns=drop) if drop else frame
+
+        stripped_left = _strip(left_frame)
+        stripped_right = _strip(right_frame)
+        assert set(stripped_left.columns) == set(
+            stripped_right.columns
+        ), "训练帧列集不一致（B 方案分叉外）"
+        return stripped_left, stripped_right[list(stripped_left.columns)]
+
     pd.testing.assert_frame_equal(old_X_train, new_X_train, check_exact=True)
     pd.testing.assert_series_equal(old_y_train, new_y_train, check_exact=True)
     pd.testing.assert_frame_equal(old_X_val, new_X_val, check_exact=True)
     pd.testing.assert_series_equal(old_y_val, new_y_val, check_exact=True)
     assert old_feature_columns == new_feature_columns, "feature_columns 不一致"
-    pd.testing.assert_frame_equal(old_df_train, new_df_train, check_exact=True)
-    pd.testing.assert_frame_equal(old_df_val, new_df_val, check_exact=True)
-    pd.testing.assert_frame_equal(old_df_val_original, new_df_val_original, check_exact=True)
-    assert set(old_stats) == set(
-        new_stats
-    ), f"data_stats 键集不一致: {sorted(set(old_stats) ^ set(new_stats))}"
-    for key in old_stats:
+    aligned_train = _align_frames(old_df_train, new_df_train)
+    pd.testing.assert_frame_equal(*aligned_train, check_exact=True)
+    aligned_val = _align_frames(old_df_val, new_df_val)
+    pd.testing.assert_frame_equal(*aligned_val, check_exact=True)
+    aligned_original = _align_frames(old_df_val_original, new_df_val_original)
+    pd.testing.assert_frame_equal(*aligned_original, check_exact=True)
+    v2_only_keys = {"feature_missing_rate_distribution", "feature_missing_rate_stat_basis"}
+    old_common = set(old_stats) - v2_only_keys
+    new_common = set(new_stats) - v2_only_keys
+    assert (
+        old_common == new_common
+    ), f"data_stats 键集不一致（除 B 方案两新键外）: {sorted(old_common ^ new_common)}"
+    for key in old_common:
         _assert_stats_value_equal(old_stats[key], new_stats[key], f"data_stats.{key}")
+    # B 方案新键正向断言（legacy-vs-v2 时仅 v2 侧携带；v2-vs-v2 显式缝用例双侧携带）：
+    # 候选集覆盖最终注册列 ∪ 过滤列（override 重引入列 μ=1.0 合法采集）；
+    # 统计基互证等式成立
+    for stats in (old_stats, new_stats):
+        if "feature_missing_rate_distribution" not in stats:
+            continue
+        distribution = stats["feature_missing_rate_distribution"]
+        basis = stats["feature_missing_rate_stat_basis"]
+        assert isinstance(distribution, dict) and distribution
+        assert set(new_feature_columns) <= set(distribution)
+        assert set(SELECTION_FILTER_COLUMNS) <= set(distribution)
+        for sample in distribution.values():
+            assert {"p95", "p99", "max", "n_days"} <= set(sample)
+            assert (
+                0.0 <= float(sample["p95"]) <= float(sample["p99"]) <= float(sample["max"]) <= 1.0
+            )
+        assert (
+            basis["coverage_n_samples"]
+            == basis["n_samples_after_filter"] - basis["n_dropped_label_nan"]
+        )
+        assert basis["frame"] == "train_daily_rate_distribution_pre_split"
 
 
 def _run_both(df: pd.DataFrame, **kwargs) -> Tuple[Tuple, Tuple]:

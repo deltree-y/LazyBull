@@ -27,6 +27,7 @@ from src.lazybull.v2.train.core import (
     attach_cashflow_quality_train_params,
     attach_cons_revision_schema_version,
     attach_dividend_train_params,
+    attach_feature_missing_rate_train_params,
     evaluate_validation_daily,
 )
 from src.lazybull.v2.train.data_adapter import TrainingFrame
@@ -337,6 +338,22 @@ def _register_and_log_deploy(
     full_train_params = _assemble_deploy_full_params(
         train_params, params, feature_columns, model, ensemble_seeds, ensemble_offsets
     )
+    # P4 后维护项 B 方案：注册段 additive 写入 feature_missing_rate（Q8-B 部署
+    # 训练首验路径）。offsets>0 入口已拒绝，此处兜底断言（多窗口 base_result
+    # 单值不得作为 coverage 依据）。
+    if ensemble_offsets > 0:
+        raise ValueError(
+            "ensemble_offsets>0 多窗口 EnsembleModel 不支持 feature_missing_rate 注册"
+            "（B 方案本期限 offsets=0；execute_deploy_training 入口已拒绝，"
+            "此处为注册侧兜底断言）"
+        )
+    attach_feature_missing_rate_train_params(
+        full_train_params,
+        data_stats,
+        feature_columns,
+        train_start=train_start,
+        train_end=train_end,
+    )
 
     version = registry.register_model(
         model=model,
@@ -435,6 +452,15 @@ def execute_deploy_training(
     Q10-B:P3 回放不调用本函数(编排器 deploy_train=False 默认);生产部署训练
     留 P4 验证。
     """
+    # P4 后维护项 B 方案(reviewer1 复审 N1):多窗口 EnsembleModel 的
+    # feature_missing_rate 语义本期未定义——入口即拒绝(小时级训练白跑后
+    # 在末端注册处才报错的形态不可接受);能力回收登记 docs/BREAKING_CHANGES.md。
+    if params.ensemble_offsets > 0:
+        raise ValueError(
+            "ensemble_offsets>0 多窗口 EnsembleModel 本期不支持"
+            "(feature_missing_rate 注册语义未定义,B 方案限制 offsets=0;"
+            "入口拒绝,见 docs/plans/v2/p4_post_feature_coverage_gate_design_20261031.md §3.2)"
+        )
     train_start, train_end = _resolve_deploy_window(deploy_train_end, train_window_years, trade_cal)
     if train_start is None or train_end is None:
         return None

@@ -2,6 +2,164 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.208.35] - 2026-10-31
+
+### Changed
+
+- **P4 后维护项 B′ 落地（与 Q8-B 同批）：就绪门门 4 从「全局 0.6 + 白名单」改为
+  「逐列逐日缺失率分布 + p95/p99 分级告警（不阻断）+ 聚合升级阻断」**——设计文档
+  `docs/plans/v2/p4_post_feature_coverage_gate_design_20261031.md`（v4 §11 = 规范正文）。
+  同日 B 草案（池化 μ+10pp 容差 + fail-closed）经补录与实测推翻：重建
+  `cons_target_upside` μ=0.5572 ⇒ 阈值 0.6572 < 当日 0.668，且密集列被大幅收紧，
+  近 9 个交易日全部 FAIL；归因 = 训练/推理分母域不对称（4pp）+ 6 年池化均值不代表
+  单日常态（逐日 p95 已达 0.6027）+ 单点标定容差。**用户逐条裁决改为 B′**：
+  - `feature_missing_rate` schema **v2** = 逐列 `{mean,p50,p90,p95,p99,max,n_days,p99_unstable}`
+    （v1 单值形态 ⇒ `metadata_schema_unsupported`，不隐式兼容）；
+  - 判据 ≤p95 ⇒ pass、(p95,p99] ⇒ warning、>p99 或 100% ⇒ error，**三档均不阻断**；
+    唯一阻断 = 聚合升级（error 列数 ≥ max(8, ceil(10%×判定列数))）；
+  - **两侧同域**：训练分布与当日率均按主板域（`row_domain=train_filtered_main_board`），
+    域缺失 ⇒ error 且不判定；域内行数 <1000 只留证；ST/停牌标记行本期不剔除（登记残留）；
+  - 基线优先用**近 60 日滚动分位**（最少 20 日）在线自校准，不足回落静态分布；
+    静态 `n_days<500` ⇒ p99 降级 p95 并标 `p99_unstable`；
+  - 原 fail-closed 七码中的 metadata/缺列/全空全部降为 error 日志（不阻断日跑），
+    行数带/分区/freshness/derived/派生族/行情等其余判定条不变。
+- **训练侧采集改分布摘要**：`v2/train/core/prepare.py` 质量门禁段按 `trade_date` 分组
+  计算逐日截面缺失率 → 分位摘要（与门禁同帧同分母；统计列超集 = 门禁前候选 ∪ 最终列
+  ∪ 选股过滤列）；`attach_feature_missing_rate_train_params` 两条注册路径 additive 写入
+  schema v2 三键；注册侧键集精确 = 最终注册列 ∪ 过滤列（缺键/分布非法 ⇒ 拒绝注册）。
+- **就绪门实现**：判据本体 `v2/hosts/paper/coverage_gate.py`（分级 + 聚合 + 同域 +
+  滚动分位；拆出自 `daily_assembly`）；滚动历史 `v2/hosts/paper/coverage_history.py`
+  （`runs/coverage_history.json`，90 日，旁路）；证据产物 `readiness_evidence.py` 扩
+  `coverage_alerts/coverage_blocked/rate_denominator/n_rows_used/total/coverage_quantiles`；
+  推送文本追加 `数据质量: error N / warning M（top…）`（钉钉关键信息）。
+- **24022 补录（v2 覆盖 v1）**：`scripts/v2_p4/backfill_feature_missing_rate.py`
+  分块重放（主板域 + 标记过滤 + 标签 dropna，1454 日 / 分母 3,923,250）+ 逐日率分位 +
+  registry 条目定向更新；证据 `data/frozen_reference/v2_p4/backfill_24022_20261031_221844/`
+  （cons：池化 0.5572 / p95 0.6027 / p99 0.6125 / max 0.6160）。首版曾误把投影 dict
+  展开为 157 个 `train_params` 顶层键——已从备份完整回滚，修复为三键结构并由测试锁定。
+- **`ensemble_offsets>0` deploy 入口拒绝**（能力回收登记 `docs/BREAKING_CHANGES.md`）；
+  `SELECTION_FILTER_COLUMNS` 单一来源上移 `v2/common/model_schema.py`；panel 适配层请求列
+  并集过滤列。
+- **测试**：新增 `tests/test_v2_p4_bprime_coverage_gate.py`（分级/聚合/同域/滚动/元数据告警
+  全覆盖）、`tests/test_v2_p4_backfill_feature_missing_rate.py`（三键防回归 + 端到端）；
+  `daily_assembly` 旧 B 用例退役并改写（单列超阈 ⇒ error 不阻断、缺列 ⇒ error 不阻断、
+  边界 0.59/0.61 ⇒ error 不阻断）；注册/补录/parity/夹具统一改分布口径。
+
+### Verified
+
+- B′ 实测（隔离根，`t2_daily_dryrun`）：20261020~23、20261026 **PASS**（20261026 域内
+  3018/5211 行、error 15/warning 4、阈值 16，推送含质量摘要）；20261028/29 因 19~20 列
+  error 触发**聚合阻断**（`zscore_fcf_yield` 等真实源退化，待 B4 单独修数据）。
+- **76 日影子对照（B1 前置证据，`scripts/v2_p4/t5_coverage_shadow_compare.py`）**：
+  `20260703~20261026` 全 76 日、逐日真实 `assemble_daily_data`、同帧双判据（B′ vs 旧 C
+  冻结副本〔全局 60% + cons 白名单 + 全行分母〕）。结果：**旧 C 阻断 1 日（20261019 北向
+  13 列全空）= B′ 阻断 1 日（同日 26 列 error ≥ 阈值 16），仅 B′ 拦 / 仅 C 拦均为 0**
+  ⇒ 阻断集完全一致；**B1① PASS**（唯一阻断日可归因真实源退化且 C 同样拦截）；
+  **B1② FAIL**：静态基线 12 列 error 交易日 >20%（逐日 error mean 10.9 / max 26），
+  滚动基线 6 列 >20%（mean 3.8 / max 19）。根因两类：**零点基线类**（训练期无缺失 ⇒
+  p99=0，`fund_*`/`forecast_type_score`/`zscore_profit_dedt` 等，绝对率 0.1%~11.6%，
+  滚动分位可消除至 0~5%）与**结构性漂移类**（`zscore_pe_ttm` 100%、`cons_target_upside`
+  42%、cons 稀疏系列，滚动后仍 >20%）。cons 双口径：全行均值 64.13% → 主板域 60.45%
+  （对齐降 3.7pp）。证据 `data/frozen_reference/v2_p4/coverage_shadow_76d_20261031_225321/`；
+  结论与三项待裁决（单列豁免登记 / 零基线规则 / 接受噪音）登记于设计 §11.5。
+
+### Changed（决策 b：绝对率下限，2026-10-31 用户裁决）
+
+- 分级阈值下限 `max(分位, COVERAGE_RATE_FLOOR=0.02)`（`coverage_gate.classify_severity`
+  为唯一实现，生产与影子工具共用）；全空恒 error、聚合升级与同域规则不变。
+  取值依据：76 日对照敏感性拐点（F=0.5/1/2/3/5% ⇒ 超 20% 交易日列数 11/8/6/6/6）。
+  **复跑结果**（`coverage_shadow_76d_20261031_230612/`）：静态逐日 error 列数
+  mean 10.9→**4.4**、max 26→**19**；滚动 mean 3.8→**2.9**；静态超限列 12→**6**；
+  旧 C / B′ 阻断仍为 **1/1（同日 20261019）、仅 B′ 拦 0**，B1① PASS、**B1② 仍 FAIL**
+  （残留 6 静态 / 8 滚动，全部为 `cons_*` 一致预期族 + `zscore_pe_ttm*` 估值族结构性漂移列）。
+- **滚动历史种子（用户批准，已执行）**：新增 `scripts/v2_p4/seed_coverage_history.py`
+  （dry-run 缺省 + 备份 + 原子写 + 读回校验），已把 76 日对照的域内逐日率写入
+  `data/paper/runs/coverage_history.json`（76 日 × 157 列，读回 PASS），上线当日即可
+  用滚动基线（`baseline_source="rolling"`），免前 20 日静态爬坡。
+
+### Changed（决策 a：单列豁免 + 硬拒阈值放宽，2026-11-01 用户裁决）
+
+- **结构性漂移单列豁免（可审计登记，非白名单常量）**：载体
+  `train_params["feature_missing_rate_drift_exempt"]`（三要素强校验 columns/
+  registered_at/review_condition；结构不全 ⇒ 不生效 + 告警）；语义 = 登记列 error
+  **封顶 warning**、不参与聚合计数，**全空不豁免**；实现 = `CoverageMember.drift_exempt`
+  通道（缺省成员 + factory 成员各自从 metadata 读取，verdict/alert 留 `drift_exempt`
+  标记）+ 登记工具 `scripts/v2_p4/register_drift_exempt.py`（双份写入/备份/读回）。
+  已登记 v24022 共 **9 列**（静态 6 ∪ 滚动 8）：`zscore_pe_ttm`、`zscore_pe_ttm_sz`、
+  `forecast_type_score`、`cons_target_upside`、`cons_rating_score`、`cons_eps_yield_fy0`、
+  `cons_eps_yield_fy1`、`cons_eps_yield_fy2`、`cons_analyst_count_30d`；观察期复核条件
+  随登记块固化（≥10 交易日 / error>50% 或新增未登记列超限 ⇒ 重新裁决 / 20 日内重估分位）。
+- **硬拒阈值 max(8,10%) ⇒ max(15,20%)**（157 列 ⇒ 16 → 32）。
+- **76 日对照复跑**（`coverage_shadow_76d_20261101_082443/`）：B′ 阻断 **0 日**、
+  旧 C 阻断 1 日（`20261019` 北向 13 列全空）⇒ **仅 C 拦 1 / 仅 B′ 拦 0**；静态逐日
+  error 列数 mean/max **0.3 / 13**；超 20% 交易日列 **0**；**B1① PASS、B1② PASS**。
+- **风险登记（用户已确认接受，2026-11-01）**：`20261019` 北向 13 列全空（真实源中断）
+  因 13 < 32 不再阻断，旧 C 会阻断（本次放宽使 B′ 更宽松）；用户裁决接受该后果并登记为
+  已知风险，观察期按复核条件跟踪（若实际导致错误交易则回设计复审）。
+
+### Fixed（两轮评审处置：reviewer1 2026-11-01 / reviewer3 2026-11-01）
+
+- **门 4 判据正确性**：滚动基线改 **as-of 严格早于判定日**（排除当日/未来日）且阻断日
+  **不回灌**历史；空域（域内 0 行）改 `coverage_domain_empty` error 且不判定（不再 NaN→pass）；
+  非有限/越界率改 `coverage_rate_invalid` 计 error；历史读写过滤 NaN/Inf/越界。
+- **聚合口径**：改**逐成员**判定（分子/分母同集合），共享列不重复计数；整列缺席计 error
+  （聚合保险丝不再失明）；门槛维持 max(15, 20%)。
+- **metadata 严格性**：schema 版本严格 int==2（拒绝 2.9/"2"/True）；六字段全量值域 +
+  完整分位序；`n_days` 严格 int、`p99_unstable` 严格 bool；豁免块 all-or-nothing +
+  分布外列整块失效；`row_domain` 与门侧契约绑定（不一致 ⇒ 成员不判定）。
+- **补录双写恢复**：journal 状态机 + 启动单边修复 + 完成清理；幂等改显式 no-op；
+  `actual_data_end`/`n_trade_days` 改按标签可用日；新增故障注入恢复用例。
+- **证据完整性**：影子工具不再截断 error 列（`[:8]` 移除），76 日证据按最终配置重生成
+  （`coverage_shadow_76d_20261101_095803/`）；20261027~30 复跑证据
+  `coverage_shadow_4d_20261101/`——**20261028 旧记录（19 列聚合阻断）作废**，最终配置下
+  error 4 列、PASS；20261029 C 拦/B′ 不拦（`fcf_yield` 64.1%）。
+- **文档/文案**：三档表述统一为「**不阻断日跑**」（信号层仍对全空列硬拒预测，新增用例
+  `TestSignalLayerStillRejectsAllNaN` 锁定）；blocked_reason 20% 文案、模块 docstring、
+  re-export 注明、未用导入清理；恢复被删的过滤列硬门用例；宿主/合练夹具改合法分布。
+- **四项闭合（2026-11-01）**：① 统计语义——训练侧三字段语义锁定 + 补录 `actual_data_end`/
+  `n_trade_days` 按标签可用口径（测试断言）；② 多成员/全量回读——补录新增
+  `verify_backfill(versions)`（逐版本三键深比较 + 读侧校验）、种子改逐日逐列全量比较；
+  ③ 推送 schema——`append_quality_summary` 增阈值/阻断原因，`ReadinessReport` 增
+  `coverage_error_threshold`/`coverage_blocked_reason` 并落证据；④ coordinator 去硬编码
+  ——解析顺序 = 生产配置 `model.model_version`（`config:v24022`）→ registry `is_deploy`
+  最高版本 → 最高版本 → v24022 兜底，来源写 summary（**兼顾**固定旧版本与换代）。
+- **新风险登记**：registry 中 **v24288 `is_deploy=true` 但无 `feature_missing_rate`**
+  （本轮仅覆盖生产配置实际使用的 v24022）；切到 24288 或 `model_version=null` 时门 4
+  对其仅 `metadata_missing` 告警（不阻断但无逐列基线）——换代前须重训采集或补录。
+
+### Verified（收口验收，2026-11-01）
+
+- **全量回归 4,542 passed / 0 failed**；复杂度双口径（`src/lazybull`、`src/lazybull scripts`）
+  **新增硬超限 0**。
+- **真实单日驱动**（隔离根 `t2_daily_dryrun --date 20261026`）：`driven=True`，
+  `runs/readiness_20261026.json`（78KB）落盘，推送文本含 `数据质量: error 2 / warning 8
+  （阈值 32 列）`；**生产根 containment 零变更 PASS**（27 个文件）。
+- **76 日影子证据重建**（最终代码）：`coverage_shadow_76d_20261101_125414/` ——
+  **有效日 76/76、无效日 0、出口 PASS**；B1① PASS（阻断 0 日）、B1② PASS（超 20% 列 0）；
+  旧 C 阻断 1 日（20261019），仅 C 拦 1、仅 B′ 拦 0。
+
+### Fixed（第二轮复审：reviewer3 5 项 P1，2026-11-01）
+
+- **补录不再假成功**：no-op 前强制全量 `verify_backfill`；journal 恢复在双份"结构合法"时也做
+  三键深比较；三键**显式存在**校验（消除 `None==None`）；支持 `extra_versions` 多成员；
+  新增 split-brain 故障注入用例。
+- **影子出口不再假 PASS**：出口 = 无效日 0 + 有效日==预期 + B1① + B1②；B1① 归因必须由该日
+  **实际 error 列**支撑并附 `--fixed-evidence` 证据；无 rate 的 uncovered error 计入列级频次；
+  滚动敏感性改用 `np.percentile` + 生产 `classify_severity` + 豁免封顶；JSON 增 `identity`
+  （版本/下限/聚合阈值/分位/特征与分布哈希/豁免/证据）并校验版本一致。
+- **种子不再绕过损坏保护**：现有历史严格解析（失败默认拒绝，`--force` 才覆盖）；源 rate
+  全量校验；回读失败恢复备份；阻断日不入种子。
+- **coordinator 与生产同源**：复用 `resolve_model_version`（配置 A/B + registry latest），
+  返回逐成员列集，A/B 任一缺列 `data_ok=False`；删除独立兜底语义。
+- **文案/登记收敛**：删除登记工具内置 9 列清单（必须 `--columns/--from-shadow`）；
+  `coverage_gate` 文件头阈值改 20%；设计 §0 增 v4 作废横幅、§12.1 登记本轮处置。
+
+### Pending
+
+- `zscore_fcf_yield` 源修复（B4 单独立项）；切换后观察期 ≥10 交易日（含预登记故障注入/
+  历史缺源回放、豁免列复核、「全空列/放宽阈值不阻断」风险确认）；reviewer1 R1/R3
+  （generate() 级用例、宿主级阻断日历史断言）为后续 P3。
+
 ## [0.208.34] - 2026-10-31
 
 ### Closed

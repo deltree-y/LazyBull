@@ -105,9 +105,13 @@ import check_inuse_closure as cic  # noqa: E402
 # 202→265、在用 206→269（+4 动态加载补充不变）、全仓 365→371、不在用 159→102。
 # 该变化来自 T5 生产入口接线（非本修复引入），基线按实测显式更新；
 # 底稿 tests/fixtures/inuse_closure_baseline_20261006.json 同步刷新（沿用既有约定）。
-INUSE_BASELINE = 270
+# B/B′（P4 后维护项，2026-10-31）：daily_assembly/host 拆出 coverage_gate /
+# readiness_evidence 两模块 + B′ 新增 coverage_history（滚动分位历史）⇒ 静态闭包
+# 266→269、在用 270→273、全仓 372→375、不在用 102 不变；基线按实测显式更新，
+# 底稿同步刷新（沿用既有约定）。
+INUSE_BASELINE = 273
 NOTIN_BASELINE = 102
-STATIC_BASELINE = 266
+STATIC_BASELINE = 269
 
 
 @pytest.fixture()

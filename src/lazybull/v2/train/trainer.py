@@ -37,6 +37,7 @@ from src.lazybull.v2.train.core import (
     attach_cashflow_quality_train_params,
     attach_cons_revision_schema_version,
     attach_dividend_train_params,
+    attach_feature_missing_rate_train_params,
     evaluate_validation_daily,
 )
 from src.lazybull.v2.train.core.runtime_derive import RuntimeDerivers
@@ -430,8 +431,20 @@ class V2Trainer:
         X_val_len: int,
         ensemble_offsets: int,
         ensemble_seeds: List[int],
+        data_stats: Optional[Dict[str, Any]] = None,
     ) -> tuple:
-        """注册参数组装 + 注册段(P3-T3 提取自 train_fold,逐字;返回 (version, full_params))。"""
+        """注册参数组装 + 注册段(P3-T3 提取自 train_fold;返回 (version, full_params))。
+
+        P4 后维护项 B 方案：``data_stats`` 透传训练侧 feature_missing_rate 采集，
+        经 ``attach_feature_missing_rate_train_params`` additive 写入注册 metadata
+        （键集精确 = 最终注册列 ∪ 选股过滤列；缺采集键 ⇒ ValueError，禁止注册
+        无 coverage 的模型）。offsets>0 兜底断言（入口已拒绝，双保险）。
+        """
+        if ensemble_offsets > 0:
+            raise ValueError(
+                "ensemble_offsets>0 多窗口 EnsembleModel 不支持 feature_missing_rate 注册"
+                "（B 方案本期限 offsets=0；train_fold 入口已拒绝，此处为注册侧兜底断言）"
+            )
         full_train_params = train_params.copy()
         attach_cons_revision_schema_version(
             full_train_params,
@@ -486,6 +499,15 @@ class V2Trainer:
             full_train_params[f"{name}_digest"] = (
                 canonical_json_sha256(spec_dict) if spec_dict is not None else None
             )
+        # B 方案：coverage 三键 additive 写入（F10 spec 版本校验之后，保持既有
+        # 负例错误优先级；键集精确 = 最终注册列 ∪ 选股过滤列，缺采集键 ⇒ 拒绝注册）
+        attach_feature_missing_rate_train_params(
+            full_train_params,
+            data_stats,
+            feature_columns,
+            train_start=train_start,
+            train_end=val_end,
+        )
         full_train_params["domain"] = params.stock_domain
         full_train_params.update(
             {
@@ -607,6 +629,7 @@ class V2Trainer:
             X_val_len=X_val_len,
             ensemble_offsets=ensemble_offsets,
             ensemble_seeds=ensemble_seeds,
+            data_stats=data_stats,
         )
 
         self._last_fold_result = _FoldArtifacts(

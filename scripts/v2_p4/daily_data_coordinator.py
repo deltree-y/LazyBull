@@ -128,6 +128,61 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _read_paper_model_versions() -> tuple[Any, Any]:
+    """读取生产纸面配置 (model_version, model_version_b)（null 保留 None）。"""
+    config_file = _data_root() / "paper" / "config.yaml"
+    if not config_file.is_file():
+        return None, None
+    import yaml
+
+    payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    section = payload.get("model") if isinstance(payload.get("model"), dict) else {}
+    return (
+        section.get("model_version", payload.get("model_version")),
+        section.get("model_version_b", payload.get("model_version_b")),
+    )
+
+
+def _resolve_model_members() -> tuple[dict[int, list[str]], dict[int, str]]:
+    """与生产**同一套**版本解析（reviewer3 R2-P1-5）：配置 A/B + registry latest。
+
+    复用 `config_adapter.resolve_model_version`（config 非空 ⇒ int；空 ⇒ registry
+    latest 旁路语义），不再维护"最高 is_deploy / v24022 兜底"第二套身份。
+    返回 {version: 特征列} 与 {version: 来源}；A/B 任一缺列直接抛出（data_ok 亦按成员判定）。
+    """
+    from src.lazybull.v2.hosts.paper.config_adapter import resolve_model_version
+
+    models_dir = _data_root() / "models" / "stock_selection"
+    raw_a, raw_b = _read_paper_model_versions()
+    members: dict[int, list[str]] = {}
+    sources: dict[int, str] = {}
+    for label, raw in (("config_a", raw_a), ("config_b", raw_b)):
+        if label == "config_b" and raw is None:
+            continue
+        version = int(resolve_model_version(raw, models_dir=str(models_dir)))
+        features_file = models_dir / f"v{version}_features.json"
+        if not features_file.is_file():
+            raise RuntimeError(f"模型特征列缺失：v{version}（{label}）无 features 文件")
+        members[version] = list(_read_json_list(features_file))
+        sources[version] = label if raw is not None else "latest"
+    return members, sources
+
+
+def _resolve_model_columns() -> tuple[list[str], str]:
+    """union 视图（cs_infer 覆盖检查用）；来源标签形如 `config_a:v24022`。"""
+    members, sources = _resolve_model_members()
+    columns = list(dict.fromkeys(col for version in sorted(members) for col in members[version]))
+    label = ",".join(f"{sources[version]}:v{version}" for version in sorted(members))
+    return columns, label
+
+
+def _read_json_list(path: Path) -> list[str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError(f"特征列文件不是非空列表: {path}")
+    return [str(col) for col in payload]
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     """原子写 JSON；tmp 名带 pid（多 worker 并发不互踩），replace 冲突退避重试。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,9 +347,7 @@ def collect_identity() -> dict[str, Any]:
     clean = {
         name: _layer_watermark("clean", name) for name in ("daily", "daily_basic", "moneyflow")
     }
-    features = {
-        name: _layer_watermark("features", name) for name in ("cs_train", "cs_infer")
-    }
+    features = {name: _layer_watermark("features", name) for name in ("cs_train", "cs_infer")}
     return {
         "captured_at": _now(),
         "raw": raw,
@@ -480,7 +533,8 @@ def stage_raw(run_id: str, args: argparse.Namespace, log_path: Path) -> dict[str
         logger.warning(f"登记源侧缺口（源探针实证无数据）: {explained}")
     q3 = "20260930"
     absent_q3 = [
-        name for name in PERIODIC_DATASETS
+        name
+        for name in PERIODIC_DATASETS
         if q3 not in set(partition_dates(_data_root() / "raw" / name))
     ]
     if absent_q3:
@@ -616,8 +670,10 @@ def stage_cs_infer(run_id: str, args: argparse.Namespace, log_path: Path) -> dic
             raise ValueError(f"切片参数非法: {args.slice_index}/{args.slice_count}")
         start, step = args.slice_index, args.slice_count
         dates = dates[start::step]
-        logger.info(f"切片 {args.slice_index}/{args.slice_count}: {len(dates)} 日（按日跨步切分，"
-                    f"各片写不同日分区，无共享状态）")
+        logger.info(
+            f"切片 {args.slice_index}/{args.slice_count}: {len(dates)} 日（按日跨步切分，"
+            f"各片写不同日分区，无共享状态）"
+        )
     storage = Storage(root_path=str(_data_root()))
     loader = DataLoader(storage)
     builder = FeatureBuilder(horizon=horizon, require_label=require_label)
@@ -651,7 +707,9 @@ def stage_cs_infer(run_id: str, args: argparse.Namespace, log_path: Path) -> dic
         per_day[day] = round(elapsed, 1)
         _save_stage(run_id, "cs_infer", "running", last_done=day, built=done, skipped=skipped)
         eta = (total - index) * (sum(per_day.values()) / max(len(per_day), 1))
-        logger.info(f"[{index}/{total}] cs_infer 完成 {day}（{elapsed:.1f}s）预计剩余 {eta / 60:.1f} 分钟")
+        logger.info(
+            f"[{index}/{total}] cs_infer 完成 {day}（{elapsed:.1f}s）预计剩余 {eta / 60:.1f} 分钟"
+        )
     report = {
         "days_planned": len(dates),
         "built": done,
@@ -745,7 +803,9 @@ def _label_status(dates: Iterable[str]) -> dict[str, Any]:
     return out
 
 
-def _cs_infer_coverage(model_columns: Sequence[str]) -> dict[str, Any]:
+def _cs_infer_coverage(
+    model_columns: Sequence[str], member_columns: Mapping[int, Sequence[str]] | None = None
+) -> dict[str, Any]:
     import pandas as pd
 
     path = _data_root() / "features" / "cs_infer"
@@ -761,6 +821,10 @@ def _cs_infer_coverage(model_columns: Sequence[str]) -> dict[str, Any]:
             "last_date": dates[-1],
             "columns": len(cols),
             "model_columns_missing": sorted(c for c in model_columns if c not in cols),
+            "model_columns_missing_by_member": {
+                f"v{version}": sorted(c for c in columns if c not in cols)
+                for version, columns in (member_columns or {}).items()
+            },
             "freshness_present": [c for c in freshness if c in cols],
             "freshness_missing": [c for c in freshness if c not in cols],
         }
@@ -808,17 +872,20 @@ def stage_verify(run_id: str, args: argparse.Namespace, log_path: Path) -> dict[
     calendar = load_calendar()
     gap = gap_days(calendar, args.start_date, args.target_date)
     structural = gap_days(calendar, STRUCTURAL_FROM, args.target_date)
-    model_columns = _json.loads(
-        (_data_root() / "models" / "stock_selection" / "v24022_features.json").read_text(
-            encoding="utf-8"
-        )
+    model_members, model_member_sources = _resolve_model_members()
+    model_columns = list(
+        dict.fromkeys(col for version in sorted(model_members) for col in model_members[version])
+    )
+    model_columns_source = ",".join(
+        f"{model_member_sources[version]}:v{version}" for version in sorted(model_members)
     )
     identity_after = collect_identity()
     labels = _label_status(structural)
     sealed = [day for day, item in labels.items() if item["statuses"] == ["sealed"]]
     forming = [day for day, item in labels.items() if item["statuses"] == ["forming"]]
     bad_state = [
-        day for day, item in labels.items()
+        day
+        for day, item in labels.items()
         if set(item["statuses"]) - {"sealed", "forming"} or len(item["statuses"]) != 1
     ]
     panel_check = _panel_day_check(gap)
@@ -843,7 +910,15 @@ def stage_verify(run_id: str, args: argparse.Namespace, log_path: Path) -> dict[
         },
         "cs_train_unchanged": cs_train_before == cs_train_after,
         "cs_train": cs_train_after,
-        "cs_infer": _cs_infer_coverage(model_columns),
+        "cs_infer": _cs_infer_coverage(model_columns, model_members),
+        "model_columns_source": model_columns_source,
+        "model_members": {
+            f"v{version}": {
+                "source": model_member_sources[version],
+                "n_columns": len(model_members[version]),
+            }
+            for version in sorted(model_members)
+        },
         "manifest": identity_after["manifest"],
         "identity_before": identity_before,
         "identity_after": identity_after,
@@ -855,6 +930,7 @@ def stage_verify(run_id: str, args: argparse.Namespace, log_path: Path) -> dict[
         and not bad_state
         and summary["cs_train_unchanged"]
         and not summary["cs_infer"]["model_columns_missing"]
+        and not any(summary["cs_infer"]["model_columns_missing_by_member"].values())
         and not summary["cs_infer"]["freshness_missing"]
         and summary["labels"]["sealed"] >= 50
     )

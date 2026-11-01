@@ -103,6 +103,10 @@ def _frame_rows(day: str, day_idx: int) -> Dict[str, list]:
         payload[col] = [_cell_value(day_idx, code_idx, col_idx) for code_idx in range(len(_CODES))]
     for col in _FILTER_COLS:
         payload[col] = [0] * len(_CODES)
+    # B 方案：选股过滤列（v2 prepare μ 采集前提——缺席即显式报错）
+    payload["amount_ma20"] = [1.0e4] * len(_CODES)
+    payload["total_mv"] = [1.0e8] * len(_CODES)
+    payload["sw_l1_code"] = ["801780"] * len(_CODES)
     for label_idx, col in enumerate(_LABEL_COLS):
         payload[col] = [
             round(0.02 * (label_idx + 1) + day_idx * 0.001 + code_idx * 0.0001, 6)
@@ -136,6 +140,11 @@ def _populate_store(
         {
             **{col: {"group": "core", "source": "test"} for col in _BASE_COLUMNS},
             **{col: {"group": "core", "source": "test"} for col in _FILTER_COLS},
+            # B 方案：选股过滤列登记（μ 采集前提）
+            **{
+                col: {"group": "core", "source": "test"}
+                for col in ("amount_ma20", "total_mv", "sw_l1_code")
+            },
         }
     )
     store.manifest.save()
@@ -145,7 +154,12 @@ def _populate_store(
         rows = rows_fn(day, day_idx)
         for group in PANEL_GROUPS:
             if group == "core":
-                core_cols = ("trade_date", "ts_code") + tuple(_BASE_COLUMNS) + tuple(_FILTER_COLS)
+                core_cols = (
+                    ("trade_date", "ts_code")
+                    + tuple(_BASE_COLUMNS)
+                    + tuple(_FILTER_COLS)
+                    + ("amount_ma20", "total_mv", "sw_l1_code")
+                )
                 payload = {col: rows[col] for col in core_cols}
             else:
                 # readiness 要求八族当日齐备（非 core 族仅键列）
@@ -328,6 +342,9 @@ class TestTrainerSleeveIdentityMetadata:
             sleeve_identity=sleeve_identity,
         )
         config = _minimal_config()
+        # B 方案：_register_fold 的 data_stats 通道须携带 coverage 采集键（fail-closed）
+        from src.lazybull.v2.common.model_schema import SELECTION_FILTER_COLUMNS
+
         trainer._register_fold(
             config=config,
             model=object(),  # 非 EnsembleModel ⇒ 走单模型分支
@@ -341,6 +358,31 @@ class TestTrainerSleeveIdentityMetadata:
             X_val_len=20,
             ensemble_offsets=0,
             ensemble_seeds=[42],
+            data_stats={
+                "feature_missing_rate_distribution": {
+                    col: {
+                        "mean": 0.0,
+                        "p50": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                        "p99": 0.0,
+                        "max": 0.0,
+                        "n_days": 10,
+                        "p99_unstable": True,
+                    }
+                    for col in ("f1", "f2", *SELECTION_FILTER_COLUMNS)
+                },
+                "feature_missing_rate_stat_basis": {
+                    "coverage_n_samples": 100,
+                    "n_samples_after_filter": 100,
+                    "n_dropped_label_nan": 0,
+                    "actual_data_end": "20240630",
+                    "n_trade_days": 10,
+                    "frame": "train_pooled_pre_split",
+                    "denominator": "label_available_rows",
+                    "row_domain": "train_filtered",
+                },
+            },
         )
         return registry.register_model.call_args.kwargs["train_params"]
 

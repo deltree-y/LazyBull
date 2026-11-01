@@ -398,10 +398,31 @@ stop_loss:
 
 ---
 
+## v0.208.35 (2026-10-31) - v2 deploy 多窗口 EnsembleModel（ensemble_offsets>0）入口拒绝
+
+**影响范围**: v2 部署训练（`src/lazybull/v2/train/walk_forward/deploy_training.py`）、v2 trainer 注册段
+
+### 变更内容
+
+P4 后维护项 B 方案（就绪门逐列训练期缺失率判据）限制：多偏移窗口 EnsembleModel
+（`ensemble_offsets > 0`）的 `feature_missing_rate`（逐列训练期缺失率 metadata）语义
+本期未定义——不同窗口子模型的缺失率不应由 base 窗口单值代表。`execute_deploy_training`
+**入口即 ValueError**（此前为可用能力；WF trainer 侧 `train_fold` 本就拒绝该组合），
+注册段保留兜底断言。
+
+现役 v24022 为 `ensemble_offsets=0` 多种子形态，不受影响。多窗口逐窗 coverage 语义
+留后续窗口设计（候选：样本量加权池化或 `window_source: base_of_ensemble` 声明）。
+
+### 迁移指南
+
+部署训练配置须保持 `ensemble_offsets=0`；如需多窗口集成，先经契约登记扩展
+`feature_missing_rate` 的逐窗口语义后再启用。
+
 ## 变更日志
 
 | 日期 | 版本 | 变更类型 | 描述 |
 |------|------|---------|------|
+| 2026-10-31 | v0.208.35 | Breaking | v2 deploy `ensemble_offsets>0` 多窗口 EnsembleModel 入口拒绝（B 方案 metadata 语义未定义） |
 | 2026-01-19 | v0.5.0 | Breaking | 成交额过滤替换成交量过滤 |
 | 2026-01-19 | v0.5.0 | Breaking | rebalance_freq 仅支持整数 |
 | 2026-01-19 | v0.5.0 | Enhancement | 日期类型统一与规范化 |

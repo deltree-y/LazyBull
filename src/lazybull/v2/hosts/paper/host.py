@@ -174,11 +174,26 @@ from src.lazybull.v2.hosts.paper.config_adapter import (
     ENGINE_V2,
     PaperHostError,
 )
+from src.lazybull.v2.hosts.paper.coverage_gate import main_board_codes
+from src.lazybull.v2.hosts.paper.coverage_history import (
+    append_coverage_rates,
+    load_coverage_history,
+)
 from src.lazybull.v2.hosts.paper.daily_assembly import (
+    CoverageMember,
     DailyAssembly,
     DerivedProducer,
     ReadinessReport,
     assemble_daily_data,
+)
+from src.lazybull.v2.hosts.paper.instruction_projection import (
+    inject_instruction_shares,
+    resolve_t0_status,
+)
+from src.lazybull.v2.hosts.paper.readiness_evidence import (
+    append_quality_summary,
+    write_gap_record,
+    write_readiness_evidence,
 )
 from src.lazybull.v2.hosts.paper.recovery import PaperHostRecoveryMixin
 from src.lazybull.v2.hosts.paper.schedule import (
@@ -188,10 +203,6 @@ from src.lazybull.v2.hosts.paper.schedule import (
     project_rebalance_state,
     validate_schedule,
     wire_day_inputs,
-)
-from src.lazybull.v2.hosts.paper.instruction_projection import (
-    inject_instruction_shares,
-    resolve_t0_status,
 )
 from src.lazybull.v2.hosts.paper.state_store import (
     GENERATION_INFO_KEY,
@@ -289,6 +300,7 @@ class PaperHost(PaperHostRecoveryMixin):
         freshness_members: Optional[Sequence[tuple[Sequence[str], Mapping[str, Any]]]] = None,
         derived_families_provided: Sequence[str] = (),
         derived_producers: Optional[Mapping[str, DerivedProducer]] = None,
+        coverage_members: Optional[Sequence[CoverageMember]] = None,
         engine_mode: str = ENGINE_V2,
         verbose: bool = False,
         data_loader: Optional[DataLoader] = None,
@@ -326,6 +338,8 @@ class PaperHost(PaperHostRecoveryMixin):
         self.freshness_members = freshness_members
         self.derived_families_provided = tuple(derived_families_provided)
         self.derived_producers = dict(derived_producers or {})
+        # B 方案：门 4 逐成员判定面（None ⇒ 缺省单成员；多成员由 factory 派生注入）
+        self.coverage_members = None if coverage_members is None else list(coverage_members)
         self.engine_mode = engine_mode
         self.verbose = verbose
         self.schedule_mode = schedule_mode
@@ -429,8 +443,13 @@ class PaperHost(PaperHostRecoveryMixin):
     ) -> PaperDayResult:
         """真实驱动当日：就绪门 → 零未来断言 → 装配/恢复 → 排期 → run_step → fills 提交前核对 → 提交。"""
         assembly = self._assemble(corrected)
+        write_readiness_evidence(self.store.runs_path, corrected, assembly.readiness)
+        if not assembly.readiness.coverage_blocked:  # 阻断日不回灌（防自我豁免闭环）
+            append_coverage_rates(
+                self.store.runs_path, corrected, assembly.readiness.column_missing_rates
+            )
         if not assembly.readiness.ok:
-            self._write_gap_record(corrected, assembly.readiness)
+            write_gap_record(self.store.runs_path, corrected, assembly.readiness)
             logger.warning(
                 f"纸面宿主 {corrected} 数据未就绪，推迟生成（不落盘、不生成信号）: "
                 f"{assembly.readiness.gaps}"
@@ -445,7 +464,10 @@ class PaperHost(PaperHostRecoveryMixin):
                 orders=[],
                 nav=None,
                 readiness=assembly.readiness,
-                push_text=f"({corrected}) 数据未就绪，推迟生成（缺口已登记 runs/gap_{corrected}.json）",
+                push_text=append_quality_summary(
+                    f"({corrected}) 数据未就绪，推迟生成（缺口已登记 runs/gap_{corrected}.json）",
+                    assembly.readiness,
+                ),
             )
         self._assert_no_future_price(assembly.price_data, corrected)
         corrected_ts = self._to_timestamp(corrected)
@@ -469,6 +491,7 @@ class PaperHost(PaperHostRecoveryMixin):
             trade_start,
             was_signal_day,
             expected_base_date=expected_base_date,
+            readiness=assembly.readiness,
         )
 
     # ------------------------------------------------------------------
@@ -514,14 +537,14 @@ class PaperHost(PaperHostRecoveryMixin):
         return pd.Timestamp(TradeDate.from_str(corrected).value)
 
     def _next_trade_date(self, corrected: str) -> Optional[str]:
-        """下一个交易日（日历内 corrected 之后的首个开市日；无 ⇒ None）。"""
+        """下一个交易日（无 ⇒ None）。"""
         for day in self._calendar_strs:
             if day > corrected:
                 return day
         return None
 
     def _assemble(self, corrected: str) -> DailyAssembly:
-        """当日数据组装 + 就绪门（D4；日历/列集/派生族声明/执行价格形态均由宿主注入）。"""
+        """当日数据组装 + 就绪门（日历/列集/派生族/执行价格形态由宿主注入）。"""
         try:
             return assemble_daily_data(
                 corrected,
@@ -534,6 +557,9 @@ class PaperHost(PaperHostRecoveryMixin):
                 derived_families_provided=self.derived_families_provided,
                 derived_producers=self.derived_producers,
                 sell_price_type=self.trading_config.sell_price,
+                coverage_members=self.coverage_members,
+                coverage_domain_codes=main_board_codes(self.stock_basic),
+                coverage_rate_history=load_coverage_history(self.store.runs_path),
             )
         except ValueError as exc:
             raise PaperHostError(f"纸面宿主数据组装输入非法（{corrected}）: {exc}") from exc
@@ -550,32 +576,6 @@ class PaperHost(PaperHostRecoveryMixin):
                 f"行情窗口含未来交易日行（> {corrected}）: {future_dates[:5]}——"
                 "零未来行情断言拒绝（指令文件层不得见未来行情）"
             )
-
-    def _write_gap_record(self, corrected: str, readiness: ReadinessReport) -> None:
-        """就绪缺口登记（``runs/gap_<date>.json``）。
-
-        登记为宿主侧诊断产物（非账户状态投影，不经 commit_day——commit_day 语义 =
-        同代提交账户状态，未就绪日本身不落任何账户代）；写盘失败不阻断推迟语义。
-        """
-        payload = {
-            "kind": "readiness_gap",
-            "date": corrected,
-            "gaps": list(readiness.gaps),
-            "row_count": int(readiness.row_count),
-            "row_count_band": [str(v) for v in readiness.row_count_band],
-            "uncovered_columns": list(readiness.uncovered_columns),
-            "derived_family_note": readiness.derived_family_note,
-            "timestamp": pd.Timestamp.now().isoformat(),
-        }
-        path = self.store.runs_path / f"gap_{corrected}.json"
-        tmp_path = path.with_name(path.name + ".tmp")
-        try:
-            tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp_path, path)
-        except OSError as exc:
-            logger.error(f"就绪缺口登记写盘失败（不阻断推迟语义）: {path}（{exc}）")
-            return
-        logger.warning(f"就绪缺口已登记: {path}")
 
     # ------------------------------------------------------------------
     # 引擎装配（每日新建）与恢复
@@ -637,12 +637,11 @@ class PaperHost(PaperHostRecoveryMixin):
         was_signal_day: bool,
         *,
         expected_base_date: Optional[str] = None,
+        readiness: Optional[ReadinessReport] = None,
     ) -> PaperDayResult:
         """导出快照 + 组装全部投影 + commit_day 同代原子提交（写序 = 权威先行）。
 
-        ``expected_base_date`` = 本次驱动计算所基于的权威「最后处理日」（锁内比较交换
-        守卫：盘上权威已推进 ⇒ 拒绝过期提交）。
-        """
+        ``expected_base_date`` = 锁内 CAS 基准日；``readiness`` 供推送质量摘要。"""
         day_trades = list(engine.trades[trade_start:])
         # T1 失败后的残余槽位在当日收盘（T0 相位）具体化为下一交易日信号；
         # 必须先于指令投影/权威快照。
@@ -718,6 +717,8 @@ class PaperHost(PaperHostRecoveryMixin):
         push_text = self._format_push_text(
             corrected, instructions_date, frame, t0_status, trade_rows
         )
+        if readiness is not None:
+            push_text = append_quality_summary(push_text, readiness)
         return PaperDayResult(
             requested_date=requested,
             corrected_date=corrected,

@@ -71,6 +71,7 @@ from tests.test_v2_p4_t2_host import (
     _FLAT_CONFIG,
     _MODEL_COLUMNS,
     _TRADED,
+    _coverage_train_params,
     _fills_as_dicts,
     _make_data_storage,
     _make_panel_store,
@@ -161,7 +162,7 @@ def _make_host(
         trading_calendar=list(_CALENDAR),
         engine_kwargs=engine_kwargs,
         feature_columns=list(_MODEL_COLUMNS),
-        train_params={},
+        train_params=_coverage_train_params(_MODEL_COLUMNS),
         engine_mode="v2",
         verbose=False,
     )

@@ -63,6 +63,7 @@ from loguru import logger
 from src.lazybull.v2.common.freshness import apply_event_freshness_decay
 from src.lazybull.v2.common.model_schema import (
     CASHFLOW_QUALITY_SCHEMA_VERSION,
+    SELECTION_FILTER_COLUMNS,
     cashflow_quality_live_columns,
 )
 
@@ -241,13 +242,21 @@ def _trim_to_needed_columns(
     label_column: str,
     decay_helper_cols: List[str],
 ) -> pd.DataFrame:
-    """内存优化列裁剪（旧 :761-772 原样）。"""
+    """内存优化列裁剪（旧 :761-772 原样 + 过滤列保留）。
+
+    P4 后维护项 B 方案：``needed_cols`` 增并 ``SELECTION_FILTER_COLUMNS``
+    （选股过滤列 μ 采集前提；单一来源 = ``v2/common/model_schema.py``，train
+    不 import hosts）。前提登记：三列须在袖子候选超集内（现役
+    ``VALUE_FEATURE_COLUMNS`` 已含，reviewer1 复审核验）；袖子 spec 变更换
+    候选超集须复核过滤列 μ 采集。
+    """
     # ── 内存优化：只保留训练必需的列，避免 copy 时 OOM ──
     needed_cols = set(
         feature_columns
         + [label_column, "trade_date", "ts_code"]
         + _FILTER_COLUMNS
         + decay_helper_cols
+        + list(SELECTION_FILTER_COLUMNS)
     )
     needed_cols &= set(df.columns)  # 仅保留实际存在的列
     kept = list(needed_cols)
@@ -495,6 +504,22 @@ def _assemble_data_stats(
     # 数据统计
     return {
         "samples_after_filter": qual_ns.samples_after_filter,
+        # B′（schema v2）：逐列**逐日缺失率分布摘要** + 统计基（注册前投影与
+        # additive 写入见 train/core/constants.py::attach_feature_missing_rate_train_params；
+        # 注册外层窗口由注册段补齐——此处只有分母/末端等帧内事实）
+        "feature_missing_rate_distribution": dict(qual_ns.missing_rate_distribution),
+        "feature_missing_rate_stat_basis": {
+            "coverage_n_samples": int(qual_ns.coverage_n_samples),
+            "n_samples_after_filter": int(qual_ns.samples_after_filter),
+            "n_dropped_label_nan": int(qual_ns.n_dropped_label_nan),
+            "actual_data_end": str(qual_ns.actual_data_end),
+            "n_trade_days": int(qual_ns.n_trade_days),
+            "frame": "train_daily_rate_distribution_pre_split",
+            "denominator": "label_available_rows",
+            # 两侧同域（决策）：训练帧主板过滤后 = 就绪门当日率分母域
+            "row_domain": "train_filtered_main_board",
+            "rate_scope": "per_trade_date_cross_section",
+        },
         "train_start_date": splits_ns.split_stats["train_start_date"],
         "train_end_date": splits_ns.split_stats["train_end_date"],
         "val_start_date": str(fin_ns.val_start_date),
@@ -680,13 +705,53 @@ def _resolve_feature_columns(
     )
 
 
+def _collect_missing_rate_candidates(
+    df_train: pd.DataFrame, candidate_columns: List[str]
+) -> Dict[str, dict]:
+    """统计列超集的**逐日缺失率分布摘要**（B′ 采集点，schema v2）。
+
+    统计列超集 = 门禁前候选列集 ∪ 最终注册列 ∪ 选股过滤列（override 重引入的
+    门禁移除列因此也有分布）；统计帧/分母与质量门禁完全同源（``df_train`` 门禁帧、
+    标签可用样本为分母），但统计量 = **按 trade_date 分组的逐日截面缺失率序列**
+    → p50/p90/p95/p99/max/mean/n_days（判据见 ``coverage_gate`` 分级、不阻断）。
+
+    三过滤列缺席输入帧 ⇒ ValueError（袖子候选超集被裁剪/数据缺列 = 配置漂移，
+    显式报错禁止静默缺键）。分母股票域 = 训练帧（主板过滤后），就绪门当日率
+    必须同域计算（决策：两侧主板域）。
+    """
+    from src.lazybull.v2.common.model_schema import summarize_daily_missing_rates
+
+    stat_columns = [
+        col
+        for col in dict.fromkeys([*candidate_columns, *SELECTION_FILTER_COLUMNS])
+        if col in df_train.columns
+    ]
+    missing_filters = [col for col in SELECTION_FILTER_COLUMNS if col not in stat_columns]
+    if missing_filters:
+        raise ValueError(
+            "选股过滤列不在训练帧（feature_missing_rate 采集前提被破坏：袖子候选超集"
+            f"被裁剪或数据缺列，配置漂移须归因）: {missing_filters}"
+        )
+    if not stat_columns:
+        return {}
+    # 逐日截面缺失率（days × cols）；池化计数不再入 metadata（v2 只存分布摘要）
+    daily = df_train.groupby("trade_date", sort=True)[stat_columns].apply(
+        lambda group: group.isna().mean()
+    )
+    return summarize_daily_missing_rates(
+        {col: daily[col].astype(float).tolist() for col in stat_columns}
+    )
+
+
 def _run_quality_pipeline(
     df: pd.DataFrame, cols_ns: SimpleNamespace, label_column: str, opts: _FamilyOptions
 ) -> SimpleNamespace:
-    """质量门禁流水线（§16.2-bis）：列裁剪 → 过滤/衰减 → 门禁 → override。
+    """质量门禁流水线（§16.2-bis）：列裁剪 → 过滤/衰减 → 门禁 → override → μ 采集。
 
     返回 SimpleNamespace（df_train、samples_after_filter、decay_applied_stats、
-    feature_columns、removed_high_missing、removed_all_nan、removed_constant）。
+    feature_columns、removed_high_missing、removed_all_nan、removed_constant、
+    missing_rate_candidates、coverage_n_samples、n_dropped_label_nan、
+    actual_data_end、n_trade_days）。
     P2-1/R-CODEX-03 处置：裁剪后帧不再随命名空间返回（无消费方），其引用在
     本函数返回时即释放（恢复旧实现「释放 ~4-5 GiB 内存」的释放语义）。
     """
@@ -711,6 +776,22 @@ def _run_quality_pipeline(
     feature_columns = _apply_feature_columns_override(
         df_train, feature_columns, opts.feature_columns_override
     )
+    # B′ 采集（override 之后、切分之前）：统计列超集 = 门禁前候选列 ∪ 最终列
+    # （override 重引入列含内——缺席列被补为全 NaN ⇒ 该列逐日率恒 1.0，
+    # 分布摘要随之为全 1，注册侧按分位序/值域校验拒绝）∪ 过滤列
+    missing_rate_distribution = _collect_missing_rate_candidates(
+        df_train, [*cols_ns.feature_columns, *feature_columns]
+    )
+    coverage_n_samples = int(len(df_train))
+    n_dropped_label_nan = int(samples_after_filter) - coverage_n_samples
+    actual_data_end = str(df_train["trade_date"].max())
+    n_trade_days = int(df_train["trade_date"].nunique())
+    logger.info(
+        "feature_missing_rate 采集（逐日率分布）: 分母="
+        f"{coverage_n_samples}（过滤后 {samples_after_filter} − 标签 NaN {n_dropped_label_nan}），"
+        f"统计列 {len(missing_rate_distribution)} 个，实际末端 {actual_data_end}"
+        f"（{n_trade_days} 交易日，声明窗口尾部按标签可用性截断）"
+    )
     return SimpleNamespace(
         df_train=df_train,
         samples_after_filter=samples_after_filter,
@@ -719,6 +800,11 @@ def _run_quality_pipeline(
         removed_high_missing=removed_high_missing,
         removed_all_nan=removed_all_nan,
         removed_constant=removed_constant,
+        missing_rate_distribution=missing_rate_distribution,
+        coverage_n_samples=coverage_n_samples,
+        n_dropped_label_nan=n_dropped_label_nan,
+        actual_data_end=actual_data_end,
+        n_trade_days=n_trade_days,
     )
 
 

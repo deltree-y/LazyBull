@@ -26,6 +26,8 @@ from src.lazybull.v2.common.model_schema import (
     CASHFLOW_QUALITY_SCHEMA_VERSION,
     CONSENSUS_REVISION_SCHEMA_VERSION,
     DIVIDEND_POLICY_SCHEMA_VERSION,
+    FEATURE_MISSING_RATE_SCHEMA_VERSION,
+    build_feature_missing_rate_entry,
     cashflow_quality_live_columns,
     read_cashflow_quality_schema_version,
     read_cons_revision_schema_version,
@@ -61,6 +63,7 @@ __all__ = [
     "attach_cashflow_quality_train_params",
     "attach_cons_revision_schema_version",
     "attach_dividend_train_params",
+    "attach_feature_missing_rate_train_params",
     "read_cashflow_quality_schema_version",
     "read_cons_revision_schema_version",
     "read_dividend_policy_schema_version",
@@ -337,4 +340,43 @@ def attach_dividend_train_params(train_params: dict, enable_flag: bool) -> dict:
     """
     if enable_flag:
         train_params["dividend_policy_schema_version"] = DIVIDEND_POLICY_SCHEMA_VERSION
+    return train_params
+
+
+def attach_feature_missing_rate_train_params(
+    train_params: dict,
+    data_stats: Optional[dict],
+    feature_columns: List[str],
+    *,
+    train_start: str,
+    train_end: str,
+) -> dict:
+    """注册段 additive 写入 ``feature_missing_rate`` 三键（B 方案两条注册路径共用）。
+
+    v2 trainer（``_register_fold``）与 v2 deploy（``_assemble_deploy_full_params``
+    调用侧）共用本函数；键集**精确** = 最终注册列 ∪ ``SELECTION_FILTER_COLUMNS``
+    （投影与值域校验唯一来源 = ``v2.common.model_schema.build_feature_missing_rate_entry``，
+    违例 ⇒ ValueError，禁止注册无 coverage 的模型）；统计窗口 = 注册外层窗口
+    （``train_start``~``train_end``），统计基（分母/实际末端/标签截断）来自
+    ``prepare`` 的 ``data_stats``。``data_stats`` 缺采集键 ⇒ ValueError
+    （fail-closed：旧调用形态/异常路径，不得静默注册无 coverage 模型）。
+    """
+    stats = dict(data_stats or {})
+    candidate = stats.get("feature_missing_rate_distribution")
+    basis = stats.get("feature_missing_rate_stat_basis")
+    if not isinstance(candidate, dict) or not isinstance(basis, dict):
+        raise ValueError(
+            "data_stats 缺 feature_missing_rate 采集键（feature_missing_rate_distribution / "
+            "_stat_basis）——注册段拒绝无分布基线的模型（fail-closed；请检查训练侧"
+            " prepare 采集链路或改走补录工具）"
+        )
+    projected = build_feature_missing_rate_entry(candidate, list(feature_columns))
+    train_params["feature_missing_rate_schema_version"] = FEATURE_MISSING_RATE_SCHEMA_VERSION
+    train_params["feature_missing_rate"] = projected
+    train_params["feature_missing_rate_stat"] = {
+        **basis,
+        "window": [str(train_start), str(train_end)],
+        "window_source": "registration",
+        "source": "train_time",
+    }
     return train_params

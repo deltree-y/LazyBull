@@ -47,16 +47,29 @@ D4 量化就绪门口径（T2 定义并锁定）
    (b) derived 列必须同时有族声明与 ``derived_producers`` 中**完整列名对应的生产者**，
    族名/前缀声明不再构成来源；生产者在就绪判定前执行，最终输入缺列或全 NaN 仍失败。
    sentinel 形态列按普通 store 列处理：未登记 ⇒ 未覆盖、直接失败。
-4. **每列当日缺失率阈值**：panel 类列（模型 panel 列 + 选股过滤列）当日截面
-   NaN 占比 ≤ ``COLUMN_MISSING_RATE_MAX``\\ =0.6（模块常量，构造可覆盖）。
-   期望来自 store 的列未出现在组装结果 ⇒ 计入 ``uncovered_columns`` 且失败
-   （``uncovered_columns`` = 第 3 条未覆盖列 ∪ 本条未出现列 ∪ 未登记过滤列
-   的排序并集）。当日截面为空时逐列检查跳过（缺口已由第 1 条登记，不重复
-   刷屏）。
-   **例外（M-P4-1 裁决 C，2026-10-29）**：``SPARSE_TOLERATED_COLUMNS``（现役 =
-   ``cons_target_upside``）为已知稀疏列——其当日缺失率超阈**不构成缺口**，但仍须
-   实际在场且不得全空（100% 仍失败）；超阈事实按 WARNING 落日志、缺失率仍写入报告
-   供留证。依据与后续 B 方案见该常量注释。
+4. **每列当日缺失率分级判据（B′，2026-10-31 用户裁决；三档均不阻断）**：
+   panel 类列（模型 panel 列 + 选股过滤列）当日截面 NaN 占比与该列**训练期
+   逐日缺失率分布**（``train_params["feature_missing_rate"]``，schema v2：
+   p50/p90/p95/p99/max/mean/n_days）比较：≤p95 ⇒ pass；p95<率≤p99 ⇒ warning；
+   率>p99 ⇒ error；率=100% ⇒ error（``all_nan``）。**三档均只记日志与结构化
+   证据，不阻断预测**（旧链语义：高缺失告警、模型原生处理 NaN）。
+   基线默认取训练期静态分布；``rate_history`` 可用时优先用**近 60 日滚动分位**
+   （最少 20 日）在线自校准，``baseline_source`` 留证。
+   唯一阻断形态 = **聚合升级**：当日 error 列数 ≥ max(8, ceil(10%×判定列数))
+   ⇒ 登记缺口（防大面积源故障下照常交易）。
+   **同域分母**：当日率与训练分布均按主板域计算（``coverage_domain_codes``；
+   缺失 ⇒ 记 ``coverage_domain_missing`` error 且不判定，禁止跨域比较）。
+   metadata 缺键/版本不符/非法（``metadata_missing`` / ``metadata_schema_
+   unsupported`` / ``metadata_invalid``）与判定列缺键（``coverage_key_missing``）、
+   列不在组装结果（``uncovered``）同样降为 error 日志，不阻断；禁止静默回退
+   任何全局阈值或列白名单（M-P4-1 裁决 C 的 ``SPARSE_TOLERATED_COLUMNS``
+   已随 B 方案退场）。运行时只要求判定列集 ⊆ 键集，多余键 = 合法超集留证。
+   ``uncovered_columns`` 口径不变（第 3 条未覆盖列 ∪ 本条未出现列 ∪ 未登记
+   过滤列的排序并集）。当日截面为空时逐列检查跳过（缺口已由第 1 条登记）。
+   多成员（EnsembleSignal A/B）经 ``coverage_members`` 逐成员按**该成员自己的
+   判定列集**（成员 manifest/来源分类 − 该成员 freshness 闭包）判定，同列不同
+   基线各自留证不取平均/宽松侧；结构化逐列判定（rate/p95/p99/baseline_source/
+   severity/error_code/成员）写入 ``ReadinessReport`` 供证据产物消费。
    **追加（F4）**：事件 freshness 闭包列的就绪判定归属本段，不参与上述缺失率阈值。
    策略缺省 = state_keep_event_decay；最终合入后的当日帧至少一行非 NaN 才算在场，
    panel 与 cs_infer 均无有效值 ⇒ 未就绪。当日 panel 截面为空时跳过（门 1 已登记）。
@@ -85,7 +98,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AbstractSet, Any, Callable, Mapping, Sequence
 
 import pandas as pd
@@ -98,7 +111,22 @@ from src.lazybull.v2.common.freshness import (
     EVENT_FRESHNESS_TO_VALUE_COLUMNS,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
 )
+from src.lazybull.v2.common.model_schema import (
+    FEATURE_MISSING_RATE_ALERT_QUANTILE,
+    FEATURE_MISSING_RATE_ERROR_QUANTILE,
+    SELECTION_FILTER_COLUMNS,
+    read_drift_exempt,
+)
 from src.lazybull.v2.common.types import FeatureQuery, TradeDate
+from src.lazybull.v2.hosts.paper.coverage_gate import (  # noqa: F401 —— re-export
+    COVERAGE_ERR_ALL_NAN,
+    COVERAGE_ERR_KEY_MISSING,
+    COVERAGE_ERR_RATE_EXCEEDED,
+    COVERAGE_ERR_UNCOVERED,
+    CoverageMember,
+    CoverageOutcome,
+    evaluate_coverage,
+)
 from src.lazybull.v2.store.data_store import PanelDataStore
 
 #: 精确列级生产者：输入当日日期与当前特征帧，返回与该帧索引完全对齐的 Series；
@@ -106,12 +134,16 @@ from src.lazybull.v2.store.data_store import PanelDataStore
 DerivedProducer = Callable[[str, pd.DataFrame], pd.Series | None]
 
 __all__ = [
+    "CoverageMember",
     "DailyAssembly",
     "ReadinessReport",
     "DerivedProducer",
     "assemble_daily_data",
     "compare_cs_infer_vs_panel",
-    "COLUMN_MISSING_RATE_MAX",
+    "COVERAGE_ERR_ALL_NAN",
+    "COVERAGE_ERR_KEY_MISSING",
+    "COVERAGE_ERR_RATE_EXCEEDED",
+    "COVERAGE_ERR_UNCOVERED",
     "COLUMN_SOURCE_DERIVED",
     "COLUMN_SOURCE_PANEL",
     "COLUMN_SOURCE_SENTINEL",
@@ -126,7 +158,6 @@ __all__ = [
     "ROW_BAND_UPPER",
     "ROW_BAND_WINDOW",
     "SELECTION_FILTER_COLUMNS",
-    "SPARSE_TOLERATED_COLUMNS",
 ]
 
 # ---------------------------------------------------------------------------
@@ -143,28 +174,17 @@ ROW_BAND_WINDOW = 20
 ROW_BAND_LOWER = 0.9
 #: 行数带上界系数（当日行数 <= 中位数 × 1.1）
 ROW_BAND_UPPER = 1.1
-#: 单列当日截面 NaN 占比阈值（缺失率 <= 0.6 放行；构造可覆盖）
-COLUMN_MISSING_RATE_MAX = 0.6
 
-#: 已知稀疏列白名单（M-P4-1 用户裁决 2026-10-29 = 方案 C「登记放行」）：
-#: 命中列的当日缺失率超 ``COLUMN_MISSING_RATE_MAX`` **不构成缺口**，但仍要求
-#: **实际在场**（未出现在组装结果 ⇒ 失败）且 **不得全空**（缺失率 100% ⇒ 仍失败，
-#: 对齐旧链 ``signals/ml_signal.py`` 的「全空硬拒」）。
-#: 登记依据（实测，可复算）：
-#: - 训练入口 ``ml/train_core/prepare.py::max_feature_missing_ratio=0.6`` 的口径是
-#:   **整训练帧池化**缺失率——``cons_target_upside`` 池化 57.2%(中位)~57.7%(均值)
-#:   < 0.6 ⇒ 保留进 v24022 的 154 列，说明该列「高缺失」是训练期既有常态；
-#: - 训练窗 20200106~20260105 内 **19.7% 的交易日该列即已 >60%**，模型照常训练；
-#: - 旧链推理侧只对「全空」硬拒，``>50%`` 仅 WARNING（``_MISSING_RATE_WARN_THRESHOLD``），
-#:   从不因此放弃该列 ⇒ 此前逐日截面 0.6 判据属「就绪门误判」（§15.6 系统原因词表），
-#:   直接导致 v2 宿主每个交易日都不出信号、门 5/门 6 不可执行。
-#: 后续义务：P4 实施规划 §23.8 方案 B（按列「训练期覆盖率 + 容差」替换本白名单，
-#: 需训练侧把逐列 coverage 写入模型 metadata）；**本集合每次扩列均须回契约登记**。
-SPARSE_TOLERATED_COLUMNS: frozenset[str] = frozenset({"cons_target_upside"})
+#: 逐列容差 τ 与门 4 判定侧错误码、CoverageMember：判据本体唯一来源 =
+#: ``v2/hosts/paper/coverage_gate.py``（B 方案拆分，复杂度契约 §4.4）；顶部
+#: import re-export，既有导入面不变。
 
 #: 选股过滤列（MLSignal 过滤消费、不在模型 feature_columns 内；必须显式并上
-#: 查询列集，否则过滤静默跳过——已核实陷阱，见模块 docstring）
-SELECTION_FILTER_COLUMNS = ("amount_ma20", "total_mv", "sw_l1_code")
+#: 查询列集，否则过滤静默跳过——已核实陷阱，见模块 docstring）。
+#: 单一来源 = ``v2/common/model_schema.py``（B 方案上移中立层：训练侧采集
+#: 过滤列 μ 与本宿主判据共用同一常量；train 包不 import hosts 分层契约）；
+#: 此处兼容 re-export，既有导入面不变。
+SELECTION_FILTER_COLUMNS = SELECTION_FILTER_COLUMNS  # noqa: PLW0127 —— 兼容 re-export（语义见上）
 
 #: 行情列裁剪口径（与 hosts/backtest/replay.py::_load_replay_price_data 同款；
 #: 按存在列交集裁剪，缺列不报错——close 缺席由就绪门第 6 条兜住）
@@ -248,19 +268,43 @@ def _derived_family_of(column: str) -> str | None:
 # 数据包与就绪报告
 # ---------------------------------------------------------------------------
 
+# CoverageMember 定义唯一来源 = coverage_gate.py（顶部 import re-export）
+
 
 @dataclass
 class ReadinessReport:
-    """量化就绪门报告（D4；逐日登记，宿主据此决定推迟 / 告警）。"""
+    """量化就绪门报告（D4；逐日登记，宿主据此决定推迟 / 告警）。
+
+    B′ 扩展字段（结构化证据，三档均不阻断）：``coverage_verdicts``（逐列
+    {member, column, rate, p95, p99, baseline_source, baseline_days, severity,
+    error_code}）、``coverage_alerts``（warning/error 明细，含 message）、
+    ``coverage_members``（成员 echo）、``coverage_extra_keys``（合法超集留证）、
+    ``coverage_blocked``（聚合升级才阻断）、``rate_denominator`` /
+    ``n_rows_used`` / ``n_rows_total``（同域分母留证）、``coverage_quantiles``。
+    """
 
     date: str  # YYYYMMDD
     ok: bool  # 六条判定全过
-    gaps: list[str]  # 未就绪原因清单（按判定条序）
+    gaps: list[str]  # 未就绪原因清单（按判定条序；门 4 仅聚合升级入此）
     row_count: int  # 当日 panel 行数（缺日 = 0）
     row_count_band: tuple[float, float]  # 行数允许区间（基准缺失 = (nan, nan)）
-    column_missing_rates: dict[str, float]  # panel 类列当日 NaN 占比
+    column_missing_rates: dict[str, float]  # panel 类列当日 NaN 占比（域内）
     uncovered_columns: list[str]  # 未覆盖列并集（排序；口径见模块 docstring 第 3/4 条）
     derived_family_note: str  # 派生族一致性核对登记
+    coverage_verdicts: list[dict[str, Any]] = field(default_factory=list)
+    coverage_alerts: list[dict[str, Any]] = field(default_factory=list)
+    coverage_members: list[dict[str, Any]] = field(default_factory=list)
+    coverage_extra_keys: list[str] = field(default_factory=list)
+    coverage_blocked: bool = False
+    coverage_error_threshold: int = 0
+    coverage_blocked_reason: str = ""
+    rate_denominator: str = ""
+    n_rows_used: int = 0
+    n_rows_total: int = 0
+    coverage_quantiles: tuple[float, float] = (
+        FEATURE_MISSING_RATE_ALERT_QUANTILE,
+        FEATURE_MISSING_RATE_ERROR_QUANTILE,
+    )
 
 
 @dataclass
@@ -603,50 +647,42 @@ def _check_column_sources(
     return gaps, sorted(uncovered)
 
 
+def _member_rate_columns(member: CoverageMember, registered: AbstractSet[str]) -> list[str]:
+    """成员判定列集 ``member_rate_columns``：该成员 manifest/来源分类列集
+    （panel 类 + 已登记过滤列）− 该成员 freshness 闭包。
+
+    禁止用合并列集放大依赖（成员自己的实际列集，同 freshness 先例）。
+    """
+    classification = _classify_columns(member.columns, registered)
+    freshness = set(_required_freshness_columns(member.columns, member.train_params))
+    columns = [col for col, source in classification.items() if source == COLUMN_SOURCE_PANEL]
+    columns.extend(col for col in SELECTION_FILTER_COLUMNS if col in registered)
+    return [col for col in dict.fromkeys(columns) if col not in freshness]
+
+
 def _check_missing_rates(
     day_frame: pd.DataFrame | None,
-    expected_store_columns: Sequence[str],
-    max_rate: float,
-    tolerated: AbstractSet[str] = SPARSE_TOLERATED_COLUMNS,
-) -> tuple[dict[str, float], list[str], list[str]]:
-    """第 4 条：panel 类列当日缺失率阈值 + 期望列在场校验。
+    members: Sequence[CoverageMember],
+    registered: AbstractSet[str],
+    domain_codes: AbstractSet[str] | None,
+    rate_history: Mapping[str, Mapping[str, float]] | None,
+    date: str | None = None,
+) -> CoverageOutcome:
+    """第 4 条（B′）：逐列缺失率**分级判定**（p95/p99，三档均不阻断）。
 
-    返回 (各列缺失率, 未出现列清单, 缺口清单)；当日截面为空 ⇒ 逐列检查跳过
-    （缺口已由第 1 条登记，不重复刷屏）。
-
-    ``tolerated``（已知稀疏列，见 ``SPARSE_TOLERATED_COLUMNS``）：缺失率超阈
-    不构成缺口，但**全空（100%）仍算缺口**——对齐旧链「全空硬拒、高缺失仅告警」
-    的两级语义；缺失率一律写入返回值供证据留证，超阈事实另落 WARNING。
+    判据本体唯一来源 = ``coverage_gate.evaluate_coverage``（复杂度契约 §4.4 拆分）；
+    本函数只负责按成员计算 ``member_rate_columns``（manifest/来源分类 − 该成员
+    freshness 闭包）、把当日帧按**域**限定（两侧同域：训练期主板过滤后）并传入
+    滚动历史。缺口仅来自聚合升级（error 列数超阈值）；单列告警进 ``alerts``。
     """
-    rates: dict[str, float] = {}
-    missing: list[str] = []
-    gaps: list[str] = []
-    if day_frame is None or day_frame.empty:
-        gaps.append("当日 panel 截面为空，逐列缺失率检查跳过（见第 1 条分区存在性缺口）")
-        return rates, missing, gaps
-    over: list[str] = []
-    tolerated_over: list[str] = []
-    for col in expected_store_columns:
-        if col not in day_frame.columns:
-            missing.append(col)
-            continue
-        rate = float(day_frame[col].isna().mean())
-        rates[col] = rate
-        if rate > max_rate:
-            if col in tolerated and rate < 1.0:
-                tolerated_over.append(f"{col}={rate:.1%}")
-            else:
-                over.append(f"{col}={rate:.1%}")
-    if tolerated_over:
-        logger.warning(
-            f"已知稀疏列缺失率超阈但不构成缺口（{len(tolerated_over)} 列，"
-            f"M-P4-1 裁决 C 登记放行；>={max_rate:.0%} 且 <100%）: {tolerated_over}"
-        )
-    if missing:
-        gaps.append(f"期望来自 store 的列未出现在当日组装结果: {sorted(missing)}")
-    if over:
-        gaps.append(f"当日列缺失率超阈（>{max_rate:.0%}）: {over}")
-    return rates, missing, gaps
+    member_faces = [(member, _member_rate_columns(member, registered)) for member in members]
+    return evaluate_coverage(
+        day_frame,
+        member_faces,
+        domain_codes=domain_codes,
+        rate_history=rate_history,
+        current_date=date,
+    )
 
 
 def _apply_derived_producers(
@@ -778,19 +814,26 @@ def _evaluate_readiness(
     day_frame: pd.DataFrame | None,
     day_counts: Mapping[str, int],
     classification: Mapping[str, str],
-    expected_store_columns: Sequence[str],
     price_data: pd.DataFrame,
     train_params: Mapping[str, Any] | None,
     derived_families_provided: Sequence[str],
-    column_missing_rate_max: float,
+    feature_columns: Sequence[str],
+    registered: AbstractSet[str],
     pre_gaps: Sequence[str],
     pre_uncovered: Sequence[str],
     freshness_required: Sequence[str] = (),
     cs_infer_columns: AbstractSet[str] = frozenset(),
     derived_producer_columns: AbstractSet[str] = frozenset(),
     sell_price_type: str | None = None,
+    coverage_members: Sequence[CoverageMember] | None = None,
+    coverage_domain_codes: AbstractSet[str] | None = None,
+    coverage_rate_history: Mapping[str, Mapping[str, float]] | None = None,
 ) -> ReadinessReport:
-    """按条序组合六条判定（含第 4 条 F4 freshness 追加段），汇总为 ReadinessReport。"""
+    """按条序组合六条判定（含第 4 条 F4 freshness 追加段），汇总为 ReadinessReport。
+
+    门 4（B′）：``coverage_members`` 缺省 ⇒ 单一成员（feature_columns +
+    train_params）；逐成员分级判定（p95/p99，三档均不阻断；仅聚合升级阻断），
+    当日率与训练期分布**同域**（``coverage_domain_codes``，缺省不判定并告警）。"""
     gaps = list(pre_gaps)
     row_count = 0 if day_frame is None else len(day_frame)
     gaps.extend(_check_day_partition(day_frame, date))  # 1
@@ -800,14 +843,30 @@ def _evaluate_readiness(
         classification, derived_families_provided, derived_producer_columns
     )
     gaps.extend(source_gaps)
-    freshness_set = set(freshness_required)
     # freshness 闭包列的就绪判定唯一归属 4+ 追加段（在场语义），不参与门 4
     # 缺失率阈值判定（panel 无值 ⇒ reindex 全 NaN，缺失率判定会遮蔽回退侧口径）
-    rate_columns = [col for col in expected_store_columns if col not in freshness_set]
-    rates, missing_columns, rate_gaps = _check_missing_rates(  # 4
-        day_frame, rate_columns, column_missing_rate_max
+    members = list(coverage_members or [])
+    if not members:
+        params = dict(train_params or {})
+        members = [
+            CoverageMember(
+                member_id="default",
+                columns=list(feature_columns),
+                train_params=params,
+                drift_exempt=read_drift_exempt(params),
+            )
+        ]
+    coverage = _check_missing_rates(  # 4（B′：分级告警，仅聚合升级阻断）
+        day_frame,
+        members,
+        registered,
+        coverage_domain_codes,
+        coverage_rate_history,
+        date,
     )
-    gaps.extend(rate_gaps)
+    rates = coverage.rates
+    missing_columns = coverage.missing_columns
+    gaps.extend(coverage.gaps)
     freshness_missing, freshness_gaps = _check_freshness_columns(  # 4+（F4）
         freshness_required, day_frame, cs_infer_columns
     )
@@ -837,19 +896,38 @@ def _evaluate_readiness(
         column_missing_rates=rates,
         uncovered_columns=uncovered,
         derived_family_note=note,
+        coverage_verdicts=coverage.verdicts,
+        coverage_alerts=coverage.alerts,
+        coverage_members=coverage.members_echo,
+        coverage_extra_keys=coverage.extra_keys,
+        coverage_blocked=coverage.blocked,
+        coverage_error_threshold=coverage.error_threshold,
+        coverage_blocked_reason=coverage.blocked_reason,
+        rate_denominator=coverage.rate_denominator,
+        n_rows_used=coverage.n_rows_used,
+        n_rows_total=coverage.n_rows_total,
     )
 
 
 def _log_readiness(report: ReadinessReport) -> None:
-    """就绪结论日志留痕（推迟生成与告警的处置归宿主）。"""
+    """就绪结论日志留痕（B′：通过日也打印分级告警摘要）。"""
+    alert_note = ""
+    errors = [a for a in report.coverage_alerts if a.get("severity") == "error"]
+    warnings = [a for a in report.coverage_alerts if a.get("severity") == "warning"]
+    if errors or warnings:
+        alert_note = (
+            f"；缺失率分级 error {len(errors)} 列 / warning {len(warnings)} 列"
+            f"（域内 {report.n_rows_used}/{report.n_rows_total} 行）"
+        )
     if report.ok:
         logger.info(
             f"纸面宿主就绪门通过: {report.date}（当日行数 {report.row_count}"
-            f" ∈ [{report.row_count_band[0]:.1f}, {report.row_count_band[1]:.1f}]）"
+            f" ∈ [{report.row_count_band[0]:.1f}, {report.row_count_band[1]:.1f}]{alert_note}）"
         )
         return
     logger.warning(
         f"纸面宿主就绪门未通过: {report.date}，缺口 {len(report.gaps)} 项: {report.gaps}"
+        f"{alert_note}"
     )
 
 
@@ -872,7 +950,9 @@ def assemble_daily_data(
     feature_lookback_days: int = FEATURE_LOOKBACK_DAYS,
     price_lookback_days: int = PRICE_LOOKBACK_DAYS,
     row_band_window: int = ROW_BAND_WINDOW,
-    column_missing_rate_max: float = COLUMN_MISSING_RATE_MAX,
+    coverage_members: Sequence[CoverageMember] | None = None,
+    coverage_domain_codes: AbstractSet[str] | None = None,
+    coverage_rate_history: Mapping[str, Mapping[str, float]] | None = None,
 ) -> DailyAssembly:
     """组装当日驱动数据并执行量化就绪门（D4 六条；口径见模块 docstring）。
 
@@ -888,7 +968,9 @@ def assemble_daily_data(
         feature_columns: 模型 metadata 的实际特征列（就绪门第 3/4 条判定基准；
             查询时并上选股过滤列 ``SELECTION_FILTER_COLUMNS``）。
         train_params: 模型 metadata 的 train_params（派生族核对与单模型 freshness 判定；
-            freshness_strategy 缺省 = state_keep_event_decay）。
+            freshness_strategy 缺省 = state_keep_event_decay）。门 4（B 方案）单模型
+            缺省形态下同时作为单一成员的 coverage 来源（缺 ``feature_missing_rate``
+            ⇒ fail-closed，不回退全局阈值）。
         freshness_members: 集成各子模型 (实际列集, train_params)，逐臂计算后取并集。
         derived_families_provided: 宿主声明提供的运行时派生族（合法值见
             ``DERIVED_FAMILY_SWITCHES``；未知值 ⇒ ValueError）。
@@ -899,8 +981,14 @@ def assemble_daily_data(
         feature_lookback_days: 特征窗口交易日数（默认 ``FEATURE_LOOKBACK_DAYS``）。
         price_lookback_days: 行情窗口交易日数（默认 ``PRICE_LOOKBACK_DAYS``）。
         row_band_window: 行数带基准窗口（默认 ``ROW_BAND_WINDOW``）。
-        column_missing_rate_max: 单列当日缺失率阈值（默认
-            ``COLUMN_MISSING_RATE_MAX``，构造可覆盖）。
+        coverage_members: 门 4 逐成员判定面（EnsembleSignal A/B；factory 派生，
+            含成员标识/实际列集/各自 train_params）。缺省 None ⇒ 单一成员
+            （feature_columns + train_params）。
+        coverage_domain_codes: 判定域股票集合（两侧同域：训练期主板过滤后）。
+            缺省 None ⇒ 记 ``coverage_domain_missing`` error 且**不判定**缺失率
+            （禁止跨域比较；其余判定条不受影响）。
+        coverage_rate_history: 近 N 日逐日缺失率历史（``{date: {col: rate}}``），
+            提供时优先用滚动分位在线自校准（最少 20 日）。
 
     Returns:
         DailyAssembly；未就绪时 ``readiness.ok=False`` 且 gaps 全列——
@@ -955,17 +1043,20 @@ def assemble_daily_data(
         all_days.get(date_str),
         day_counts,
         classification,
-        query_columns,
         price_data,
         train_params,
         derived_families_provided,
-        column_missing_rate_max,
+        feature_columns,
+        registered,
         pre_gaps,
         filter_uncovered,
         freshness_required,
         cs_infer_columns,
         set(producers),
         sell_price_type,
+        coverage_members=coverage_members,
+        coverage_domain_codes=coverage_domain_codes,
+        coverage_rate_history=coverage_rate_history,
     )
     _log_readiness(readiness)
     return DailyAssembly(

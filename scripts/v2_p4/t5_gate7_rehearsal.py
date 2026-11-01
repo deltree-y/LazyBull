@@ -37,6 +37,10 @@ from src.lazybull.data import DataLoader, Storage  # noqa: E402
 from src.lazybull.paper import PaperStorage  # noqa: E402
 from src.lazybull.paper.models import AccountState  # noqa: E402
 from src.lazybull.v2.common.cost import CostModel  # noqa: E402
+from src.lazybull.v2.common.model_schema import (  # noqa: E402
+    FEATURE_MISSING_RATE_SCHEMA_VERSION,
+    SELECTION_FILTER_COLUMNS,
+)
 from src.lazybull.v2.common.types import TradeDate  # noqa: E402
 from src.lazybull.v2.hosts.paper.config_adapter import (  # noqa: E402
     to_engine_kwargs,
@@ -193,7 +197,27 @@ def _make_host(target: Path, flat: Dict[str, Any], data_root: Path) -> PaperHost
         trading_calendar=[pd.Timestamp(day) for day in _DAYS],
         engine_kwargs=to_engine_kwargs(flat, config),
         feature_columns=["ret_1", "ret_5", "bp"],
-        train_params={},
+        # B 方案（P4 后维护项）：就绪门门 4 逐列判据需要合法 coverage——
+        # 合成数据 host 注入 μ=0（合成帧全稠密）；生产 host 经 factory 从模型
+        # metadata 派生，不经本构造
+        train_params={
+            "feature_missing_rate_schema_version": FEATURE_MISSING_RATE_SCHEMA_VERSION,
+            # B′ v2 分布摘要（合成帧全稠密 ⇒ p95/p99=0；n_days 短窗 ⇒ p99 降级标记）
+            "feature_missing_rate": {
+                col: {
+                    "mean": 0.0,
+                    "p50": 0.0,
+                    "p90": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                    "max": 0.0,
+                    "n_days": 60,
+                    "p99_unstable": True,
+                }
+                for col in ("ret_1", "ret_5", "bp", *SELECTION_FILTER_COLUMNS)
+            },
+            "feature_missing_rate_stat": {"row_domain": "train_filtered_main_board"},
+        },
         data_loader=DataLoader(storage=storage, verbose=False),
         schedule_mode="live",
         verbose=False,

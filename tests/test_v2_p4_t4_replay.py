@@ -39,6 +39,7 @@ from src.lazybull.v2.evidence.runs_loader import load_runs_batch
 from src.lazybull.v2.evidence.runs_schema import HOST_MODES, validate_host_mode
 from src.lazybull.v2.hosts.paper.config_adapter import to_engine_kwargs, to_trading_config
 from src.lazybull.v2.hosts.paper.host import PaperHost
+from tests.test_v2_p4_t2_host import _coverage_train_params
 from src.lazybull.v2.hosts.paper.replay import (
     PaperReplayError,
     ReplayRowDomainError,
@@ -158,7 +159,7 @@ def _make_host(tmp_path, run_root, *, replay=True, available_through=None):
         trading_calendar=list(_CALENDAR),
         engine_kwargs=to_engine_kwargs(_FLAT, config),
         feature_columns=["ret_1", "ret_5", "bp"],
-        train_params={},
+        train_params=_coverage_train_params(["ret_1", "ret_5", "bp"]),
         data_loader=DataLoader(storage=storage, verbose=False),
         schedule_mode="replay" if replay else "live",
         replay_calendar=list(_CALENDAR) if replay else None,
@@ -219,9 +220,7 @@ def test_live_t1_failure_creates_t0_completion_and_t2_execution(tmp_path):
     assert all("补位槽位-信号生成" in str(reason) for reason in buys["reason"])
 
     host.run_t1(_CALENDAR[2])
-    filled = [
-        trade for trade in host.last_day_result.fills if trade.get("action") == "buy"
-    ]
+    filled = [trade for trade in host.last_day_result.fills if trade.get("action") == "buy"]
     assert filled
     assert {str(trade["ts_code"]) for trade in filled} == set(buys["ts_code"].astype(str))
 
@@ -232,8 +231,7 @@ def test_live_t2_price_drift_keeps_instruction_shares(tmp_path):
     host.run_t0(_CALENDAR[0])
     frame = host.store.load_instructions_frame(_CALENDAR_STRS[1])
     expected = {
-        str(row.ts_code): int(row.shares)
-        for row in frame[frame["action"] == "buy"].itertuples()
+        str(row.ts_code): int(row.shares) for row in frame[frame["action"] == "buy"].itertuples()
     }
     path = tmp_path / "data" / "clean" / "daily" / "2026-07-06.parquet"
     prices = pd.read_parquet(path)

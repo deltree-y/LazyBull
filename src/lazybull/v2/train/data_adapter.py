@@ -39,6 +39,7 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.v2.common.model_schema import SELECTION_FILTER_COLUMNS
 from src.lazybull.v2.common.types import FeatureQuery, TradeDate, TSCode
 from src.lazybull.v2.store.column_groups import LABEL_TABLES, LABEL_VALUE_COLUMNS
 from src.lazybull.v2.store.data_store import PanelDataStore
@@ -418,9 +419,16 @@ def _universe_codes(universe: tuple[str, ...] | None) -> list[TSCode] | None:
 
 
 def _join_features_labels(
-    features: pd.DataFrame, labels: pd.DataFrame, config: AdapterConfig
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    config: AdapterConfig,
+    ordered_columns: Sequence[str],
 ) -> pd.DataFrame:
-    """panel core 左表一对一 join 六标签列；意外增删键 fail-fast（§6.2-1）。"""
+    """panel core 左表一对一 join 六标签列；意外增删键 fail-fast（§6.2-1）。
+
+    ``ordered_columns`` = 输出特征列序（panel 模式调用方传「请求列 ∪ 选股过滤列」
+    有效列集，B 方案 μ 采集前提）。
+    """
     if features.empty:
         raise RuntimeError(
             f"panel 特征窗口 [{config.start_date}, {config.end_date}] 为空（core 分区缺失）"
@@ -435,7 +443,7 @@ def _join_features_labels(
         )
     merged = features.join(labels)
     out = merged.reset_index()
-    ordered = [*_KEY_COLUMNS, *config.feature_columns, *LABEL_VALUE_COLUMNS]
+    ordered = [*_KEY_COLUMNS, *ordered_columns, *LABEL_VALUE_COLUMNS]
     return out[ordered]
 
 
@@ -487,6 +495,17 @@ def _latest_panel_day(snapshot: Mapping[str, Any]) -> str | None:
     return max(candidates) if candidates else None
 
 
+def _effective_panel_columns(config: AdapterConfig) -> list[str]:
+    """panel 请求列并集选股过滤列（B 方案 μ 采集前提的生产侧强化）。
+
+    训练侧 ``feature_missing_rate`` 采集要求三过滤列在训练帧内；袖子候选超集
+    （现役 ``VALUE_FEATURE_COLUMNS``）已含，本并集为兜底强化（袖子 spec 变更
+    亦不破坏前提）。三列未登记 store ⇒ ``load_features`` 列登记契约报错即
+    配置漂移信号（fail-fast，不静默缺列）。
+    """
+    return list(dict.fromkeys([*config.feature_columns, *SELECTION_FILTER_COLUMNS]))
+
+
 def _load_panel_frame(
     store: PanelDataStore, config: AdapterConfig
 ) -> tuple[pd.DataFrame, tuple[dict[str, Any], ...], str, AdapterWatermarks, tuple[str, ...]]:
@@ -497,7 +516,7 @@ def _load_panel_frame(
     readiness, frames_by_day = _run_day_readiness(store, days, calendar, input_watermark)
     features = store.load_features(
         FeatureQuery(
-            columns=list(config.feature_columns),
+            columns=_effective_panel_columns(config),
             start_date=TradeDate.from_str(config.start_date),
             end_date=TradeDate.from_str(config.end_date),
             universe=_universe_codes(config.universe),
@@ -508,7 +527,7 @@ def _load_panel_frame(
     # 「join 后限定」输出逐位一致；剔除日显式登记，不静默交给训练）。
     features_df, excluded_days = _restrict_features_to_validated_days(features.df, days)
     labels = _assemble_label_columns(frames_by_day, days, config)
-    df = _join_features_labels(features_df, labels, config)
+    df = _join_features_labels(features_df, labels, config, _effective_panel_columns(config))
     df, excluded_post = _restrict_to_validated_days(df, days)
     excluded_days = tuple(sorted(set(excluded_days) | set(excluded_post)))
     watermarks = _collect_store_watermarks(store, input_watermark)
@@ -685,17 +704,18 @@ def load_training_frame(
     )
     if config.source_mode == SOURCE_PANEL:
         df, readiness, fingerprint, watermarks, excluded_days = _load_panel_frame(store, config)
+        effective_columns = tuple(_effective_panel_columns(config))
         logger.info(
             f"panel 训练帧就绪: [{config.start_date}, {config.end_date}] "
             f"{readiness[-1]['trade_date'] if readiness else '-'} 止 {len(readiness)} 日 / "
-            f"{len(df)} 行 / {len(config.feature_columns)} 特征列"
+            f"{len(df)} 行 / {len(effective_columns)} 特征列（含选股过滤列并集）"
         )
         return TrainingFrame(
             df=df,
             trade_days=len(readiness),
             source_mode=config.source_mode,
             label_column=config.label_column,
-            feature_columns=config.feature_columns,
+            feature_columns=effective_columns,
             watermarks=watermarks,
             day_readiness=readiness,
             manifest_fingerprint=fingerprint,

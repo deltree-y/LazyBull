@@ -541,7 +541,14 @@ class TestManifestRegistrationDrift:
 
         store = PanelDataStore(root)
         store.manifest.register_columns(
-            {col: {"group": "core", "source": "test"} for col in _FEATURE_COLS25}
+            {
+                **{col: {"group": "core", "source": "test"} for col in _FEATURE_COLS25},
+                # B 方案：选股过滤列登记（v2 prepare μ 采集前提）
+                **{
+                    col: {"group": "core", "source": "test"}
+                    for col in ("amount_ma20", "total_mv", "sw_l1_code")
+                },
+            }
         )
         store.manifest.save()
         from src.lazybull.v2.store.column_groups import PANEL_GROUPS
@@ -556,6 +563,10 @@ class TestManifestRegistrationDrift:
                     round(day_idx * 0.01 + code_idx * 0.001 + col_idx * 0.0001, 6)
                     for code_idx in range(len(_CODES25))
                 ]
+            # B 方案：选股过滤列（μ 采集前提）
+            core_payload["amount_ma20"] = [1.0e4] * len(_CODES25)
+            core_payload["total_mv"] = [1.0e8] * len(_CODES25)
+            core_payload["sw_l1_code"] = ["801780"] * len(_CODES25)
             for group in PANEL_GROUPS:
                 if group == "core":
                     payload = core_payload
@@ -833,6 +844,9 @@ class TestModelConfigDeepFreeze:
         trainer._registry = registry
 
         def _reg(spec):
+            # B 方案：data_stats 通道须携带 coverage 采集键（fail-closed 前提）
+            from src.lazybull.v2.common.model_schema import SELECTION_FILTER_COLUMNS
+
             trainer._register_fold(
                 config=ModelConfig(
                     model_family="stock_selection",
@@ -853,6 +867,31 @@ class TestModelConfigDeepFreeze:
                 X_val_len=1,
                 ensemble_offsets=0,
                 ensemble_seeds=[42],
+                data_stats={
+                    "feature_missing_rate_distribution": {
+                        col: {
+                            "mean": 0.0,
+                            "p50": 0.0,
+                            "p90": 0.0,
+                            "p95": 0.0,
+                            "p99": 0.0,
+                            "max": 0.0,
+                            "n_days": 10,
+                            "p99_unstable": True,
+                        }
+                        for col in ("a", *SELECTION_FILTER_COLUMNS)
+                    },
+                    "feature_missing_rate_stat_basis": {
+                        "coverage_n_samples": 1,
+                        "n_samples_after_filter": 1,
+                        "n_dropped_label_nan": 0,
+                        "actual_data_end": "20240809",
+                        "n_trade_days": 1,
+                        "frame": "train_pooled_pre_split",
+                        "denominator": "label_available_rows",
+                        "row_domain": "train_filtered",
+                    },
+                },
             )
 
         with pytest.raises(ValueError, match="缺版本号"):
