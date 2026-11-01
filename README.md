@@ -389,7 +389,7 @@ python scripts/paper_trade.py real --ret-profit-only
 - 成本计算（佣金、印花税、滑点）
 - **实时行情查看**（`real` 子命令，基于 Tushare `realtime_quote` 接口）
 
-v2 P4 纸面宿主已提供显式引擎选择，**缺省及当前生产仍为 legacy**。下列 v2 示例仅适用于隔离环境或已正式切换的环境；生产 legacy 下用其他子命令覆盖 v2 会被拒绝：
+v2 P4 纸面宿主已提供显式引擎选择。**生产已于 2026-10-31 由 legacy 切换为 v2**（`data/paper/config.yaml` 的 `extra.engine: v2`；切换证据 `data/frozen_reference/v2_p4/t5_release_final_20261031/switch_result.json`，备份根 `data/paper_backup_pre_v2_20261031`，旧链保活根 `data/paper_legacy_pre_switch_20261031`）。键缺失时的缺省值仍为 legacy（供隔离/回滚环境）；legacy 接回须经 D11 三步程序与 `state/rollback_manifest.json` 双向校验，禁止陈旧账户直连。下列示例用于隔离环境或显式覆盖：
 
 ```bash
 python scripts/paper_trade.py run --trade-date 20261030 --engine legacy
@@ -398,7 +398,7 @@ python scripts/paper_trade.py model-info --engine v2
 python scripts/paper_trade.py adjust --engine v2 cash --trade-date 20261030 --set 500000
 ```
 
-`v2` 的 adjust 修改权威 `engine_state.bin` 并重建旧布局投影，不直接改 `account.json`；从 v2 回到 legacy 必须经过 D11 回滚清单与后续运行标记校验。树莓派/SMB 只读仅发布完整代。真实 `config --engine v2` 还须 `--switch-evidence` 指向门 1/5/6/7 全过的收口证据，并在当时显式给出 `--authorize-production-switch`。
+`v2` 的 adjust 修改权威 `engine_state.bin` 并重建旧布局投影，不直接改 `account.json`；从 v2 回到 legacy 必须经过 D11 回滚清单与后续运行标记校验。树莓派/SMB 只读仅发布完整代。真实 `config --engine v2` 还须 `--switch-evidence` 指向门 1/5/6/7 全过的收口证据，并在当时显式给出 `--authorize-production-switch`；**生产切换已于 2026-10-31 完成（commit `db6d03b`），该入口仅用于回滚后再次切换或隔离环境，勿在生产上重复执行。**
 
 T5 工具默认 dry-run（只打印计划）。真实执行需逐日显式授权分钟数，并登记窗口级总授权：
 
@@ -1037,7 +1037,7 @@ clean 行情，应用相同的 ST、上市天数和停牌/无行情筛选；评�
 `data/frozen_reference/v2_p3/`。**注意：P3 仍未切换生产链路**——v2 panel/labels 供
 P4 消费，现役训练/回测/纸面继续走 cs_train/cs_infer 与旧内核。
 
-**v2 纸面宿主（P4 T2，开发中）：** `v2/hosts/paper/factory.py::create_paper_host`
+**v2 纸面宿主（P4，已切换生产）：** `v2/hosts/paper/factory.py::create_paper_host`
 提供隔离根装配与单日驱动能力，状态以引擎快照为权威、旧纸面账本文件为投影；整日写锁
 限制单写入者，崩溃恢复在同日或次日启动时补齐投影与发布标记。数据就绪门覆盖 panel、
 clean 行情、事件 freshness 与 derived 实际产出；cs_infer freshness 回退会按股票键合入
@@ -1050,14 +1050,14 @@ clean 行情、事件 freshness 与 derived 实际产出；cs_infer freshness �
 全空不豁免）。训练与当日**同域**（主板域），基线可用近 60 日滚动分位自校准
 （初始种子 = 76 日对照域内率）。逐日证据落 `runs/readiness_<date>.json`
 （通过/失败日均有）、滚动历史 `runs/coverage_history.json`，失败日另有 `runs/gap_<date>.json`；
-推送文本附 `数据质量: error N / warning M`。当前仅供影子/验收工具使用，**生产纸面入口与默认链路尚未切换**。
+推送文本附 `数据质量: error N / warning M`。**生产纸面入口与默认链路已于 2026-10-31 切至 v2**（观察期未启动——切换后尚无日跑记录，最后处理日仍为 `20260603`）。
 
 **v2 到期义务清偿（P4 T3，已闭合）：** 新宿主 normalize/Kelly 统一回测侧语义；行业映射、
 停牌日历与行情读取由回测/纸面宿主显式注入，core/common 不反向依赖 `v2/store`。
 正常 v2 回测缺省经原生 `TargetPortfolio` 调用单袖 merge，显式 `legacy_bypass` 仅用于
 冻结回归边；纸面 S6 在提交前消费同一指令序列，回测 S6 仅作 T3 证明性证据，其成交
 反投影不得复用于 paper_replay。P2b dict 过渡件已删除；`cs_train_verify` 仅作为保活至
-旧链路物理删除的过渡验收工具。T4/T5 尚未验收，生产纸面默认链路不变。
+旧链路物理删除的过渡验收工具。T4/T5 已验收闭合（门 1/5/6/7/8 PASS），生产纸面默认链路已于 2026-10-31 切至 v2。
 
 **v2 历史回放：** `schedule_mode="replay"` 的 `replay_calendar` 只声明驱动窗口，
 `trading_calendar` 可包含窗口后的已知交易日。调仓以窗口首日为锚，末日可在没有

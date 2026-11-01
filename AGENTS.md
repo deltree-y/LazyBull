@@ -52,7 +52,7 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 │                       # 协议层 + P2a 复制件、
 │                       # evidence/ 证据机器通路、core/ P2a 内核 + P2b 单袖合并器、
 │                       # hosts/backtest P2a 宿主 + hosts/native_engine P4-T3 原生单袖合并边界、
-│                       # hosts/paper P4-T2 纸面宿主、train/ P3 训练适配与 WF 编排、sleeves/ value 袖 spec）
+│                       # hosts/paper P4 纸面宿主（2026-10-31 已切生产，engine=v2）、train/ P3 训练适配与 WF 编排、sleeves/ value 袖 spec）
 ├── drv/                # 树莓派 LCD 驱动
 └── live/               # 实盘接口预留（TODO）
 

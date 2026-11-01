@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.208.36] - 2026-11-01
+
+### Docs（文档与代码/运行实况对齐，无代码改动）
+
+- **P4 生产纸面切换执行登记（事实补记）**：`data/paper/config.yaml` 已含 `extra.engine: v2`，
+  权威快照 `state/engine_state.bin`（sha256 `70078810…`）与迁移证据
+  `data/frozen_reference/v2_p4/t5_production_switch_20261031/migration_result.json` 逐字节一致，
+  切换记录 `data/frozen_reference/v2_p4/t5_release_final_20261031/switch_result.json`
+  （`verdict=PASS`、`authorized_by_user=true`、`authorized_at=2026-10-31T16:44`、
+  `commit_sha=db6d03b`）；产出 = 账户迁移（last_update `20260603`、20 只持仓、迁移 PASS）+
+  备份根 `data/paper_backup_pre_v2_20261031` + 旧链保活根 `data/paper_legacy_pre_switch_20261031`。
+  收口状态 `t5_closure_status.json` 同步为 `production_engine=v2` /
+  `production_account_migrated=true` / `production_switch_completed=true` /
+  `final_commit_completed=true`。**观察期（Q5：≥4 自然周且 ≥一个大版本）尚未启动**——切换后
+  无日跑记录（最后处理日 `20260603`，runs 最新 `t1_20260603`）。
+- **证据瑕疵登记**：`closeout_status.json` 的 `statuses.user_switch_authorized=false`、
+  `statuses.final_commit_completed=false` 系 `authorization.json` / `commit_status.json`
+  未落盘所致，与 `switch_result.json`、`t5_closure_status.json` 的同名字段冲突；以
+  `switch_result.json` + `t5_closure_status.json` 为准，残留两文件待补（不重跑切换）。
+- **文档同步**：`README.md`（v2 纸面宿主段与引擎选择段：生产默认改 v2、legacy = 回滚路径）；
+  `docs/plans/v2/p4_implementation_plan_20261026.md` v32（头部状态 + §24.22 闭合边界改写 +
+  新增 §24.23 生产切换执行登记）；`docs/contracts/v2_architecture_plan.md` F21（= v1.27，
+  §8-P4 行标「执行完毕」+ 观察期状态）；`CLAUDE.md` §5 增 P4 切换契约条目；`AGENTS.md`
+  v2 目录指称同步。
+
+## [0.209.0] - 2026-11-01
+
+### Closed（加速收口，用户批准）
+
+- **用户裁决**：批准加速收口——以“10 个连续交易日生产码逐日回放 + 预登记故障注入/缺源回放 +
+  76 日证据豁免复核 + 全量回归/复杂度”替代 P4 的 4 自然周观察期与 B′ 的 10 交易日生产观察，
+  残余风险登记为已知接受项，P4 与 B′ **条件性收口（CONDITIONAL_CLOSED）**。
+- **10 日回放**（20261013~20261026，隔离根、生产代码、v24022、主板域）：**10/10 `ok=True`、
+  `driven=True`、containment PASS**；逐日 `runs/readiness_<date>.json` 落盘；
+  `20261019` 北向 13 列全空仅计 error 不阻断（软门禁语义），其余日 error 0~2 列。
+- **故障注入/缺源回放**：20261019 真实缺源回放 + 空域/NaN 历史/整列缺席/聚合边界/豁免
+  全空不豁免 5 组合成用例（`test_v2_p4_bprime_coverage_gate.py`）。
+- **豁免复核**：9 列登记均系结构性漂移（error 日 16~76/76），豁免后 76 日对照超限列 0。
+- **证据**：`data/frozen_reference/v2_p4/accelerated_closeout_20261101_131657/closeout_status.json`；
+  76 日影子 `coverage_shadow_76d_20261101_125414/`（76/76 有效、出口 PASS）。
+- **残余风险（已接受）**：未经历真实生产连续 4 周（调度/运维/真实漂移未覆盖）；`0.209.0`
+  仅为跨版本标记而非真实迭代周期；`zscore_fcf_yield` 源未修复（仅告警）；Q8-B 首验未执行
+  （v24288 无 `feature_missing_rate`）。
+
 ## [0.208.35] - 2026-10-31
 
 ### Changed
