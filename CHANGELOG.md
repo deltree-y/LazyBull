@@ -2,6 +2,385 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.6] - 2026-11-02
+
+### Feat（P5b T6：历史端到端演练 + 运行手册 + H6 单条数值 + H7 文档收口）
+
+依据 = 设计 v4 §6.1–§6.3（历史端到端演练）/ §5.5「H6 数值」行 / §5.6（限制）/ §7.1–§7.2（产物与报告）/
+§8-H1/H6/H7 / §9（墙钟授权）+ 架构 F22 + 台账 F5。新增库层子包
+`src/lazybull/v2/hosts/testbed/rehearsal/`（**不改** T1~T5 已闭合模块、测试与冻结件）：
+
+- `manifest`/`sections`（新增）：**另立** T6 演练冻结件（`lineage.sequence=1`）——冻结 campaign/产物根、
+  五臂身份与角色名、虚拟窗口（全部可用 structural 交易日）、structural 回执口径、δ 倍数与 λ/ζ
+  （盲态预登记）、冻结崩盘窗清单与哈希、H6 三条判定规则（方向 + 事件，不含频率/MDE）、H1/H6/H7 检查清单、
+  限制声明（§5.6 六要点逐条校验）、实现数与墙钟口径；**上游五链**（T4 manifest `2d7f42ab…`、T4 临界值
+  `2bae1a00…`、T5 manifest `a9dcdbb6…`、T5 临界值 `6af577f7…`、T5 功效 `be534765…`，均为 2026-11-03
+  换代后的身份）逐字节核验，不符即拒绝运行；
+  三环互链 manifest ↔ 校准器（12 模块）↔ 判定表产物；重冻须换新 sequence 并登记前身与原因。
+- `sources`（新增）：structural 窗口解析（**全部可用日**，不按结果挑选）、交易日历、上游哈希、冻结崩盘窗
+  原文引用、λ/ζ 盲态求解（复用 T5 求解器语义，B0 锚窗 500 样本，`λ=0.4896804562711622` /
+  `ζ=0.5563666442793327`；冻结期求解器纯注入残差 DD-I +11.95pp / DD-W −33.06pp，目标 +12.00pp / −33.1094pp）。
+- `injection`（新增）：效应注入**纯函数**——收益臂 `x'=x-5δ`；DD 臂仅窗口内负收益 `(1-λ)/(1+ζ)` 缩放；
+  `apply_single_return`（逐日）与 `transform_log_returns`（路径级）逐值等价；λ∈[0,1]/ζ∈[0,2] 越界、
+  非有限、窗口越界一律 fail-closed；可构造性门在读数之前判定（锚 500 与窗终点均须 ≤ 路径收益数），
+  不满足即 `not_constructible`（不改报目标、不截断档位）。
+- `hosts`（新增）：**宿主层注入**——包装默认 `host_factory`，内层照常驱动真实纸面链路，外层按**持久化基准
+  路径前缀的纯函数** `V'_j=V_0·exp(Σ f(x_i))` 在读侧覆写当日 `portfolio_value`/`market_value`；成交/现金/
+  持仓/日期/指令一律不动（臂根状态与 base 逐字节一致），先于账本分片成型（不是事后改分片或改报告）。
+- `aa`（新增）：机械 A/A **从分片复算**（`query_shards` + `load_shard`），逐日比
+  `virtual_date/generation/cash/positions/fills/nav` 六字段，规范化哈希逐字节口径；比对行数/字段数为零即失败
+  （非真空）；INVALIDATED 区间 fail-closed；结论只证明「运行与账本逐值一致」，不作统计 A/A。
+- `readings`（新增）：账本→配对收益走 `referee.ledger_source.paired_returns_from_ledger`（T3 只读门）；
+  收益臂逐 look 计算冻结 PSD 统计量并**显式识别退化方差**（确定性位移臂方差为零 ⇒ 不得伪造 Z，
+  只披露原始伪影并标 `identifiable=false`）；回撤臂逐 look 用 T5 `drawdown_reading` 出 `D_k`，两个方向分别
+  判事件且数值互斥断言；样本不足/不可构造一律 `not_executed`。
+- `verdict`/`report`/`assembly`（新增）：判定表固定 `h1/h6/h7_claim=evaluated_not_declared_pass`、
+  `gate_owner=user_at_merge_acceptance`，逐条作者侧检查（pass/fail/not_executed 三值由证据推导，**不含任何
+  「闸门通过」字段**，有递归扫描用例）；§7.2 报告字段全覆盖（scope/虚拟时钟/起止日/行域回执/标签与模型截止/
+  五段身份/机械 A-A/每臂 driven 与权威估值条数/family_txn_id 与父代-发布代/唯一发布点/故障注入与恢复/
+  收益读数与（只引用的）holdout/回撤两方向阈值与读数/manifest 与产物哈希/机器墙钟与授权记录/限制声明）；
+  运行手册与版本一致性校验（哈希块只收稳定成员，避免「手册先知道报告哈希」的循环）。
+- `runner`（新增）：冻结 → 注册/D0 → 运行（`--days` 支持单日墙钟探针）→ 墙钟登记；**单日实测外推整批
+  >20 分钟且无用户授权记录 ⇒ 拒绝运行**（退出码 4），不以减少虚拟日/臂数规避。
+
+验收工具（薄入口，默认 dry-run/只读）：`scripts/v2_p5b/rehearsal.py`
+（`--freeze`/`--register`/`--run`/`--report`/`--check`）；不改 T4/T5 的四个既有入口脚本语义。
+
+运行手册（永久文档，H7 交付）：`docs/guide/p5b_testbed_runbook.md`（目的与非目标、前置与哈希、命令逐条示例、
+退出码语义、产物清单、验证步骤（独立复算 A/A 与一条 H6）、回滚与清理、常见故障处置、
+H1~H7 闸门对照表、§5.6 限制声明）。
+
+测试：新增 `tests/p5b_t6_env.py` + 8 个 `test_v2_p5b_t6_*.py`（77 项）（注入纯函数/宿主层注入与 golden/机械 A/A
+含负例/manifest 链与上游哈希/读数与 H6 判定/判定表与报告/脚本与运行手册）。
+
+正式读数（campaign `p5b_t6_rehearsal_20261103_r15`，`lineage.sequence=15`，manifest sha256
+`62c4c527…` / seal `0170d7f4…`；report `d3ed356c…` / md `d472abfa…` / verdict `0c9f071c…`；
+详见 `docs/reports/p5b_t6_closure_20261102.md`）：
+
+- 窗口 = 全部可用 structural 交易日 79 日（20260703–20261029），收益样本 **78** 条；五臂同一 D0、
+  同一输入根、`schedule_mode=replay`。
+- 机械 A/A：`base` vs `mech_aa` 79 日 × 6 字段 = 474 项逐值一致（从分片复算，`mismatches=[]`）；
+  行域 79/79 日 structural；每臂每日恰一条权威估值（逐日判据）；`published_generation=79`；
+  生产根零写入（register → report 跨阶段，files+bytes+path_digest 一致，产物不含绝对时刻）。
+- H6：收益臂配对均值 `-0.0009680588129999888`（= 负 5δ，残差 1.1e-17）⇒ 按冻结判据（方向为负、
+  幅度一致、链路完整）**pass**；Z 在确定性位移臂上不可识别（退化方差），只披露
+  `z_identifiable=false`。DD-I/DD-W 两臂 `not_constructible`（锚 500 / 冻结窗终点 218 超出 78 样本；
+  DD-W 目标已按用户裁决改为 `c^W_anchor-2 = -33.1094pp`，ζ=0.5563666442793327）
+  ⇒ `not_executed`。**H6 门作者侧 = not_executed（1 pass + 2 未执行），不得宣称通过。**
+- 墙钟与授权：§9 门改**跑前**判定并绑定 campaign/日数；本 run 探针 22.0 s ⇒ 10 日外推 ≈220 s、
+  单批 39 日 ≈855 s 均 < 1200 s，故 `authorization=null`（如实记录）；历史 78 日整批授权原文落
+  `docs/reports/p5b_t6_long_task_authorization_20261102.json`（绑定旧 campaign，不得复用）。
+- 确定性：同参数两次 `--report` 的 report/md sha256 完全相同（墙钟只落 `machine_time*.json`）；
+  `--check` 三项哈希（manifest 副本 / 上游五链 / 报告↔判定表）+ 闸门字段扫描全部通过。
+- 谱系：共 15 次冻结（seq 1 首次、seq 2 格式化整改、seq 3–6 评审整改、seq 7 复审整改、seq 8 终审整改、seq 9 终审后重跑、seq 10/11 终审 P2 收口与格式化、seq 12/13 正式（A 裁决：DD-W 目标修正 + T4/T5 级联；seq 13 为格式化重冻）、seq 14 正式（第四轮 P1 整改：H6 回撤条目 target 改取冻结件 `target_pp`；seq 13 校准器已成前身）），每次均登记
+  前身 manifest/calibrator 哈希与原因；被取代 run 只作证据，不参与读数。
+
+### Docs
+
+- 运行手册 `docs/guide/p5b_testbed_runbook.md` 新增；`README.md` 增演练与手册入口；
+  `AGENTS.md`/`CLAUDE.md` 登记 `rehearsal/` 子包与运行手册位置。
+
+## [0.209.5] - 2026-11-02
+
+### Feat（P5b T5：回撤裁判 DD-W 恶化否决 + DD-I 改善检出 + 注入构造 + A/A/horizon + MDE）
+
+依据 = 设计 v4 §5.4.1–§5.4.4 / §5.5 回撤行 / §7.2 回撤字段 / §8-H5 + T0.5b §5「回撤注入预检」已批口径
+（B0 最后 500 收益样本、`T_anchor=500`）+ 架构 F22。新增库层子包
+`src/lazybull/v2/hosts/testbed/referee/drawdown/`（**不改** 收益仪器 11 个模块及其冻结件）：
+
+- `mdd`（新增）：MDD 与 `D_k` 唯一实现——log 尺度 `MDD=min_t(cum-max cum)`、首点计入、
+  pp 换算 `(exp(MDD)-1)*100`、逐 look 独立 horizon（H=20 ⇒ 120/240/360/500）、基准臂 B0 各 look
+  的 MDD 只算一次；**DD-I 的 `I_k=D_k` 不取负**写入契约。
+- `crash_window`（新增）：在 B0 最后 500 收益样本上识别全部峰到谷 episode，按深度降序取最多 3 个
+  **互不重叠**窗口（同深取较早 peak），窗口 = `peak+1..trough`；无 episode ⇒ `not_constructible`；
+  运行期与 manifest 冻结清单逐字段比对（禁止按实现重选）。
+- `injection`（新增）：窗口内负 log 收益 `DD-I x'=(1-λ)x`（λ∈[0,1]）/`DD-W x'=(1+ζ)x`（ζ∈[0,2]），
+  正收益与窗外不变；101 点全域扫描 + ≤80 次二分（**跨实现向量化**，无逐路径循环）、容差 0.05pp、
+  多解取**最小干预**；不可达/无解/非有限 ⇒ `not_constructible`（不截断档位、不改报目标）。
+- `sampling`（新增）：回撤裁判**独立命名空间** seed 子流（`SeedSequence([seed,5,stage,scene,
+  direction,level])`），与收益裁判子流必然互斥。
+- `realizations`（新增）：B0 冻结窗口（最后 500 收益）+ `x=B0+n` 配对噪声实现；A/A 用独立抽取的
+  `B0+n` 并以 B0 为减数（禁止同一路径零注入）。
+- `thresholds`（新增）：`c^W_{k,scene}=q_{α/K}(D_k)` 取 `min over scene`、`c^I_{k,scene}=
+  q_{1-α/K}(D_k)` 取 `max over scene`；事件 `vetoed_by_calibrated_drawdown_worsening` 与
+  `detected_by_calibrated_drawdown_improvement` 分别命名；方向自检 `c^I>c^W` + 两事件不重合（断言）。
+- `holdout`（新增）：验收单元 = 场景 ×（DD-W/DD-I）× H × 裁判 = 8 单元，逐单元 Wilson 95% **上界
+  ≤6%**，两个方向分别判定、禁止跨场景加权。
+- `power`（新增）：纯注入档 `{1,2,3,5,8,12}pp` 逐方向逐场景检出率；主分母 = 全部实现 M
+  （不可构造按未检出计入），可构造率 C/M 单独披露；`MDE_drawdown_worsen` /
+  `MDE_drawdown_improve` 分别登记（含命中网格上界标记）。
+- `manifest`/`sections`（新增）：**另立**回撤仪器冻结件（`lineage.sequence=1`，不改收益 manifest
+  的 `drawdown_referee` 占位），冻结 MDD/窗口/注入/反事实/求解/阈值/A-A/holdout/效应/实现数/子流/
+  源对/上游哈希/H6 占位/偏差登记/限制声明；三环互链（manifest ↔ 校准器 12 模块 ↔ 临界值）+ 上游
+  收益 manifest（`545d2be4…`）与收益临界值（`af37b217…`）逐字节核验，收益 manifest 的回撤段被改
+  写即拒绝运行。
+- `report`/`calibration`（新增）：判定表（`h5_claim=evaluated_not_declared_pass`、
+  `gate_owner=user_at_merge_acceptance`）与 §7.2 回撤报告（崩盘窗、λ/ζ 分布、纯注入/含噪观察/各
+  look 实际效应、A/A、`c^W/c^I`、逐单元 holdout、MDE、C/M、哈希链），markdown 可读版。
+
+验收工具（薄入口，默认 dry-run/只读）：`scripts/v2_p5b/drawdown_calibration.py`（`--freeze`/`--train`）、
+`scripts/v2_p5b/drawdown_holdout.py`、`scripts/v2_p5b/drawdown_export_table.py`；写域守卫沿用试车场
+（生产根硬禁），产物独占创建、重复运行拒绝。
+
+正式读数（campaign `p5b_t5_drawdown_20261102`；manifest sha256 `7ccbce56…`、seal `11b8dc63…`、
+calibrator `e2b98fb5…`，`lineage.sequence=1`；thresholds `6753cdde…`、holdout `9f80677e…`、
+power `0b5f3b02…`、verdict `4a3c9f33…`、report `0f67a05f…`/`9bdc66a7…`）：
+
+- B0 冻结窗口 MDD **−20.7076%**（复现 T0.5b §5 已批读数）；三个不重叠崩盘窗 −20.7076 / −18.9279 /
+  −9.8811pp；全链 1700 收益 MDD −23.9989% 仅作历史描述（`usable_for_calibration=false`）。
+- 临界值 `c^W=[-17.844, -30.589, -31.010, -31.109]pp`、`c^I=[7.907, 6.580, 5.504, 5.195]pp`
+  （决定单元均为 `ma20`，即 most-conservative min/max over scene）。
+- holdout：8/8 单元 Wilson 上界 ≤6%（最高 2.5489% `ma20|dd_worsen`）；两个方向均判定可用。
+- 功效/MDE：`MDE_drawdown_improve` = 8pp（`real_seed_block` / `regime_hetero`），`ma20`/`ar1_06`
+  测至 12pp 未达 80%；`MDE_drawdown_worsen` 四场景均测至 12pp 未达 80%（null 分布左尾由噪声主导，
+  阈值落在极端分位）——**如实登记，不得掩饰**。12pp 处 C/M 降至 ~50%，检出率被不可构造实现拉低
+  （非单调），报告逐格披露。
+- B0 单路径复算：12pp 改善需 `λ=0.48968`，与 T0.5b §5 预检 `λ≈0.49` 一致（作为注入器/窗口/锚的
+  一致性锚点写进 power 产物与报告）。
+
+边界：**H5 闸门未宣布通过**（判定表固定 `evaluated_not_declared_pass`，由用户在合并验收时确认）；
+不运行真实前向影子、不等真实日历、不注册真实候选、不写生产账户；不写 `data/paper`/`data/runs`/
+`data/models`、不写 `LedgerEntry`；T4 收益仪器与其产物**逐字节不变**（哈希断言）。
+
+测试：T5 新增 10 个文件 **113 项**；回归 T4 172、T1/T2 117 + T3 69（合计 186）、P4 687 全绿；
+T4 收益仪器冻结件与产物**逐字节不变**（8 份 sha256 断言）。另修 P4 E9 config 依赖点清单
+（`hosts/testbed/paths.py`、`hosts/testbed/registration.py` 的只读根解析与 `get_paper_root` 白名单）——
+该失配由 P5b T1 引入、T5 回归发现，按审计用途补齐并写明理由。
+
+评审闭环：三轮 × 两位独立专家，**终审两位均"通过"**（reviewer2 直接通过；reviewer1 P1 闭环后复核通过）；
+逐条处置见 `docs/review/v2_p5b/p5b_t5_impl_review_disposition_20261102.md`，闭合记录见
+`docs/reports/p5b_t5_closure_20261102.md`。**H5 闸门未宣布通过**（`evaluated_not_declared_pass`）。
+
+**闭合状态（2026-11-02）**：T5 已闭合；冻结态复验 T5 113 / T4 172 / T1+T2+T3 186 / P4 687 全绿，
+T4 8 份产物字节不变，T5 manifest `7ccbce56…` / verdict `4a3c9f33…` / report `0f67a05f…` 稳定；
+无 P0/P1 存量项，T6 未开始，全部改动未提交。
+
+## [0.209.4] - 2026-11-02
+
+### Feat（P5b T4：收益裁判训练 + holdout 逐单元 Wilson 门 + 功效/MDE + §5.5 manifest 冻结）
+
+依据 = 设计 v4 §5.1/§5.2/§5.3/§5.5/§5.6/§7.2 + PSD 预登记（sha256 首 8 位 `1b92b25c`）+
+T0.5b PSD r3 冻结参数（manifest sha256 `3b371593…`）+ 架构 F22。新增库层子包
+`src/lazybull/v2/hosts/testbed/referee/`（不改 T1/T2/T3 任何模块语义）：
+
+- `statistics`（新增）：§5.1 look 映射唯一实现（`J_max=floor(503/H)`、
+  `J_candidates={ceil(120/H),ceil(240/H),ceil(360/H),J_max}`、`6<=j<=J_max`、K<2 拒绝；
+  H=20⇒`{6,12,18,25}`/look`{120,240,360,500}`/K=4，H=60⇒K=2，H=80⇒K=1 拒绝，H=84⇒无 look 拒绝）+
+  §5.2 block 统计量：注册件 = PSD `T_k=(B̄_k+δ)/sqrt(V_PSD/J)`、`V_PSD=γ0+γ1`（等价平方和恒 ≥0），
+  设计 v4 原式 `γ0+2γ1` 保留为**不可注册**复核件；`V≤0`/非有限/block 不足一律 fail-closed
+  （不否决、不计有利）；`c_k` 额外要求有限且为正（否则配置失败，禁止 clamp/取绝对值）。
+- `sampling`（新增）：命名 seed 子流 `SeedSequence([seed,stage,scene,null,level])`
+  （train=1/holdout=2/effect=3），与 T0.5b validation 子流同编码 ⇒ 可逐值复现 r3。
+- `scenes`（新增）：§5.3 四类场景（MA(H−1)/AR(1)ρ=0.6/两段异方差/真实换种子 circular block
+  重采样，`block_length=H`、按池自身均值去中心、环回取模、**不截断**）+ B0/B0′ 源对读取（哈希校验）。
+- `training`（新增）：§5.2 五步临界值（逐场景×零假设取 `q_{α/K}` 下尾 → 逐单元 c → max-over-scene），
+  逐组中间量（valid_count/invalid_rate/quantile/c）可审计；无效率>10%、有效样本<100、
+  阈值不可估计或非正 ⇒ 配置失败（不排除后继续、不用极值替代）。
+- `holdout`（新增）：验收单元 = 场景×零假设×H×裁判（H=20 ⇒ **8 单元**），逐单元「任一 look 触发」
+  family-wise 频率 + Wilson 95% **上界 ≤6%**；任一单元不过 ⇒ 裁判不可用；禁止跨场景聚合/加权。
+- `power`（新增）：效应网格 0.5δ/1δ/1.5δ/3δ/5δ（δ=ln(1.05)/252=1.936117626bp/日）、
+  逐档逐场景检出率与 Wilson、MDE = A/A 过门后点估计达 80% 的最小档、未达则如实
+  `tested_to_5delta_not_80pct`；禁止宣称 5δ 通用灵敏。
+- `ledger_source`（新增）：配对账本样本 `d_t=ln(V_a,t/V_a,t−1)−ln(V_b,t/V_b,t−1)`，入口走 T3
+  只读查询 `query_shards`（INVALIDATED fail-closed，`allow_invalidated=True` 才是审计旁路）+
+  校验分片读 `evidence.valuation.nav`；缺片/缺口/非正 NAV/单点样本拒绝。
+- `manifest`（新增）：§5.5 全表冻结与**哈希互链**（manifest ↔ 校准器身份 ↔ 临界值产物 ↔
+  holdout/power/判定表）：字段/口径/门槛/实现数下限校验，门槛不得放宽、实现数只能上调；
+  冻结件独占创建；任一环被改写即拒绝运行；`deviation_registry` 有条目 schema 与 6 类必登记项校验。
+- `manifest_sections`（新增）：manifest 分节构造器（源对/统计量/阈值/效应与 holdout/T5-T6 占位/
+  偏差登记/限制声明），与编排模块分离以便逐段评审。
+- `artifacts`/`report`/`calibration`（新增）：确定性独占落盘（无墙钟，逐字节可复现）、判定表与
+  §7.2 收益部分报告（`scope=historical_testbed`、`calibration_only`、`virtual_clock=true`、
+  `row_domain=structural`、`schedule_mode=replay`、`not_forward_evidence`、`not_sla_evidence`，
+  回撤段与 H6 数值只登记「未实现/占位」）、编排（冻结 → 训练 → holdout → 功效 → 判定表）。
+- `scripts/v2_p5b/referee_{calibration,holdout,export_table}.py`（新增三个薄入口）：默认 dry-run/
+  只读、写域守卫（生产根硬禁）、重复运行拒绝覆盖、`--repo-root/--psd-manifest*` 仅测试可覆盖。
+
+正式校准（`data/paper_shadow/p5b_testbed/p5b_t4_referee_20261102/reports/`，仓库冻结件
+`docs/plans/v2/p5b_t4_calibration_manifest_20261102.json`，`lineage.sequence=4`，
+前身 `65866338…`/`c845b716…` 已登记废止）：
+manifest sha256 `545d2be4…`（seal `143ced9e…`）、calibrator `6b93b192…`、
+thresholds `af37b217…`、holdout `09fd909a…`、power `e403fd65…`、verdict `ee8fabb5…`、
+report `047faa85…` / `9471bbbf…`；实现数 2000/10000/2000（§5.3 下限）、seed `20261103`、
+prefix `p5b_psd_r3`；`c_k=[4.7253790180,3.4657556502,3.0581290047,2.9397076361]`
+（**逐值复现 T0.5b r3**，四次重冻/重跑均不变）；8 个 holdout 单元全部通过（最高 Wilson 上界 3.563%）；
+MDE：MA20/AR1 已测至 5δ 未达 80%，regime/real_seed_block 在 5δ 登记并标注"命中网格上界"。
+训练 0.22s + holdout/功效 1.43s（远低于 20 分钟授权门）。**H4 闸门判定不在本次内**
+（由用户在合并验收时确认），不产生前向/SLA/生产授权证据。闭合材料见
+`docs/reports/p5b_t4_closure_20261102.md`。
+
+三轮独立评审（两位专家 × 首轮/复审/终审）的接纳项已全部落地，其中影响口径或可审计性的 7 项：
+① 设计 §5.3 第 4 类"冷启动"与"超 H 依赖"场景未单列 ⇒ 进 `deviation_registry` 必登记项 + 限制声明；
+② "holdout 与 T0.5b r3 同一 realization 集（已观察）"升级为**一等限制**（manifest/判定表/markdown 三处）；
+③ `z`/`target`/`scale_by_scene`/无效率门等隐式旋钮加冻结断言，功效侧补与 holdout 同一的 10% 无效率门；
+④ `applicable`（A/A 是否过门）改为**必填无默认值**，杜绝"忘记传参即登记 MDE"；
+⑤ 校准器身份扩至 11 个模块（含 `manifest.py`/`manifest_sections.py`/`artifacts.py`），
+   呈现层 `report.py` 的排除理由显式登记（`CALIBRATOR_EXCLUSIONS`）；
+⑥ 新增 `lineage` 冻结谱系（序号 + 废止前身哈希 + 原因），使 `frozen_before_evidence` 可审计；
+⑦ 运行期新增 `--repo-manifest` 字节对账；判定表补 `mde_at_grid_upper_bound` 标记。
+
+测试：新增 `tests/p5b_t4_env.py` + `tests/test_v2_p5b_t4_{look_and_statistics,dgp_substreams,
+thresholds,holdout_power,manifest_chain,ledger_source,scripts_zero_write}.py` 共 **172 项**；
+回归 T1+T2 117、T3 69、P4 228 全绿；`black`/`flake8` 干净；复杂度棘轮 `--paths src/lazybull`
+新增硬超限 0（软超限按拆分义务登记，见 T4 闭合报告 §7）。
+
+**P5b T4 已闭合**（2026-11-02）：两位独立评审三轮闭环，终审均"通过"（P0=P1=P2=0）；
+闭合判定见 `docs/reports/p5b_t4_closure_20261102.md` §10。**H4 闸门仍待用户在合并验收时确认**，
+本次未宣称闸门通过，不产生前向/SLA/生产授权证据。
+
+## [0.209.3] - 2026-11-02
+
+### Feat（P5b T3：长期分片账本 + 正式故障注入矩阵 + containment）
+
+在 T1/T2 已闭合的 `src/lazybull/v2/hosts/testbed/` 之上**只新增**能力（不改已发布分片的字节/
+schema，只追加 `__init__` 导出与注入点），依据 = 设计 v4 §4.3/§7.1/§7.2/§8-H2/H3 + 架构 F22：
+
+- `shard_chain`（新增）：分片链纯函数——`seed = sha256({schema,campaign_id,arm_id})`、
+  `chain[i] = sha256({prev_chain,virtual_date,generation,shard_sha256})`，缺片以 `"MISSING"`
+  哨兵参与推进（缺片也改变链 digest，按 journal 补齐后回到原值）；支持整份链文档重算校验，
+  genesis 形态（逐臂 0 链节）campaign 级 digest 为 `None`，与产物/审计同口径；
+- `ledger_common`（新增）：账本旁路公共定义（`audit/` 路径、`GAP_CLASSES` 十二类缺口、
+  `LedgerGap`、INVALIDATED 终态 append-only 登记 + 封存 + 幂等、库层生产根硬禁守卫）；
+- `ledger_audit`（新增）：三方一致性审计（journal / 分片 / manifest / index 逐臂逐日交叉校验：
+  存在性、内容身份、generation、family_txn_id、日期序），读错误归入缺口而不抛裸异常（journal
+  重代/错序收敛为 `out_of_order` 终态）；审计同时给 `three_way_status`（设计口径）与
+  `artifact_status`（链产物新鲜度）；链与审计产物落**新增平行文件**
+  `audit/shard_chain.json` / `audit/ledger_audit.json`；
+- `ledger_repair`（新增）：缺口修复（默认 dry-run；`rebuild_shard` 逐字节一致并回比期望 sha、
+  `rebuild_manifest`、`rebuild_index`、`quarantine_shard`、`write_chain`、`prune_staging`；
+  不可读投影先移入 `audit/quarantine/projections/` 再重建；`apply=True` 取 campaign 运行锁）、
+  INVALIDATED 登记与推进守卫 `assert_ledger_advanceable`（三类拒绝：已登记失效 / 检出不可重建
+  缺口 / 残留未发布分片 ⇒ `LedgerRepairRequiredError`）、只读查询 `query_shards`（按臂 + 日期
+  区间返回已发布连续分片与本区间链 digest，含失效区间 fail-closed）、`prune_staging`、
+  §7.2-T3 报告（含故障矩阵引用与长任务阈值）；
+- `fault_matrix`（新增）：表驱动故障矩阵 **13 行**（§4.3 状态表 0 roots + 部分/全部提升 + 全部
+  必注入点 + INVALIDATED 失效项 + 生产零写入）；**终态与恢复结果全部由证据推导**——`terminal`
+  取自被注入 attempt 的 journal 状态，`recovery` = 11 个后置条件中成立项的排序拼接，执行侧只
+  上报原始测量（异常类名、生产根快照比对、attempt id），判定 = 观测集合精确等于期望集合；
+  五条不变量带**非真空下限**并有负例测试；containment 四级分级（升级阈值与代码一致，无 SLA）；
+- `family_txn`（仅追加/内部优化）：新增注入点 `after_promote_all`、`after_shard`、
+  `after_manifests` 与 `top_up_published(fault_hook=None)`；恢复期补齐不挂钩子；`open()` 改为
+  **两段式**（先全部臂父代备份、再逐臂建暂存根），保证暂存阶段任意位置崩溃都能确定性回滚；
+  新增 `top_up_if_needed` / `cache_manifests` 投影探测，幂等重跑不再 O(A·N²) 读盘；
+- `runner`（仅追加）：推进前 `assert_ledger_advanceable`（含 `clock_days` 越窗检查）；收尾刷新
+  `audit/` 产物并回收已终态 staging 残留（报告 `machine_time.ledger_audit` /
+  `machine_time.staging_pruned`）。
+
+口径：**已发布分片字节不可改**（缺片按 journal 重建且逐字节一致；内容身份不符一律不覆盖，
+只登记 INVALIDATED 终态，append-only 不清除）；INVALIDATED 与 T2 `CampaignInvalidError` 为
+兄弟关系（登记粒度为「臂 + 日」，推进拒绝粒度为 campaign，runner 侧守卫先于恢复 ⇒ 归
+INVALIDATED），两者都 fail-closed。
+
+测试：新增 `tests/p5b_t3_env.py`（三臂 / 矩阵驱动 / 只读取证）与
+`tests/test_v2_p5b_t3_{shard_chain,ledger_audit,fault_matrix,scale,scripts}.py` 共 **68 项**；覆盖
+链确定性/篡改定位/genesis 校验、三方一致性缺口分类与修复（缺片字节一致、坏片 INVALIDATED、
+缺臂条目可重建、不可读投影隔离重建、日序倒置整批重建）、未发布分片隔离与推进拒绝、
+journal 重代/越窗 fail-closed、五不变量负例与非真空下限、恢复/清理的运行锁互斥、
+40 日规模与线性读取（分片读取与幂等重跑的全量 journal 加载计数）、生产根零写入、判定表与
+containment、三个验收工具薄入口（只读审计 / 判定表导出 / 矩阵非空 root 拒写）。
+
+已登记义务（软超限与已知边界）：`ledger_audit.py` 1050 行超 §4.4 软上限 800（硬上限内、无新增
+硬超限）登记为拆分义务；**首次逐日发布**仍按日重建派生投影（幂等重跑与恢复已线性）登记为
+T4/T6 性能义务；`open()` 两段式的覆盖范围（暂存阶段可回滚，备份循环内非末臂中断仍升级
+campaign 失效）与隔离区递增后缀对后置条件判定的影响均已登记于 `CLAUDE.md` §5 T3 条目。
+
+测试提速（不改断言强度）：固定成本实测为三臂 D0 回放（`prepare` 3.1s/用例）与 40 日现场重复
+构建；T3 用例改为**按需减臂**（19 个单臂、5 个双臂，仅矩阵保留三臂）、40 日规模现场改为
+module fixture 共享，聚焦 69 项由 460s 降至 **361s**；矩阵 13 行仍需各自真实三臂运行（约 104s），
+进一步压缩需「现场克隆 + 重写注册 root」，本轮未做。
+
+## [0.209.2] - 2026-11-02
+
+### Feat（P5b T2：虚拟时钟多臂运行与族级事务）
+
+在 T1 已闭合的 `src/lazybull/v2/hosts/testbed/` 之上**只新增**能力（不改 T1 注册/D0 记录语义，
+只追加 `__init__` 导出），依据 = 设计 v4 §4.1/§4.1.1/§4.3/§7.2 + 架构 F22：
+
+- `layout`：产物布局（`arms/` `staging/` `backups/` `failed/` `ledger/` `journal/` `reports/`
+  `_index.json`）与**根内容身份**（`{相对路径:{size,sha256}}` canonical 哈希，分块哈希；
+  排除 `state/.write.lock` 与 `*.tmp` 瞬时文件）、目录搬运/复制/清理原语；
+- `journal`：族级事务 journal、读侧 index、逐日分片与 manifest 的唯一载体。**唯一发布点 =
+  journal attempt 转 `COMMITTED` 的那一次原子写**（写 `published_generation` /
+  `published_txn_id`）；index / manifest / 分片均为**确定性派生投影**（载荷不含墙钟 ⇒ 重建与
+  首写逐字节一致），并加**严格 JSON 守卫**（NaN/Inf/非原生类型不得被 `default=str` 静默字符串化）；
+- `arm_runtime`：臂运行时规格（复核 T1 注册身份）、默认宿主工厂（`create_paper_host` +
+  固定 `schedule_mode=replay`，拒绝覆盖）、**权威估值读取**（完整 state 字段 `portfolio_values`
+  当日恰一条 + NAV 有限，禁止稀疏 `nav.parquet`/展示 NAV）、**虚拟日成功资格 A**（driven /
+  `run_kind="t1"` 小写 / 实际驱动日期 / 完整代发布标记）与 `not_ready` / `already_run` 分流；
+- `family_txn`：`STAGED→DRIVING→DRIVEN→PROMOTING→PROMOTED→ARTIFACTS→COMMITTED` 状态机、
+  父代备份与比较交换守卫（提升前校验父代未被推进）、逐臂提升（含两个 rename 之间的中断点）、
+  未发布 attempt `ABORTING→ABORTED`（新 root 移入 `failed/`、从可验证父代备份还原、未发布分片
+  移出、暂存清理、**不部分前滚**）、已发布只做幂等补齐（不重跑不重复入账）、启动恢复
+  `recover_campaign`（`ABORTING` 中再崩溃继续同一事务、不新建 attempt）、故障注入钩子（测试专用）；
+- `runner`：虚拟时钟多臂逐日推进（已发布日只补齐、未发布日走族级事务、`not_ready` 整族停留同
+  一日且不写 index）、campaign 级运行锁（`O_CREAT|O_EXCL`；stale 仅按**同主机 + pid 已不存在**
+  判定，不做纯时间抢占）、运行前数据态/代码态漂移门、逐日逐臂**行域回执**（`paper/replay`
+  实读 manifest 校验 `structural`）、A/A 克隆臂逐值一致、§7.2 报告（窗口 / 行域回执 / 模型截止 /
+  五段身份 / 每臂 driven-日期-完整代-权威估值条数 / family_txn_id / parent-published generation /
+  roots 内容身份 / 唯一发布点 / 恢复 / 机器墙钟 / 限制声明）。
+
+测试：新增 `tests/p5b_t2_env.py`（合成 structural 段真实 parquet 环境）与
+`tests/test_v2_p5b_t2_virtual_runner.py`、`tests/test_v2_p5b_t2_family_txn.py`、
+`tests/test_v2_p5b_t2_boundaries.py` 共 **45 项**；覆盖 10 个连续虚拟日推进、A/A 逐值一致、
+T+1 语义、跌停阻断卖出的 pending 与次日补卖、无成交日完整估值、整族 `not_ready` 暂停、
+已发布幂等重跑不翻倍入账、0/部分/全部 roots 提升回滚（含提升中与恢复中再崩溃）、父代备份
+不可验证失效、未发布 `already_run` 不接纳、行域伪造拒绝、生产目录零写入与源码级
+LedgerEntry/联网守卫。
+
+文档同步：`CLAUDE.md` §3 目录指称与 §5 新增「P5b T2 虚拟时钟多臂运行与族级事务契约」；
+`AGENTS.md` §3 指称；闭合登记 `docs/reports/p5b_t2_closure_20261102.md`。
+
+边界：T2 只交付虚拟时钟多臂运行与族级事务（暂存/提交/恢复），**不**实现 T3 长期分片账本与
+正式故障注入矩阵/containment、**不**做 T4/T5 收益与回撤裁判；不运行真实前向影子、不等待真实
+日历、不注册真实候选、不写生产账户/正式 runs/LedgerEntry；试车场产物一律
+`evidence_class=calibration_only`。T2 完成不等于 H1/H2 验收通过。
+
+## [0.209.1] - 2026-11-02
+
+### Feat（P5b T1：模拟臂注册、D0 fresh 与身份共用件）
+
+新增 `src/lazybull/v2/hosts/testbed/`（P5b 历史试车场 T1 落点；依据 = 设计 v4 §4.2/§7.1 +
+架构 F22 + 台账 F5）：
+
+- `paths`：产物根 `data/paper_shadow/p5b_testbed/<campaign_id>/`；写域守卫**硬禁**
+  `data/paper`、`data/runs`、`data/models`（外部根须显式 `allow_external_root`，
+  且不解除生产根禁令）；
+- `clock`：虚拟时钟原语——D0 仅估值、D1 起才有相邻日收益；虚拟日须按交易日历逐日连续
+  （禁止跳日、禁止压缩缺失日、禁止时钟回退）；
+- `identity`：复用 P4 的 `PAPER_CONFIG_TO_V2` / `resolve_engine` / `resolve_model_version` /
+  `fingerprint` / `workspace_identity` / `file_identity`，产出 input / config / model / code /
+  window-state 五段身份；数据态与代码态各拆两档（窗口内容 `window_state_id` 与执行闭包
+  `execution_digest` 作漂移门，全库水位与全仓源码摘要仅登记）；模型版本必须显式冻结（禁止
+  registry latest 语义）且 `train_end_date` 必须严格早于 D0；
+- `storage`：注册记录 `O_CREAT|O_EXCL` 独占创建、`record_sha256` 封存并在读取时复算、
+  原子写失败清理临时文件、回滚失败显式上报残留；
+- `registration`：campaign + arm 注册台账（append-only）；campaign/arm 重复注册拒绝（含并发
+  独占裁决）；未注册臂拒绝；真实候选/前向影子/生产角色显式拒绝；臂 `data_root`/`repo_root`
+  与 campaign 不一致拒绝；窗口数据态/执行闭包漂移拒绝新增臂；D0 初始化后禁止事后新增臂；
+- `d0`：各臂从同一历史 D0 空现金账户起步（`fresh_cash`），不复制生产持仓 / pending /
+  instructions / nav / trades / coverage history；空账户证据由七子目录**盘上观测**生成
+  （`observe_empty_account`），各臂摘要与初始资金逐位一致；半初始化拒绝、中段失败整体回滚；
+  `verify_d0_fresh` 只读复核（复算封存、观测摘要、配置/模型身份与物理内容、漂移门）并在记录
+  中标注 `evidence_notes`（`empty_state` / `all_arms_identical` 为派生/防御性字段）。
+
+测试：`tests/test_v2_p5b_t1_registration.py`、`tests/test_v2_p5b_t1_d0_fresh.py`、
+`tests/test_v2_p5b_t1_scope.py`（**72 项**；含生产根递归零写入、源码级 LedgerEntry 守卫、
+记录篡改/重封存/路径穿越/半初始化回滚/日期格式绕过等反例）。
+
+评审：两位独立评审专家三轮闭环（首轮 → 复审 → 终审），意见与处置归档
+`docs/review/v2_p5b/p5b_t1_impl_review_*_20261102.md`（reviewer1 终审通过、reviewer2 终局通过）。
+
+**T1 闭合登记（2026-11-02）**：验证结果 = T1 聚焦 72 passed / P4 相关回归 174 passed /
+flake8 exit 0 / 复杂度 hook 新增 0 条硬超限 / 生产目录递归快照零变化；遗留仅 4 项 P3
+（复核成本、模型目录须原位、未知后缀不纳入漂移、派生字段标注），均不阻断。闭合记录
+`docs/reports/p5b_t1_closure_20261102.md`。
+
+文档同步：`CLAUDE.md` §3、`AGENTS.md` §3 补 `hosts/testbed` 指称。
+
+边界：T1 只交付注册 / D0 fresh / 身份共用件，不实现虚拟时钟多臂运行（T2）、分片账本与故障注入
+（T3）、收益/回撤裁判（T4/T5）；不运行真实前向影子、不注册真实候选、不写正式 runs / LedgerEntry，
+试车场产物一律 `evidence_class=calibration_only`。T1 完成不等于 H1/H2 通过。
+
 ## [0.208.36] - 2026-11-01
 
 ### Docs（文档与代码/运行实况对齐，无代码改动）

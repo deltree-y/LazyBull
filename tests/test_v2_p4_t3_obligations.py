@@ -70,12 +70,17 @@ def test_e9_all_current_f18_import_points_are_accounted_for():
         ("hosts/paper/config_adapter.py", ("get_stock_selection_models_root",)),
         ("hosts/paper/factory.py", ("get_data_root", "get_stock_selection_models_root")),
         ("hosts/paper/reporting.py", ("get_stock_selection_models_root",)),
+        # P5b T1 试车场共用件：只在函数内解析 data 根 / 模型根（试车场产物根与模拟臂身份），
+        # 只读配置、不写生产根；写域守卫把它们解析成**禁写面**
+        ("hosts/testbed/paths.py", ("get_data_root",)),
+        ("hosts/testbed/registration.py", ("get_data_root",)),
+        ("hosts/testbed/registration.py", ("get_stock_selection_models_root",)),
         ("store/label_refresh.py", ("get_shenwan_level",)),
         ("train/core/features.py", ("get_data_root",)),
         ("train/walk_forward/summary.py", ("get_data_root",)),
     ]
     assert sorted(actual) == sorted(expected)
-    assert sum(len(functions) for _, functions in actual) == 15
+    assert sum(len(functions) for _, functions in actual) == 18
 
 
 def test_e9_paper_root_import_is_separately_locked():
@@ -86,7 +91,9 @@ def test_e9_paper_root_import_is_separately_locked():
             if isinstance(node, ast.ImportFrom) and node.module == "src.lazybull.common.config":
                 if any(alias.name == "get_paper_root" for alias in node.names):
                     actual.append(path.relative_to(V2_ROOT).as_posix())
-    assert actual == ["hosts/paper/state_store.py"]
+    # ``hosts/paper/state_store.py`` 是账户状态根的正式入口；``hosts/testbed/paths.py`` 只把它
+    # 解析成**禁写面**（P5b T1 写域守卫），不读不改 paper 账户状态。
+    assert actual == ["hosts/paper/state_store.py", "hosts/testbed/paths.py"]
 
 
 def test_gate2b_mode_and_sleeve_are_checked_per_fold():

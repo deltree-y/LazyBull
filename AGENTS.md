@@ -52,7 +52,20 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 │                       # 协议层 + P2a 复制件、
 │                       # evidence/ 证据机器通路、core/ P2a 内核 + P2b 单袖合并器、
 │                       # hosts/backtest P2a 宿主 + hosts/native_engine P4-T3 原生单袖合并边界、
-│                       # hosts/paper P4 纸面宿主（2026-10-31 已切生产，engine=v2）、train/ P3 训练适配与 WF 编排、sleeves/ value 袖 spec）
+│                       # hosts/paper P4 纸面宿主（2026-10-31 已切生产，engine=v2）、
+│                       # hosts/testbed P5b 试车场（T1：paths/clock/identity/registration/d0；
+│                       # T2：layout/journal/arm_runtime/family_txn/runner 虚拟时钟多臂运行与族级事务；
+│                       # T3：shard_chain/ledger_common/ledger_audit/ledger_repair/fault_matrix 长期分片账本
+│                       # 与故障矩阵；T4：referee/ 收益裁判（statistics/sampling/scenes/training/holdout/
+│                       # power/ledger_source/manifest/artifacts/report/calibration）；
+│                       # T5：referee/drawdown/ 回撤裁判（mdd/crash_window/injection/sampling/
+│                       # realizations/thresholds/holdout/power/artifacts/manifest/sections/report/
+│                       # calibration，两个方向分别冻结与判定）；
+│                       # T6：rehearsal/ 历史端到端演练（manifest/sections/sources/injection/hosts/
+│                       # aa/readings/verdict/report/assembly/artifacts/runner，五臂 + 机械 A/A
+│                       # + H6 单条数值 + 运行手册校验；闸门归用户）；
+│                       # 产物只落 data/paper_shadow/p5b_testbed）、train/ P3 训练适配与 WF 编排、
+│                       # sleeves/ value 袖 spec）
 ├── drv/                # 树莓派 LCD 驱动
 └── live/               # 实盘接口预留（TODO）
 

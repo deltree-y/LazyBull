@@ -1595,6 +1595,45 @@ costs:
 
 ## 🧪 开发指南
 
+### P5b 回撤裁判校准入口（治理/验收用途，非生产工具）
+
+回撤裁判（`DD-W` 恶化否决 / `DD-I` 改善检出）的校准只在历史试车场里跑，产物落
+`data/paper_shadow/p5b_testbed/<campaign_id>/reports/`，**不是前向证据、不构成 SLA 或生产裁决权**
+（闸门由用户在合并验收时确认）：
+
+```bash
+# 1) 冻结回撤仪器 manifest（只读 B0 盲态选窗；上游收益仪器哈希必须一致）
+python scripts/v2_p5b/drawdown_calibration.py --campaign-root <campaign> --freeze --apply
+# 2) 训练两个方向的临界值 c^W / c^I
+python scripts/v2_p5b/drawdown_calibration.py --campaign-root <campaign> --train --apply
+# 3) holdout 逐单元 Wilson 门 + 功效/MDE + 判定表/报告
+python scripts/v2_p5b/drawdown_holdout.py --campaign-root <campaign> --apply
+# 4) 只读导出判定表（可选）
+python scripts/v2_p5b/drawdown_export_table.py --campaign-root <campaign>
+```
+
+### P5b T6 历史端到端演练入口（治理/验收用途，非生产工具）
+
+「多臂运行器 → 配对账本 → 裁判 → 报告」全链路的历史演练（五臂：基准 / 机械 A/A / 收益 −5δ /
+DD-I +12pp / DD-W −12pp），同样只落 `data/paper_shadow/p5b_testbed/<campaign_id>/reports/`，
+`evidence_class=calibration_only`，**不是前向证据、不产生频率/MDE、闸门由用户在合并验收时确认**：
+
+```bash
+# 0) 完整步骤、退出码语义、验证与回滚见运行手册
+#    docs/guide/p5b_testbed_runbook.md
+# 1) 冻结 T6 演练 manifest（盲态预登记；上游 T4/T5 哈希必须一致）
+python scripts/v2_p5b/rehearsal.py --freeze --campaign-id <campaign> --apply
+# 2) 登记 campaign + 五臂 + D0 fresh
+python scripts/v2_p5b/rehearsal.py --register --campaign-id <campaign>
+# 3) 单日墙钟探针（>20 分钟外推需先取得用户授权再整批运行）
+python scripts/v2_p5b/rehearsal.py --run --campaign-id <campaign> --days 1 --json
+python scripts/v2_p5b/rehearsal.py --run --campaign-id <campaign> --authorization <授权记录.json>
+# 4) 读数 + 报告 + 判定表（作者侧检查；不含闸门结论）
+python scripts/v2_p5b/rehearsal.py --report --campaign-id <campaign> --apply
+# 5) 只读校验（三环哈希/上游链接/A-A/判定边界）
+python scripts/v2_p5b/rehearsal.py --check --campaign-id <campaign>
+```
+
 ### 添加新因子（v0.5.0）
 
 LazyBull 使用模块化的因子库架构。添加新因子只需在 `src/lazybull/factors/` 中添加函数，无需修改核心代码。
