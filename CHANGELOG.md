@@ -13,8 +13,8 @@ All notable changes to this project will be documented in this file.
 - `manifest`/`sections`（新增）：**另立** T6 演练冻结件（`lineage.sequence=1`）——冻结 campaign/产物根、
   五臂身份与角色名、虚拟窗口（全部可用 structural 交易日）、structural 回执口径、δ 倍数与 λ/ζ
   （盲态预登记）、冻结崩盘窗清单与哈希、H6 三条判定规则（方向 + 事件，不含频率/MDE）、H1/H6/H7 检查清单、
-  限制声明（§5.6 六要点逐条校验）、实现数与墙钟口径；**上游五链**（T4 manifest `2d7f42ab…`、T4 临界值
-  `2bae1a00…`、T5 manifest `a9dcdbb6…`、T5 临界值 `6af577f7…`、T5 功效 `be534765…`，均为 2026-11-03
+  限制声明（§5.6 六要点逐条校验）、实现数与墙钟口径；**上游五链**（T4 manifest `224169df…`、T4 临界值
+  `2bae1a00…`、T5 manifest `f0c6bdcb…`、T5 临界值 `6af577f7…`、T5 功效 `be534765…`，均为 2026-11-03
   换代后的身份）逐字节核验，不符即拒绝运行；
   三环互链 manifest ↔ 校准器（12 模块）↔ 判定表产物；重冻须换新 sequence 并登记前身与原因。
 - `sources`（新增）：structural 窗口解析（**全部可用日**，不按结果挑选）、交易日历、上游哈希、冻结崩盘窗

@@ -167,7 +167,10 @@ def aa_section() -> Dict[str, Any]:
         "independent_paths": True,
         "same_path_zero_injection_forbidden": True,
         "arm": "每个单元独立抽取 M 条实现 arm = B0 + n（不同 seed 子流按场景隔离）",
-        "baseline": "base = 冻结基准臂 B0（与效应单元同一减数，故读数的噪声结构一致）",
+        "baseline": (
+            "base = 独立抽取的第二条路径 B0+n_b（与 arm=B0+n_a 逐实现配对；"
+            "两侧各带独立噪声 ⇒ 零假设宽度为双路径口径）"
+        ),
         "forbidden": "禁止用同一路径零注入（D_k ≡ 0，A/A 退化）",
         "unit_definition": "scene × null(DD-W/DD-I) × H × referee",
         "shared_across_directions": True,
@@ -336,13 +339,14 @@ def deviation_registry_section(counts: Mapping[str, Any]) -> List[Dict[str, Any]
             "item": "A/A 独立路径",
             "design_value": "零假设由同分布独立路径生成，禁止同一路径零注入",
             "frozen_value": (
-                "每单元独立抽取 M 条 arm = B0 + n（seed 子流按场景隔离），减数为冻结基准臂 B0；"
-                "与效应单元同一减数，保证读数的噪声结构与 A/A 一致"
+                "每单元独立抽取 M 条 arm = B0 + n_a 与 M 条 base = B0 + n_b（seed 子流按场景隔离），"
+                "逐实现配对 D_i,k = MDD(a_i,k) − MDD(b_i,k)（两侧各带独立噪声）"
             ),
             "reason": (
-                "同路径零注入会使 D_k ≡ 0、临界值塌到 0，任何微小差异都会触发；"
-                "若 A/A 与效应单元用不同减数（如两侧都加噪声），阈值的噪声结构与被检统计量不一致，"
-                "会把功效结构性压低到无信息"
+                "同路径零注入会使 D_k ≡ 0、临界值塌到 0，故两侧都必须独立加噪；"
+                "此前「一条加噪 vs 固定 B0」只含单侧噪声，零点宽度约为双路径的一半，"
+                "导致真 A/A 下 DD-I 误报 39.95%（Wilson 上界 40.9%，远超 ≤6% 验收）；"
+                "现按设计 v4 §5.4.1/§5.4.2 改为双独立路径配对（R2-P5B-03 整改）"
             ),
         },
         {

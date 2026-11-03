@@ -32,6 +32,8 @@ from src.lazybull.v2.hosts.paper.factory import create_paper_host
 from src.lazybull.v2.hosts.paper.host import PaperHost
 from src.lazybull.v2.hosts.paper.replay import assert_single_day_row_domain
 from src.lazybull.v2.hosts.paper.state_store import PaperStateStore
+from src.lazybull.v2.hosts.testbed.identity import collect_config_identity
+from src.lazybull.v2.hosts.testbed.paths import TestbedError
 from src.lazybull.v2.hosts.testbed.d0 import load_d0_record
 from src.lazybull.v2.hosts.testbed.layout import FamilyTxnError
 from src.lazybull.v2.hosts.testbed.registration import list_arms, load_arm, load_campaign
@@ -142,12 +144,20 @@ def load_arm_specs(campaign_root: str | Path) -> Dict[str, ArmSpec]:
             root / "registered" / "arms" / arm_id / "config.json",
             what=f"臂 {arm_id!r} 冻结配置",
         )
+        # 配置漂移门：按盘上 config.json **复算**指纹，与注册台账比对，不符即拒绝运行
+        recomputed = collect_config_identity(dict(config_flat))["fingerprint"]
+        recorded = str(config.get("fingerprint") or "")
+        if recomputed != recorded:
+            raise TestbedError(
+                f"臂 {arm_id!r} 的冻结配置已变更（复算 {recomputed} != 注册 {recorded}）；"
+                "禁止在同一 campaign 上沿用旧身份继续推进（需重注册新 campaign）"
+            )
         specs[arm_id] = ArmSpec(
             arm_id=arm_id,
             arm_role=str(record["arm_role"]),
             root=root / "arms" / arm_id,
             config_flat=dict(config_flat),
-            config_fingerprint=str(config.get("fingerprint")),
+            config_fingerprint=recorded,
             model_version=int(model.get("version")),
             models_dir=str(model.get("models_dir")),
             model_content_fingerprint=str(model.get("content_fingerprint")),

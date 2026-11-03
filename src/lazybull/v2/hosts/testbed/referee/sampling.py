@@ -43,11 +43,22 @@ __all__ = [
 #: 收益裁判实现编号（写进 realization_id 与 manifest；T5 回撤裁判使用独立编号）
 IMPLEMENTATION_ID = "p5b_t4_income_referee/v1"
 #: 阶段编码（种子子流隔离的唯一来源；``holdout`` 沿用 T0.5b 的 ``validation`` 编码 2）
-STAGE_CODES: Mapping[str, int] = {"train": 1, "holdout": 2, "effect": 3}
+STAGE_CODES: Mapping[str, int] = {
+    "train": 1,
+    "holdout": 2,
+    "effect": 3,
+    # 独立验收子流（R2-P5B-04）：与 T0.5b PSD r3 已观察的 holdout 子流互斥
+    "holdout_independent_v1": 4,
+}
 #: 阶段名与 T0.5b 旧命名的对照（只影响 realization_id 里出现的层级语义）
-STAGE_ALIASES: Mapping[str, str] = {"train": "train", "holdout": "validation", "effect": "effect"}
-#: 允许的阶段（训练 / holdout / 功效效应网格）
-STAGES: Tuple[str, ...] = ("train", "holdout", "effect")
+STAGE_ALIASES: Mapping[str, str] = {
+    "train": "train",
+    "holdout": "validation",
+    "effect": "effect",
+    "holdout_independent_v1": "validation_independent_v1",
+}
+#: 允许的阶段（训练 / holdout / 独立验收子流 / 功效效应网格）
+STAGES: Tuple[str, ...] = ("train", "holdout", "holdout_independent_v1", "effect")
 #: 场景编码
 SCENE_CODES: Mapping[str, int] = {
     "ma20": 1,

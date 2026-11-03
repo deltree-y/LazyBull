@@ -172,14 +172,29 @@ def aa_readings_from_independent_paths(
             raise DrawdownThresholdError(
                 "A/A 必须使用同分布**独立**路径（禁止同一路径零注入冒充 A/A）"
             )
-        baseline = np.asarray(
+        # 逐 look 的 horizon 守卫：短路径不得被越界切片静默当作足长 look（设计 §5.4.4）
+        longest = int(max(plan.look_days))
+        if first.shape[1] < longest:
+            raise DrawdownThresholdError(
+                f"路径收益数 {first.shape[1]} 小于最长 look {longest}（禁止把短路径当作足长 horizon）"
+            )
+        # 逐实现配对（设计 v4 §5.4.1/§5.4.2 的真 A/A）：D[i, k] = MDD(a_i,k) − MDD(b_i,k)
+        arm_mdd = np.column_stack(
             [
-                float(
-                    log_to_percent(max_drawdown_log(cumulative_log_path(second)[:, : int(day) + 1]))
-                )
+                log_to_percent(max_drawdown_log(cumulative_log_path(first)[:, : int(day) + 1]))
                 for day in plan.look_days
-            ],
-            dtype=float,
+            ]
+        )
+        base_mdd = np.column_stack(
+            [
+                log_to_percent(max_drawdown_log(cumulative_log_path(second)[:, : int(day) + 1]))
+                for day in plan.look_days
+            ]
+        )
+        return AaReadings(
+            scene=str(scene),
+            d_matrix=arm_mdd - base_mdd,
+            realization_id=str(realization_id),
         )
     else:
         raise DrawdownThresholdError(

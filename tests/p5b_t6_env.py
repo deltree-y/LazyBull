@@ -36,10 +36,11 @@ ROLES = {
     "dd_improve_12pp": "synthetic_effect",
     "dd_worsen_12pp": "synthetic_effect",
 }
-#: 假上游五项（相对假仓库根）
+#: 假上游六项（相对假仓库根；含被引用的 T4 holdout）
 UPSTREAM_FILES = {
     "t4_manifest": "docs/plans/v2/p5b_t4_calibration_manifest_20261102.json",
     "t4_thresholds": "t4/calibration_thresholds.json",
+    "t4_holdout": "t4/income_holdout.json",
     "t5_manifest": "docs/plans/v2/p5b_t5_drawdown_manifest_20261102.json",
     "t5_thresholds": "t5/drawdown_thresholds.json",
     "t5_power": "t5/drawdown_power.json",

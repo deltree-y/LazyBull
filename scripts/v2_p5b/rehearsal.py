@@ -249,7 +249,7 @@ def _stage_report(args: argparse.Namespace) -> Dict[str, Any]:
         production=production_state(
             _REPO_ROOT, _production_before(campaign_root), window="register → report（跨阶段）"
         ),
-        referenced=referenced_readings(_REPO_ROOT),
+        referenced=referenced_readings(_REPO_ROOT, document),
         runbook=runbook,
         upstream_check={"verified": True, "links": upstream_check, "checked_in": "report"},
     )

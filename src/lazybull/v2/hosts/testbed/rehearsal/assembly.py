@@ -31,6 +31,7 @@ from src.lazybull.v2.hosts.testbed.rehearsal.injection import (
 )
 from src.lazybull.v2.hosts.testbed.rehearsal.manifest import (
     MANIFEST_FILENAME,
+    ManifestError,
     calibrator_identity,
     file_sha256,
     manifest_sha256,
@@ -714,15 +715,25 @@ def production_state(
     }
 
 
-def referenced_readings(repo_root: Path) -> Dict[str, Any]:
-    """T4/T5 冻结读数引用（**只引用不重算**；本演练不产生频率/MDE）。"""
+def referenced_readings(repo_root: Path, document: Mapping[str, Any]) -> Dict[str, Any]:
+    """T4/T5 冻结读数引用（**只引用不重算**；本演练不产生频率/MDE）。
+
+    引用文件必须来自本 manifest 的**冻结上游**，并按期望哈希校验（R2-P5B-06）。
+    """
     root = Path(repo_root)
-    t4 = _read_json(
-        root / "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261102/reports/income_holdout.json"
-    )
-    t5 = _read_json(
-        root / "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261102/reports/drawdown_power.json"
-    )
+    upstream = dict(document.get("upstream") or {})
+    t4_path = root / str(upstream["t4_holdout"]["path"])
+    t5_path = root / str(upstream["t5_power"]["path"])
+    for label, path, meta in (
+        ("income_holdout", t4_path, upstream["t4_holdout"]),
+        ("drawdown_power", t5_path, upstream["t5_power"]),
+    ):
+        if not path.is_file():
+            raise ManifestError(f"引用读数缺文件（{label}）: {path}")
+        if file_sha256(path) != str(meta["sha256"]):
+            raise ManifestError(f"引用读数与冻结上游哈希不符（{label}）: {path}")
+    t4 = _read_json(t4_path)
+    t5 = _read_json(t5_path)
     return {
         "income_holdout": {
             "unit_count": int(t4.get("unit_count", 0)),
@@ -736,13 +747,14 @@ def referenced_readings(repo_root: Path) -> Dict[str, Any]:
             "MDE_drawdown_worsen": _numeric_only((t5.get("mde") or {}).get("MDE_drawdown_worsen")),
         },
         "provenance": {
-            "t4_holdout": "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261102/reports/"
-            "income_holdout.json",
-            "t5_power": "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261102/reports/"
-            "drawdown_power.json",
+            "t4_holdout": t4_path.relative_to(root).as_posix(),
+            "t5_power": t5_path.relative_to(root).as_posix(),
+            "t4_holdout_sha256": str(upstream["t4_holdout"]["sha256"]),
+            "t5_power_sha256": str(upstream["t5_power"]["sha256"]),
+            "source": "resolved_from_manifest_upstream",
             "note": "只引用数值字段；T5 的闸门类字段（如 aa_gate_passed/gate_scope）不进入本报告",
         },
-        "note": "频率/MDE 只来自 T4/T5 holdout 产物；本演练只给点估计方向与链路",
+        "note": "频率/MDE 只来自本 manifest 冻结上游的 T4/T5 产物；本演练只给点估计方向与链路",
         "no_frequency_produced_here": True,
     }
 

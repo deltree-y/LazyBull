@@ -14,7 +14,8 @@ from scripts.v2_p5b.referee_psd_calibration_v2 import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-R2_MANIFEST = ROOT / "docs/plans/v2/p5b_calibration_manifest_psd_20261101_r2.json"
+#: 受控测试夹具（原文件是本地归档的冻结件，干净检出不可得；R2-P5B-07）
+R2_MANIFEST = ROOT / "tests" / "fixtures" / "p5b_calibration_manifest_psd_r2.json"
 
 
 def test_validation_invalid_rate_blocks_pass_even_with_zero_false_alarm():

@@ -118,10 +118,11 @@ _REQUIRED_PATHS: Tuple[str, ...] = (
     "limitations",
     "lineage",
 )
-#: 上游链接的五个必登记项
+#: 上游链接的必登记项（六项：含被引用的 T4 holdout —— R2-P5B-06 整改后不再“只记录当前哈希”）
 _UPSTREAM_KEYS: Tuple[str, ...] = (
     "t4_manifest",
     "t4_thresholds",
+    "t4_holdout",
     "t5_manifest",
     "t5_thresholds",
     "t5_power",

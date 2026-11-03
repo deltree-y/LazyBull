@@ -106,8 +106,15 @@ def stream_codes(
     Raises:
         SamplingError: 阶段/场景/方向未登记或 ``level`` 非有限。
     """
-    if stage not in STAGE_CODES:
-        raise SamplingError(f"未登记阶段: {stage!r}（允许 {list(STAGE_CODES)}）")
+    # 允许 ``<stage>_a`` / ``<stage>_b`` 变体：A/B 两臂互相独立、且与整批/分块无关
+    # （R2-P5B-R2-01：chunk 只能是资源配置，不得改变配对）。编码 = 基阶段码 × 10 + 分支码。
+    branch = 0
+    base_stage = stage
+    if stage.endswith("_a") or stage.endswith("_b"):
+        base_stage = stage[:-2]
+        branch = 1 if stage.endswith("_a") else 2
+    if base_stage not in STAGE_CODES:
+        raise SamplingError(f"未登记阶段: {stage!r}（允许 {list(STAGE_CODES)} 及其 _a/_b 变体）")
     if scene not in SCENE_CODES:
         raise SamplingError(f"未登记场景: {scene!r}（允许 {list(SCENE_CODES)}）")
     if null and null not in DIRECTION_CODES:
@@ -117,7 +124,7 @@ def stream_codes(
     return (
         int(seed),
         int(NAMESPACE_CODE),
-        int(STAGE_CODES[stage]),
+        int(STAGE_CODES[base_stage]) * 10 + int(branch),
         int(SCENE_CODES[scene]),
         int(DIRECTION_CODES.get(null, 0)),
         int(round(float(level) * _LEVEL_SCALE)),
@@ -136,7 +143,9 @@ def substream(
     """构造命名子流（同参数必得同一 Generator 与同一 realization_id）。"""
     codes = stream_codes(seed, stage, scene, null, level)
     generator = np.random.default_rng(np.random.SeedSequence(list(codes)))
-    alias = STAGE_ALIASES[stage]
+    alias = STAGE_ALIASES.get(stage) or STAGE_ALIASES[stage.rsplit("_", 1)[0]]
+    if stage.endswith("_a") or stage.endswith("_b"):
+        alias = f"{alias}{stage[-2:]}"
     label = null or "aa"
     realization_id = f"{prefix}:{alias}:{scene}:{label}:{float(level):g}".lstrip(":")
     return DrawdownSubstream(

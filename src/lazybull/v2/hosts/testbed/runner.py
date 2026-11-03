@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import uuid
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -97,6 +98,7 @@ REPORT_SCHEMA = "p5b_testbed_t2_run_report/v1"
 #: campaign 级运行锁（并发运行器的唯一裁决点）
 RUN_LOCK_FILENAME = ".run_attempt"
 #: 运行锁 stale 判定（秒；仅在锁文件不可读时作兜底信息，不用于抢占活跃持有者）
+GUARD_STALE_SECONDS = 30.0
 RUN_LOCK_TIMEOUT_SECONDS = 3600.0
 #: 单批机器时长授权阈值（秒；设计 §4.4「预计 >20 分钟须单独授权」）
 LONG_TASK_THRESHOLD_SECONDS = 1200.0
@@ -129,34 +131,72 @@ class CampaignRunLock:
 
     def __enter__(self) -> "CampaignRunLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.token = uuid.uuid4().hex
         holder = {
             "pid": os.getpid(),
             "host": socket.gethostname(),
+            "token": self.token,
             "acquired_at": datetime.now().isoformat(timespec="seconds"),
         }
-        for attempt in range(2):
-            try:
-                descriptor = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError as exc:
-                self._handle_existing(attempt, exc)
-                continue
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(holder, handle, ensure_ascii=False)
-            self.acquired = True
-            return self
-        raise CampaignBusyError(f"campaign 运行锁抢占失败: {self.path}")
+        # 所有对锁文件的读-改-写都在**串行化守卫**内完成：守卫用 O_EXCL 创建，
+        # 保证「判定死持有者 → 摘除 → 创建新锁」这一段临界区互斥（R2-P5B-02：
+        # 单纯 read→rename/unlink 都会按路径操作，能把别人的新锁摘走）。
+        deadline = time.monotonic() + float(self.timeout_seconds)
+        while True:
+            if self._acquire_guard(deadline):
+                try:
+                    existing = self._read_holder() if self.path.exists() else {}
+                    if existing and not self._holder_is_dead(existing):
+                        raise CampaignBusyError(
+                            f"campaign 已被另一运行器持有（holder={existing}）: {self.path}；"
+                            "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
+                        )
+                    if existing:
+                        logger.warning(
+                            f"检测到已死持有者的 campaign 运行锁（holder={existing}），在守卫内摘除"
+                        )
+                        self.path.unlink(missing_ok=True)
+                    descriptor = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                        json.dump(holder, handle, ensure_ascii=False)
+                finally:
+                    self._release_guard()
+                self.acquired = True
+                return self
+            if time.monotonic() >= deadline:
+                raise CampaignBusyError(f"campaign 运行锁抢占失败（守卫超时）: {self.path}")
+            time.sleep(0.01)
 
-    def _handle_existing(self, attempt: int, exc: FileExistsError) -> None:
-        holder = self._read_holder()
-        if not self._holder_is_dead(holder):
-            raise CampaignBusyError(
-                f"campaign 已被另一运行器持有（holder={holder}）: {self.path}；"
-                "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
-            ) from exc
-        logger.warning(
-            f"检测到已死持有者的 campaign 运行锁（holder={holder}），受控抢占: {self.path}"
-        )
-        self.path.unlink(missing_ok=True)
+    def _guard_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.guard")
+
+    def _acquire_guard(self, deadline: float) -> bool:
+        """取得串行化守卫（O_EXCL）；陈旧守卫（持有者已死或超时）可按 mtime 清理。"""
+        guard = self._guard_path()
+        try:
+            descriptor = os.open(str(guard), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - guard.stat().st_mtime
+            except OSError:
+                return False
+            if age > GUARD_STALE_SECONDS:
+                logger.warning(f"检测到陈旧锁守卫（{age:.0f}s），按超时清理: {guard}")
+                guard.unlink(missing_ok=True)
+            return False
+        payload = {"pid": os.getpid(), "token": self.token}
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+        return True
+
+    def _release_guard(self) -> None:
+        guard = self._guard_path()
+        try:
+            payload = json.loads(guard.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        if str((payload or {}).get("token") or "") == self.token:
+            guard.unlink(missing_ok=True)
 
     def _read_holder(self) -> Dict[str, Any]:
         try:
@@ -181,9 +221,20 @@ class CampaignRunLock:
         return not psutil.pid_exists(pid)
 
     def __exit__(self, *exc_info: Any) -> None:
-        if self.acquired:
-            self.path.unlink(missing_ok=True)
-            self.acquired = False
+        if not self.acquired:
+            return
+        # 释放同样在守卫内完成，并校验令牌：只删自己持有的那把锁
+        deadline = time.monotonic() + float(self.timeout_seconds)
+        guard_ok = self._acquire_guard(deadline)
+        try:
+            if str(self._read_holder().get("token") or "") == self.token:
+                self.path.unlink(missing_ok=True)
+            else:
+                logger.warning(f"campaign 运行锁已不再属于本进程，跳过删除: {self.path}")
+        finally:
+            if guard_ok:
+                self._release_guard()
+        self.acquired = False
 
 
 @contextmanager

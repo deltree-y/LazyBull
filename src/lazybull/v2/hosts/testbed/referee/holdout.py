@@ -168,7 +168,9 @@ def evaluate_holdout(
                 registry,
                 scene,
                 seed=seed,
-                stage="holdout",
+                # 独立验收子流（R2-P5B-04）：与 r3 已观察的 holdout 子流互斥；
+                # 协议见 docs/reports/p5b_t4_holdout_independent_preregistration_20261103.md
+                stage="holdout_independent_v1",
                 null=null,
                 mu=mu,
                 count=int(count),
@@ -211,6 +213,8 @@ def evaluate_holdout(
                 failed.append(key)
     return {
         "schema": HOLDOUT_SCHEMA,
+        # 实际使用的子流阶段：资格判定必须由它推导，不得硬编码（R2-P5B-04）
+        "stage": "holdout_independent_v1",
         "implementation_id": IMPLEMENTATION_ID,
         "statistic": statistic,
         "delta": float(delta),

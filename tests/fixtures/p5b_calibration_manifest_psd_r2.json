@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "status": "frozen_for_new_mc_validation_not_evidence",
+  "run_id": "p5b_psd_cal_20261101_r2",
+  "created_at": "2026-11-01",
+  "scope": "P5b income referee PSD conditional Monte Carlo validation",
+  "prereg": {
+    "path": "docs/plans/v2/p5b_income_referee_psd_prereg_draft_20261101.md",
+    "sha256": "1b92b25c19e9062b874f9d7eb9512b7150c1bdbdc8bd3e226d9ada1db88e18d7",
+    "review": "docs/review/v2_p5b/p5b_income_referee_psd_prereg_review_reviewer2_20261101.md",
+    "target": "A: false-alarm control plus honest per-scene MDE; no 5-delta 80% guarantee"
+  },
+  "sample": {
+    "n_max": 503,
+    "H": 20,
+    "look_blocks": [
+      6,
+      12,
+      18,
+      25
+    ],
+    "look_days": [
+      120,
+      240,
+      360,
+      500
+    ],
+    "K": 4
+  },
+  "statistic": {
+    "name": "psd_bartlett_lag1_boundary_centered",
+    "formula": "T_k=(mean(B_k)+delta)/sqrt(V_PSD/J_k)",
+    "V_PSD": "gamma0+gamma1 = (c1^2+cJ^2+sum_{j=2..J}(cj+c_{j-1})^2)/(2*(J-1))",
+    "gamma_denominator": "J-1",
+    "delta_log_daily": 0.0001936117626,
+    "units": "B and delta in log-return units; V is squared log-return units",
+    "zero_variance_policy": "sample/look invalid; no veto; counted in family denominator and invalid rate",
+    "epsilon_or_clamp_forbidden": true
+  },
+  "threshold": {
+    "alpha_train": 0.045,
+    "alpha_per_look": 0.01125,
+    "direction": "lower_tail",
+    "rule": "c_k=max_unit(-quantile(valid T[unit,k], alpha_per_look))",
+    "veto": "any_k(valid and T_k < -c_k)",
+    "family_wilson_denominator": "all realizations; invalid look does not trigger but is not removed",
+    "holdout_wilson_upper_max": 0.06,
+    "invalid_rate_per_look_max": 0.1
+  },
+  "calibration": {
+    "scenes": [
+      "ma20",
+      "ar1_06",
+      "regime_hetero",
+      "real_seed_block"
+    ],
+    "source_pair": {
+      "base_run_id": "factor_ab_20260916_071157_base",
+      "noise_run_id": "factor_ab_20260916_123214_noiseB0",
+      "base_chain_nav": "data/walk_forward/batches/factor_ab_20260916_071157_base/raw/chain_nav_wf_20260916_071158_5c27f356.csv",
+      "noise_chain_nav": "data/walk_forward/batches/factor_ab_20260916_123214_noiseB0/raw/chain_nav_wf_20260916_123215_8d82a668.csv",
+      "base_sha256": "d15d0daef51c70cda77aa6ce873d5f61fe724a7d90206326cc55968ad48252c2",
+      "noise_sha256": "982a265819bdf2f13d12c5bbd04a5ce917469d6ad24d60f3a55f8141e9eb5546",
+      "train_folds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "validation_source_folds": [
+        10,
+        11,
+        12,
+        13
+      ],
+      "source_folds_observed": true,
+      "holdout_type": "new Monte Carlo realization under the same observed source folds",
+      "old_mc_paths_reused": false,
+      "old_outputs_used_for_tuning": false
+    },
+    "counts": {
+      "train_per_unit": 2000,
+      "validation_per_unit": 10000,
+      "effect_reps_per_scene_per_level": 2000,
+      "seed": 20261103,
+      "realization_prefix": "p5b_psd_r2"
+    },
+    "nulls": [
+      "mu=0",
+      "mu=-delta"
+    ],
+    "effect_grid_delta": [
+      0.5,
+      1.0,
+      1.5,
+      3.0,
+      5.0
+    ],
+    "block_resample": {
+      "method": "circular block",
+      "block_length": 20,
+      "center": "separate train/validation pool mean",
+      "cross_pool_sampling_forbidden": true,
+      "date_key_alignment": [
+        "split_index",
+        "date"
+      ]
+    },
+    "dgp": {
+      "sd_daily": 0.0037,
+      "path_days": 500,
+      "ar_rho": 0.6,
+      "regime_block_length": 100,
+      "regime_multipliers": [
+        0.5,
+        1.5
+      ],
+      "block_length": 20
+    }
+  },
+  "mde": {
+    "registration_condition": "only after all false-alarm and invalid-rate units pass",
+    "per_scene": true,
+    "pooled_average_mde_allowed": false,
+    "point_estimate_80pct": true,
+    "wilson_interval_reported": true,
+    "hard_5delta_80pct": false,
+    "if_not_reached": "report tested-to-5delta-not-80pct"
+  },
+  "evidence_identity": {
+    "evidence_class": "calibration_only",
+    "not_forward_evidence": true,
+    "not_sla_evidence": true,
+    "no_ledger_entry": true,
+    "old_fail_retained": true,
+    "new_output_root": "temp/p5b_psd_cal_20261101_r2/"
+  }
+}

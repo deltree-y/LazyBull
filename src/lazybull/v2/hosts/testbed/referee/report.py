@@ -79,8 +79,23 @@ def build_referee_verdict(
             "wilson_upper_max": float(holdout["wilson_upper_max"]),
             "wilson_confidence": float(holdout["wilson_confidence"]),
             "invalid_rate_per_look_max": float(holdout["invalid_rate_per_look_max"]),
+            # R2-P5B-04：资格由**实际子流阶段**推导，且在 holdout/verdict/report/CLI/MDE 间一致。
             "aa_passed": bool(holdout["referee_usable"]),
-            "referee_usable": bool(holdout["referee_usable"]),
+            "holdout_stage": str(holdout.get("stage") or ""),
+            "conditional_reproduction": bool(
+                holdout["referee_usable"] and holdout.get("stage") == "holdout"
+            ),
+            "independent_acceptance": bool(
+                holdout["referee_usable"] and holdout.get("stage") == "holdout_independent_v1"
+            ),
+            "acceptance_basis": (
+                "independent_acceptance：holdout 使用一次性独立子流 holdout_independent_v1 且全部单元过门"
+                if holdout.get("stage") == "holdout_independent_v1"
+                else "conditional_reproduction：holdout 与 T0.5b PSD r3 同源，读数已观察"
+            ),
+            "referee_usable": bool(
+                holdout["referee_usable"] and holdout.get("stage") == "holdout_independent_v1"
+            ),
             "rows": [
                 {
                     "unit": key,

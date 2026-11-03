@@ -368,10 +368,14 @@ def collect_aa_readings(
 ) -> AaReadings:
     """在一个单元内抽 A/A **独立**实现并转成 ``D_k`` 读数（分块不影响结果）。
 
-    A/A 的 arm 是独立抽取的 ``B0 + n``，base 是冻结基准臂 ``B0``（不允许同一路径零注入）。
+    A/A 的 arm 与 base 是**两条独立抽取**的 ``B0 + n`` 路径（不允许同一路径零注入）。
+
+    A/B 各自使用独立命名子流（``<stage>_a`` / ``<stage>_b``），因此 `chunk` 只影响批量大小、
+    不改变配对与数值（R2-P5B-R2-01：分块必须是资源配置，不能改仪器读数）。
     """
     plan = drawdown_look_plan()
-    item = substream(seed, stage, scene, null="aa", prefix=prefix)
+    item_a = substream(seed, f"{stage}_a", scene, null="aa", prefix=prefix)
+    item_b = substream(seed, f"{stage}_b", scene, null="aa", prefix=prefix)
     registry = source.registry("train" if stage == "train" else "holdout")
     total = int(count)
     if total <= 0:
@@ -381,14 +385,17 @@ def collect_aa_readings(
     produced = 0
     while produced < total:
         step = min(size, total - produced)
-        arm = draw_arm_paths(source.window, registry, scene, item.generator, step)
+        # 真 A/A：两条**独立同分布**路径逐实现配对（两侧各带噪声），
+        # 而不是「一条加噪 vs 固定 B0」——后者只含单侧噪声，零点宽度约差一半（R2-P5B-03）。
+        arm_a = draw_arm_paths(source.window, registry, scene, item_a.generator, step)
+        arm_b = draw_arm_paths(source.window, registry, scene, item_b.generator, step)
         blocks.append(
             aa_readings_from_independent_paths(
-                arm,
-                source.window.log_returns,
+                arm_a,
+                arm_b,
                 plan,
                 scene=scene,
-                realization_id=item.realization_id,
+                realization_id=item_a.realization_id,
             )
         )
         produced += step

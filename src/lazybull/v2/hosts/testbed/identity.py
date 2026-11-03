@@ -68,6 +68,11 @@ EXECUTION_CLOSURE = (
 _REQUIRED_WINDOW_DATASETS = ("clean/daily",)
 #: 窗口内存在即纳入身份的数据集（缺失不阻断，但存在即受漂移门约束）
 _OPTIONAL_WINDOW_DATASETS = ("features/cs_infer",)
+#: v2 PaperHost 实际消费的 panel 分区（``features/panel/<day>/core.parquet``）；
+#: 存在即必须纳入窗口身份——否则合法重写 panel 后仍可沿用旧 campaign 身份发布
+_PANEL_DATASET = "features/panel"
+#: 冷区 panel 归档（store 可能优先读取；月份目录布局）
+_PANEL_ARCHIVE = "features/panel_archive"
 #: 全库水位登记的数据集（仅登记，不参与门禁）
 _WATERMARK_DATASETS = ("raw/daily", "clean/daily", "features/cs_infer")
 
@@ -226,6 +231,7 @@ def collect_data_state_identity(*, data_root: str, virtual_days: Sequence[str]) 
     if not days:
         raise TestbedError("数据态身份需要至少一个虚拟日（D0）")
     window_files: list[Dict[str, Any]] = []
+    panel_present = (root / _PANEL_DATASET).is_dir()
     for day in days:
         for dataset in _REQUIRED_WINDOW_DATASETS:
             path = _partition_path(root, dataset, day)
@@ -236,11 +242,31 @@ def collect_data_state_identity(*, data_root: str, virtual_days: Sequence[str]) 
             path = _partition_path(root, dataset, day)
             if path.is_file():
                 window_files.append(file_identity(path, base_dir=root))
+        # v2 宿主实际消费 panel：按**实际读域**登记，而不是只看热区单个 core 文件
+        # （R2-P5B-01：其他特征族 fundamental/sector... 与冷区 archive 都可能被读取）
+        if panel_present:
+            hot = sorted((root / _PANEL_DATASET / day).glob("*.parquet"))
+            if not hot:
+                raise FileNotFoundError(
+                    f"虚拟日 {day} 缺 panel 分区: {root / _PANEL_DATASET / day}"
+                    "（宿主实际消费该输入，禁止缺日或填旧值）"
+                )
+            for path in hot:
+                window_files.append(file_identity(path, base_dir=root))
+            # 冷区回退：store 可能按月份目录读取 archive 分区（YYYY-MM 与 YYYYMM 两种命名都探测）
+            month = f"{day[:4]}-{day[4:6]}"
+            for candidate in (
+                root / _PANEL_ARCHIVE / month / "core.parquet",
+                root / _PANEL_ARCHIVE / f"{day[:6]}" / "core.parquet",
+            ):
+                if candidate.is_file():
+                    window_files.append(file_identity(candidate, base_dir=root))
     watermark = {dataset: _latest_partition(root / dataset) for dataset in _WATERMARK_DATASETS}
     return {
         "window_files": window_files,
         "window_day_count": len(days),
         "window_state_id": canonical_json_sha256({"window_files": window_files})[:16],
+        "panel_covered": panel_present,
         "global_watermark": watermark,
         "global_watermark_note": "仅登记，不参与 campaign 漂移门禁",
     }

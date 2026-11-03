@@ -39,7 +39,7 @@ from src.lazybull.v2.hosts.testbed.storage import seal_record  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "v2_p5b" / "rehearsal.py"
 RUNBOOK = ROOT / "docs" / "guide" / "p5b_testbed_runbook.md"
-REAL_CAMPAIGN = ROOT / "data" / "paper_shadow" / "p5b_testbed" / "p5b_t6_rehearsal_20261103_r15"
+REAL_CAMPAIGN = ROOT / "data" / "paper_shadow" / "p5b_testbed" / "p5b_t6_rehearsal_20261103_r18"
 
 
 def test_script_help_is_executable():

@@ -364,9 +364,27 @@ def load_source_pair(
     frames = []
     for path in (base, noise):
         frame = pd.read_csv(path).sort_values(["split_index", "date"]).copy()
+        # NAV 必须有限且为正：非法值不得被后续 dropna() 静默压成更短的有效序列（R2-P5B-05）
+        nav = pd.to_numeric(frame["nav"], errors="coerce")
+        if not np.isfinite(nav.to_numpy(dtype=float)).all() or (nav.to_numpy(dtype=float) <= 0).any():
+            raise SceneError(f"源对 NAV 含非有限或非正值（禁止静默丢弃坏源样本）: {path}")
+        frame["nav"] = nav
         previous = frame.groupby("split_index")["nav"].shift(1)
         frame["r"] = frame["nav"] / previous - 1.0
         frames.append(frame)
+    # 配对键必须两侧唯一且完全一致：inner join 会把缺日静默压成「双日 vs 单日」收益差，
+    # 从而在两条相同路径之间制造并不存在的 d（R2-P5B-05）。
+    keys = []
+    for frame, label in ((frames[0], "base"), (frames[1], "noise")):
+        pair = list(zip(frame["split_index"].tolist(), frame["date"].tolist()))
+        if len(pair) != len(set(pair)):
+            raise SceneError(f"源对 {label} 存在重复配对键（split_index,date）")
+        keys.append(set(pair))
+    missing = keys[0] ^ keys[1]
+    if missing:
+        raise SceneError(
+            f"源对配对键集不一致（仅一侧存在 {len(missing)} 个键），禁止用 inner join 静默压缩"
+        )
     merged = frames[0].merge(frames[1], on=["split_index", "date"], how="inner").dropna()
     if merged.empty:
         raise SceneError(f"源对无可对齐的配对收益: base={base} noise={noise}")
