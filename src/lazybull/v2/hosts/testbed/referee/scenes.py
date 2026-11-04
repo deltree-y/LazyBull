@@ -366,7 +366,8 @@ def load_source_pair(
         frame = pd.read_csv(path).sort_values(["split_index", "date"]).copy()
         # NAV 必须有限且为正：非法值不得被后续 dropna() 静默压成更短的有效序列（R2-P5B-05）
         nav = pd.to_numeric(frame["nav"], errors="coerce")
-        if not np.isfinite(nav.to_numpy(dtype=float)).all() or (nav.to_numpy(dtype=float) <= 0).any():
+        values = nav.to_numpy(dtype=float)
+        if not np.isfinite(values).all() or (values <= 0).any():
             raise SceneError(f"源对 NAV 含非有限或非正值（禁止静默丢弃坏源样本）: {path}")
         frame["nav"] = nav
         previous = frame.groupby("split_index")["nav"].shift(1)

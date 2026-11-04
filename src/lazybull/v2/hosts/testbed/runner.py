@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import uuid
 import time
 from contextlib import contextmanager
@@ -98,8 +99,7 @@ REPORT_SCHEMA = "p5b_testbed_t2_run_report/v1"
 #: campaign 级运行锁（并发运行器的唯一裁决点）
 RUN_LOCK_FILENAME = ".run_attempt"
 #: 运行锁 stale 判定（秒；仅在锁文件不可读时作兜底信息，不用于抢占活跃持有者）
-GUARD_STALE_SECONDS = 30.0
-RUN_LOCK_TIMEOUT_SECONDS = 3600.0
+RUN_LOCK_TIMEOUT_SECONDS = 5.0
 #: 单批机器时长授权阈值（秒；设计 §4.4「预计 >20 分钟须单独授权」）
 LONG_TASK_THRESHOLD_SECONDS = 1200.0
 #: 成功资格要求小写 ``t1``（§4.1.1 A1）
@@ -113,12 +113,13 @@ class CampaignBusyError(FamilyTxnError):
 
 
 class CampaignRunLock:
-    """campaign 级独占运行锁（``O_CREAT|O_EXCL``）。
+    """campaign 运行锁：**OS 级文件锁**（fcntl.flock / msvcrt.locking）。
 
-    stale 判定 = **同主机且持有者 pid 已不存在**（``psutil.pid_exists``），不做纯 mtime
-    超时抢占——整批历史回放可能运行超过任一固定阈值，按时间抢占会与活跃运行器并发。
-    锁文件不可读/信息缺失 ⇒ 一律视为被持有（fail-closed），由人工核对后清理。
-    ``timeout_seconds`` 参数**不参与抢占判定**（保留给 T3 心跳阈值），不得当作保护阈值使用。
+    设计要点（R2-P5B-02 整改）：
+    - 互斥由内核保证，进程崩溃/被杀时锁自动释放 ⇒ **不存在 stale 接管**，
+      因此没有「读旧锁 → 删他人新锁」的窗口；
+    - 拒绝「按持有时间抢占」：活的持有者不会被超时逻辑踢掉；
+    - 锁文件只承载持有者信息（pid/host/token）用于诊断，不承担互斥语义。
     """
 
     def __init__(
@@ -128,113 +129,105 @@ class CampaignRunLock:
         self.timeout_seconds = float(timeout_seconds)
         self.path = layout.journal_root / RUN_LOCK_FILENAME
         self.acquired = False
+        self.token = ""
+        self._fd: Optional[int] = None
+        self._local: Optional["threading.Lock"] = None
 
     def __enter__(self) -> "CampaignRunLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.token = uuid.uuid4().hex
-        holder = {
-            "pid": os.getpid(),
-            "host": socket.gethostname(),
-            "token": self.token,
-            "acquired_at": datetime.now().isoformat(timespec="seconds"),
-        }
-        # 所有对锁文件的读-改-写都在**串行化守卫**内完成：守卫用 O_EXCL 创建，
-        # 保证「判定死持有者 → 摘除 → 创建新锁」这一段临界区互斥（R2-P5B-02：
-        # 单纯 read→rename/unlink 都会按路径操作，能把别人的新锁摘走）。
         deadline = time.monotonic() + float(self.timeout_seconds)
+        local = _local_lock_for(self.path)
+        if not local.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise CampaignBusyError(
+                f"campaign 已被本进程内另一运行器持有: {self.path}"
+            )
+        self._local = local
+        descriptor = os.open(str(self.path), os.O_CREAT | os.O_RDWR)
         while True:
-            if self._acquire_guard(deadline):
-                try:
-                    existing = self._read_holder() if self.path.exists() else {}
-                    if existing and not self._holder_is_dead(existing):
-                        raise CampaignBusyError(
-                            f"campaign 已被另一运行器持有（holder={existing}）: {self.path}；"
-                            "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
-                        )
-                    if existing:
-                        logger.warning(
-                            f"检测到已死持有者的 campaign 运行锁（holder={existing}），在守卫内摘除"
-                        )
-                        self.path.unlink(missing_ok=True)
-                    descriptor = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                        json.dump(holder, handle, ensure_ascii=False)
-                finally:
-                    self._release_guard()
-                self.acquired = True
-                return self
+            if _try_lock_file(descriptor):
+                break
             if time.monotonic() >= deadline:
-                raise CampaignBusyError(f"campaign 运行锁抢占失败（守卫超时）: {self.path}")
+                os.close(descriptor)
+                local.release()
+                self._local = None
+                raise CampaignBusyError(
+                    f"campaign 已被另一运行器持有（OS 文件锁获取超时）: {self.path}；"
+                    "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
+                )
             time.sleep(0.01)
-
-    def _guard_path(self) -> Path:
-        return self.path.with_name(f"{self.path.name}.guard")
-
-    def _acquire_guard(self, deadline: float) -> bool:
-        """取得串行化守卫（O_EXCL）；陈旧守卫（持有者已死或超时）可按 mtime 清理。"""
-        guard = self._guard_path()
-        try:
-            descriptor = os.open(str(guard), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            try:
-                age = time.time() - guard.stat().st_mtime
-            except OSError:
-                return False
-            if age > GUARD_STALE_SECONDS:
-                logger.warning(f"检测到陈旧锁守卫（{age:.0f}s），按超时清理: {guard}")
-                guard.unlink(missing_ok=True)
-            return False
-        payload = {"pid": os.getpid(), "token": self.token}
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False)
-        return True
-
-    def _release_guard(self) -> None:
-        guard = self._guard_path()
-        try:
-            payload = json.loads(guard.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = {}
-        if str((payload or {}).get("token") or "") == self.token:
-            guard.unlink(missing_ok=True)
-
-    def _read_holder(self) -> Dict[str, Any]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(f"campaign 运行锁读取失败（按被持有处理）: {self.path}（{exc}）")
-            return {}
-        return payload if isinstance(payload, dict) else {}
-
-    def _holder_is_dead(self, holder: Mapping[str, Any]) -> bool:
-        """仅当同主机且 pid 确认不存在时判死；其余一律视为仍在运行。"""
-        if str(holder.get("host") or "") != socket.gethostname():
-            return False
-        pid = holder.get("pid")
-        if not isinstance(pid, int) or pid <= 0:
-            return False
-        try:
-            import psutil
-        except ImportError:  # pragma: no cover - psutil 为项目依赖
-            logger.warning("psutil 不可用，无法判定锁持有者存活；按被持有处理")
-            return False
-        return not psutil.pid_exists(pid)
+        payload = json.dumps(
+            {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "token": self.token,
+                "acquired_at": datetime.now().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        holder_path = self.path.with_name(f"{self.path.name}.holder")
+        holder_path.write_bytes(payload)
+        self._fd = descriptor
+        self.acquired = True
+        return self
 
     def __exit__(self, *exc_info: Any) -> None:
-        if not self.acquired:
+        if not self.acquired or self._fd is None:
             return
-        # 释放同样在守卫内完成，并校验令牌：只删自己持有的那把锁
-        deadline = time.monotonic() + float(self.timeout_seconds)
-        guard_ok = self._acquire_guard(deadline)
         try:
-            if str(self._read_holder().get("token") or "") == self.token:
-                self.path.unlink(missing_ok=True)
-            else:
-                logger.warning(f"campaign 运行锁已不再属于本进程，跳过删除: {self.path}")
+            _unlock_file(self._fd)
         finally:
-            if guard_ok:
-                self._release_guard()
-        self.acquired = False
+            os.close(self._fd)
+            self._fd = None
+            self.acquired = False
+            if getattr(self, "_local", None) is not None:
+                self._local.release()
+                self._local = None
+
+
+#: 进程内互斥注册表（Windows 的 msvcrt 字节锁是**进程级**的，同进程两个 fd 可同时加锁，
+#: 因此需要一层进程内互斥；跨进程互斥仍由 OS 文件锁保证）
+_LOCAL_LOCKS: Dict[str, "threading.Lock"] = {}
+_LOCAL_LOCKS_GUARD = threading.Lock()
+
+
+def _local_lock_for(path: Path) -> "threading.Lock":
+    key = str(path)
+    with _LOCAL_LOCKS_GUARD:
+        return _LOCAL_LOCKS.setdefault(key, threading.Lock())
+
+
+def _try_lock_file(descriptor: int) -> bool:
+    """尝试对已打开的锁文件加**独占且非阻塞**的 OS 锁；失败返回 False。"""
+    try:
+        if os.name == "nt":  # pragma: no cover - Windows
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover - POSIX
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock_file(descriptor: int) -> None:
+    """释放 OS 锁（进程退出时内核亦会自动释放）。"""
+    try:
+        if os.name == "nt":  # pragma: no cover - Windows
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover - POSIX
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError:
+        return
 
 
 @contextmanager

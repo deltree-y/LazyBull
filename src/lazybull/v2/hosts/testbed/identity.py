@@ -218,6 +218,31 @@ def _partition_path(data_root: Path, dataset: str, day: str) -> Path:
     return data_root / dataset / f"{name}.parquet"
 
 
+def _panel_window_files(root: Path, day: str) -> list[Dict[str, Any]]:
+    """某一虚拟日**实际读域**内的 panel 分区身份（热区全族 + 冷区全族）。
+
+    store 会按特征族分别选取热区/冷区文件，因此不能只登记热区 core：
+    冷区同名族（`panel_archive/<YYYY-MM>/<family>.parquet`）同样必须进入身份。
+    """
+    files: list[Dict[str, Any]] = []
+    hot_dir = root / _PANEL_DATASET / day
+    hot = sorted(hot_dir.glob("*.parquet"))
+    if not hot:
+        raise FileNotFoundError(
+            f"虚拟日 {day} 缺 panel 分区: {hot_dir}（宿主实际消费该输入，禁止缺日或填旧值）"
+        )
+    for path in hot:
+        files.append(file_identity(path, base_dir=root))
+    for month in (f"{day[:4]}-{day[4:6]}", day[:6]):
+        archive_dir = root / _PANEL_ARCHIVE / month
+        if not archive_dir.is_dir():
+            continue
+        for path in sorted(archive_dir.glob("*.parquet")):
+            files.append(file_identity(path, base_dir=root))
+        break
+    return files
+
+
 def collect_data_state_identity(*, data_root: str, virtual_days: Sequence[str]) -> Dict[str, Any]:
     """数据态身份：窗口内容（门禁）+ 全库水位（仅登记）。
 
@@ -242,25 +267,9 @@ def collect_data_state_identity(*, data_root: str, virtual_days: Sequence[str]) 
             path = _partition_path(root, dataset, day)
             if path.is_file():
                 window_files.append(file_identity(path, base_dir=root))
-        # v2 宿主实际消费 panel：按**实际读域**登记，而不是只看热区单个 core 文件
-        # （R2-P5B-01：其他特征族 fundamental/sector... 与冷区 archive 都可能被读取）
+        # v2 宿主实际消费 panel：按**实际读域**登记（热区各族 + 冷区各族）
         if panel_present:
-            hot = sorted((root / _PANEL_DATASET / day).glob("*.parquet"))
-            if not hot:
-                raise FileNotFoundError(
-                    f"虚拟日 {day} 缺 panel 分区: {root / _PANEL_DATASET / day}"
-                    "（宿主实际消费该输入，禁止缺日或填旧值）"
-                )
-            for path in hot:
-                window_files.append(file_identity(path, base_dir=root))
-            # 冷区回退：store 可能按月份目录读取 archive 分区（YYYY-MM 与 YYYYMM 两种命名都探测）
-            month = f"{day[:4]}-{day[4:6]}"
-            for candidate in (
-                root / _PANEL_ARCHIVE / month / "core.parquet",
-                root / _PANEL_ARCHIVE / f"{day[:6]}" / "core.parquet",
-            ):
-                if candidate.is_file():
-                    window_files.append(file_identity(candidate, base_dir=root))
+            window_files.extend(_panel_window_files(root, day))
     watermark = {dataset: _latest_partition(root / dataset) for dataset in _WATERMARK_DATASETS}
     return {
         "window_files": window_files,

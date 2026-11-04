@@ -42,7 +42,7 @@
    （当前 `model_version=24022`，`train_end_date=20260105`）；
 3. **上游冻结件**（哈希不符即拒绝运行）：T4 收益仪器 manifest + 收益临界值、T5 回撤仪器
    manifest + 回撤临界值 + 回撤功效产物；
-4. **T6 冻结件**：`docs/plans/v2/p5b_t6_rehearsal_manifest_<日期>.json`（正式件 `lineage.sequence=18`，
+4. **T6 冻结件**：`docs/plans/v2/p5b_t6_rehearsal_manifest_<日期>.json`（正式件 `lineage.sequence=19`，
    campaign 内副本必须与之逐字节一致；正文的 campaign 与 sequence 由 `verify_runbook` 机器校验）；
 5. **版本**：`pyproject.toml` 与 `CHANGELOG.md` 首条版本一致，且 `README.md` 引用本手册；
 6. **机器**：单日族级实测约 20 s（五臂 × 生产 structural 窗口）；整批预计 > 20 分钟时**必须先
@@ -53,13 +53,13 @@
 <!-- rehearsal-artifacts -->
 | 产物 | sha256 |
 |---|---|
-| `rehearsal_manifest.json` | `898529044d87ebe983b6e9f392aa38f1d3404523961c32ef7a4c560f68755b2e` |
-| `t4_manifest` | `224169df7549f485d29a3030c65bbc73bcf3fdf20c0b29e8d322b4d7566e6eea` |
-| `t4_thresholds` | `607e45eabfebf838fe91ff606bfc65dd521f965b79045d560be1b7e2ff777a4b` |
-| `t4_holdout` | `b9411bfa57f42008b47d105652f1e31e29bddbbd8120a10d71def4a2b75bd68d` |
-| `t5_manifest` | `f0c6bdcb513b0f2fe9237324a9a06fc8bd0406147468cf683d8d140c06cdcc72` |
-| `t5_power` | `115cb067724510482ee33ab1088ef4d9be0aa3bdfc78bea1fe4050249c5ea5b9` |
-| `t5_thresholds` | `e09acfcd22375b23f99740cd637ecd85ed53a38008955ec022e27cd2549873b2` |
+| `rehearsal_manifest.json` | `34ae5db28814e8b54da87b9619c4f1545e4c678d4c1efea6692e007f1601ef06` |
+| `t4_manifest` | `3a07279b0cce1ede76fd8d9e252f1da369db07743dd71439401c0e3bdcd154ad` |
+| `t4_thresholds` | `c9be7fe0165c5796c8f8043ecdce8f03ce802cced6f42c30299519df9fb5425c` |
+| `t4_holdout` | `73fff142f8bfc3ed8194a80685b5bdf38e2e03694bd9200b85fa1194b0a19068` |
+| `t5_manifest` | `a249c431227b3843c0d3f4e076f31683f8d2209ad3129c16268796cef128f088` |
+| `t5_power` | `9b248ab7e928ac47accefa7a2dc516851d45f8ed8481507aa3dbbbf823b0fae4` |
+| `t5_thresholds` | `380e18860913f133af91e6e9541a1c33041eb12d078bf9dbd61966e1b736e26c` |
 <!-- /rehearsal-artifacts -->
 
 > 该哈希块只收**稳定成员**（T6 manifest + 上游五链）。报告与判定表的哈希记录在报告本体与判定表
@@ -69,7 +69,7 @@
 
 ## 3. 命令与参数逐条示例
 
-所有命令在仓库根执行；正式演练根 `<campaign>` = `p5b_t6_rehearsal_20261103_r18`（`lineage.sequence=18`）。
+所有命令在仓库根执行；正式演练根 `<campaign>` = `p5b_t6_rehearsal_20261104_r19`（`lineage.sequence=19`）。
 更早的 `p5b_t6_rehearsal_20261102`/*_r2*…*_r11*/*_r12*…*_r16* 为**被取代** run（格式化整改、
 首轮/复审整改过程中冻结），保留作谱系证据，**不参与任何读数**。
 **默认 dry-run / 只读**：`--freeze` 与 `--report` 需 `--apply` 才写盘。

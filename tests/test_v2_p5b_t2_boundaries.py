@@ -280,11 +280,14 @@ def test_engine_state_and_nav_are_consistent_but_nav_parquet_is_sparse(tmp_path)
     assert len(sparse_days) < 4
 
 
-def test_campaign_lock_file_is_removed_after_run(tmp_path):
+def test_campaign_lock_is_released_after_run(tmp_path):
+    """运行结束后锁必须**已释放**（OS 锁文件保留，但可被再次获取）。"""
     env = envmod.build_env(tmp_path)
     prepared = envmod.prepare_campaign(env)
     envmod.run_campaign(env, prepared, days=[env.days[0]])
-    assert not (prepared.root / "journal" / runner_module.RUN_LOCK_FILENAME).exists()
+    layout = layout_for(prepared.root)
+    with runner_module.CampaignRunLock(layout, timeout_seconds=5.0):
+        pass  # 能再次取得锁即证明已释放
 
 
 def test_missing_clean_partition_is_detected_before_run(tmp_path):

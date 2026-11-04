@@ -38,6 +38,7 @@ from src.lazybull.v2.hosts.testbed.referee.training import (
 
 __all__ = [
     "HOLDOUT_SCHEMA",
+    "HOLDOUT_STAGE",
     "WILSON_CONFIDENCE",
     "WILSON_Z",
     "HoldoutError",
@@ -48,6 +49,8 @@ __all__ = [
 
 #: 产物 schema
 HOLDOUT_SCHEMA = "p5b_testbed_income_holdout/v1"
+#: holdout 实际使用的子流阶段（R2-P5B-04：与 r3 已观察的 ``holdout`` 子流互斥）
+HOLDOUT_STAGE = "holdout_independent_v1"
 #: Wilson 95% 双侧正态分位
 WILSON_Z = 1.959963984540054
 #: Wilson 置信水平（冻结）
@@ -170,7 +173,7 @@ def evaluate_holdout(
                 seed=seed,
                 # 独立验收子流（R2-P5B-04）：与 r3 已观察的 holdout 子流互斥；
                 # 协议见 docs/reports/p5b_t4_holdout_independent_preregistration_20261103.md
-                stage="holdout_independent_v1",
+                stage=HOLDOUT_STAGE,
                 null=null,
                 mu=mu,
                 count=int(count),

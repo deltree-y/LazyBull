@@ -38,20 +38,20 @@ __all__ = [
 PRODUCTION_DIRS: Sequence[str] = ("paper", "runs", "models")
 #: 上游五项（T4/T5 冻结仪器与两侧临界值、T5 功效产物）
 UPSTREAM_PATHS: Mapping[str, str] = {
-    "t4_manifest": "docs/plans/v2/p5b_t4_calibration_manifest_20261103c.json",
+    "t4_manifest": "docs/plans/v2/p5b_t4_calibration_manifest_20261104.json",
     "t4_thresholds": (
-        "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261103c/reports/"
+        "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261104/reports/"
         "calibration_thresholds.json"
     ),
     "t4_holdout": (
-        "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261103c/reports/income_holdout.json"
+        "data/paper_shadow/p5b_testbed/p5b_t4_referee_20261104/reports/income_holdout.json"
     ),
-    "t5_manifest": "docs/plans/v2/p5b_t5_drawdown_manifest_20261103c.json",
+    "t5_manifest": "docs/plans/v2/p5b_t5_drawdown_manifest_20261104.json",
     "t5_thresholds": (
-        "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261103c/reports/drawdown_thresholds.json"
+        "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261104/reports/drawdown_thresholds.json"
     ),
     "t5_power": (
-        "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261103c/reports/drawdown_power.json"
+        "data/paper_shadow/p5b_testbed/p5b_t5_drawdown_20261104/reports/drawdown_power.json"
     ),
 }
 

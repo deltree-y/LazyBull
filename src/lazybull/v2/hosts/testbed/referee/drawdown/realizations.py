@@ -252,7 +252,8 @@ def window_identity(window: SourceWindow, dgp: DgpParams) -> Dict[str, Any]:
         "dgp": dgp.as_dict(),
         "noise_model": "x = B0_window + n；n 由收益裁判冻结的四类场景按同一 DgpParams 生成",
         "pairing": (
-            "A/A 与效应单元的 D_k 都以冻结基准臂 B0 为减数；arm 为独立抽取的实现"
+            "A/A 的 D_k 由两条独立同分布路径逐实现配对（arm=B0+n_a 对 base=B0+n_b）；"
+            "效应单元的 D_k 以冻结基准臂 B0 为减数（两侧机制不同，各自在对应段落登记）"
             "（B0+n 或 B0+n+inj），禁止同一路径零注入"
         ),
         "baseline": "B0 冻结窗口（各 look 的 MDD_base 只算一次，全实现共用）",

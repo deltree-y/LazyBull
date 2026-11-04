@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.7] - 2026-11-04
+
+### Fix（P5b 整体交付第二轮复审整改：身份 read-domain / OS 锁 / 文案同步）
+
+- **身份门（R2-P5B-01）**：`identity._panel_window_files` 按**实际读域**登记 panel——热区
+  `features/panel/<day>/*.parquet` 全特征族 + 冷区 `features/panel_archive/<YYYY-MM>/*.parquet`
+  全族（不再只认 `core.parquet`）；冷区非 core 的合法重写也会改变 `window_state_id`。
+- **运行锁（R2-P5B-02）**：放弃 stale 接管，改 **OS 文件锁**（Windows `msvcrt.locking` /
+  POSIX `fcntl.flock`，非阻塞）+ **进程内互斥注册表**（同一进程多 fd 也互斥）；
+  锁文件只保留 1 字节锁位，持有者信息写 `.run_attempt.holder`；释放不删锁文件。
+  进程崩溃由内核释放，不存在“按路径摘除他人锁”的窗口，也不再有“超时抢占活持有者”。
+- **A/A 文案（R2-P5B-03 残留）**：`drawdown/realizations.source_window.pairing` 改为
+  “A/A 由两条独立同分布路径逐实现配对；效应单元仍以 B0 为减数（各自登记）”。
+- **holdout 资格文案（R2-P5B-04 残留）**：`manifest_sections.limitations` 第 7 条按
+  `holdout.HOLDOUT_STAGE` 生成——独立子流成立时陈述剩余限制，不再写“仅条件复现”。
+- **复杂度（R3-01）**：`collect_data_state_identity` 抽出 `_panel_window_files`，
+  mccabe 13 → 达标；`--paths src/lazybull` 与 `+scripts` 双口径**新增硬超限 0**。
+
+谱系：T4 seq8（`3a07279b…`，独立 holdout 8/8，最高 Wilson 3.668%）、
+T5 seq5（`a249c431…`，`c_w=[-20.22,-28.49,-28.00,-28.88]`、`c_i=[19.93,26.49,26.35,26.09]`）、
+T6 seq19（`34ae5db2…`，report `b39c66bb…` / md `e4ad66c8…` / verdict `7bbd9f4f…`）。
+
+测试：T6 77、lock 并发 4、身份 6、T2 边界 21、T4 172、T5 113 全绿；
+black/flake8 干净。
+
 ## [0.209.6] - 2026-11-02
 
 ### Feat（P5b T6：历史端到端演练 + 运行手册 + H6 单条数值 + H7 文档收口）

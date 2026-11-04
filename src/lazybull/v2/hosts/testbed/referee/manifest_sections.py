@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from src.lazybull.v2.hosts.testbed.referee.holdout import HOLDOUT_STAGE
 from src.lazybull.v2.hosts.testbed.referee.manifest import (
     DRAWDOWN_PLACEHOLDER_STATUS,
     ManifestError,
@@ -277,9 +278,20 @@ def deviation_registry_section(counts: Mapping[str, Any]) -> list:
 def limitations_section() -> list:
     """§5.6 限制声明（至少 3 条；报告与判定表必须原样带出）。
 
-    第 7 条（holdout 与 T0.5b r3 同一 realization 集）是**一等限制**：本次 A/A 过门属对已观察
-    读数的条件复现，不构成设计 §5.3 要求的独立 holdout 验收。
+    第 7 条按**实际 holdout 子流**生成：沿用 ``holdout=2``（r3 已观察）时为条件复现；
+    使用一次性独立子流 ``holdout_independent_v1`` 时，独立验收成立而该条改为陈述剩余限制。
     """
+    independent = HOLDOUT_STAGE == "holdout_independent_v1"
+    holdout_limit = (
+        "holdout 使用一次性独立子流 holdout_independent_v1（与 T0.5b PSD r3 的 holdout=2 子流互斥），"
+        "独立验收成立；但训练与 holdout 仍共享同一对真实源，源折已观察属固定条件"
+        if independent
+        else (
+            "holdout realization 与 T0.5b PSD r3 使用同一命名子流编码（holdout=2）与同一 seed 根，"
+            "其 rate/Wilson 在 r3 已观察并公布：本次 Wilson 门是对已观察读数的**条件复现**，"
+            "不构成设计 §5.3 要求的独立 holdout 验收；取得独立验收须另立预登记"
+        )
+    )
     return [
         "HISTORICAL_TESTBED / NOT_FORWARD_EVIDENCE：历史试车场校准，不是前向影子",
         "训练与 holdout 共享同一对真实源 run（B0/B0'），仅以互斥源折与独立 realization 隔离",
@@ -287,11 +299,7 @@ def limitations_section() -> list:
         "经验分位只是已测场景的有限样本结果，不是普适尾概率保证",
         "MA(H-1) 覆盖持有期重叠，不覆盖未知 regime、流动性冲击与未来结构变化",
         "所有结论仅在本 manifest 冻结的场景集内成立；不得外推为生产裁决权",
-        (
-            "holdout realization 与 T0.5b PSD r3 使用同一命名子流编码（holdout=2）与同一 seed 根，"
-            "其 rate/Wilson 在 r3 已观察并公布：本次 Wilson 门是对已观察读数的**条件复现**，"
-            "不构成设计 §5.3 要求的独立 holdout 验收；取得独立验收须另立预登记"
-        ),
+        holdout_limit,
         (
             "c_k 是经验分位（每 look 每单元约 22 个次序统计量决定），非解析尾分位；"
             "分位估计的抽样不确定性未进入阈值选择"
