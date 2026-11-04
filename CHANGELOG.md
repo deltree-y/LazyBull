@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+### Closed（P5b 阶段闭合）
+
+- 交付：T1 注册/D0、T2 虚拟时钟多臂与族级事务、T3 分片账本与故障矩阵、T4 收益裁判
+  （seq10，独立 holdout 8/8，最高 Wilson 3.668%）、T5 回撤裁判（seq7，双路径 A/A）、
+  T6 历史端到端演练（seq21，79 日 / A/A 474 项一致）+ 运行手册。
+- 闸门作者侧：H1/H2/H3/H4/H7 **pass**、H5 **未宣称通过**（两方向 MDE 未登记）、
+  H6 **not_executed**（DD 两臂因锚 500/冻窗终点 218 超出 78 样本而不可构造）；判定权归用户。
+- 限制：历史试车场，非前向证据；回撤裁判只能判极大效应；训练与 holdout 共享同一对真实源。
+- 闭合记录：docs/reports/p5b_phase_closure_20261104.md（本地归档）。
+
 ## [0.209.8] - 2026-11-04
 
 ### Fix（纯冷区测试夹具）
