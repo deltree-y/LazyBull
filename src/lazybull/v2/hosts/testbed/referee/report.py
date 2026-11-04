@@ -132,8 +132,13 @@ def build_referee_verdict(
             "holdout 与训练共享同一对真实源，仅以互斥源折与独立子流隔离",
             "任一单元不过即裁判不可用；不得删除困难场景或扩样本回调阈值",
             (
-                "holdout realization 与 T0.5b PSD r3 同一子流编码与 seed 根（已在 r3 观察）："
-                "本次为条件复现，不构成独立 holdout 验收"
+                "holdout 使用一次性独立子流 holdout_independent_v1（与 r3 已观察的 holdout=2 子流互斥）："
+                "独立验收成立；但训练与 holdout 仍共享同一对真实源、源折已观察属固定条件"
+                if str(holdout.get("stage") or "") == "holdout_independent_v1"
+                else (
+                    "holdout realization 与 T0.5b PSD r3 同一子流编码与 seed 根（已在 r3 观察）："
+                    "本次为条件复现，不构成独立 holdout 验收"
+                )
             ),
         ],
     }

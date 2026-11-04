@@ -20,9 +20,9 @@ All notable changes to this project will be documented in this file.
 - **复杂度（R3-01）**：`collect_data_state_identity` 抽出 `_panel_window_files`，
   mccabe 13 → 达标；`--paths src/lazybull` 与 `+scripts` 双口径**新增硬超限 0**。
 
-谱系：T4 seq8（`3a07279b…`，独立 holdout 8/8，最高 Wilson 3.668%）、
-T5 seq5（`a249c431…`，`c_w=[-20.22,-28.49,-28.00,-28.88]`、`c_i=[19.93,26.49,26.35,26.09]`）、
-T6 seq19（`34ae5db2…`，report `b39c66bb…` / md `e4ad66c8…` / verdict `7bbd9f4f…`）。
+谱系：T4 seq8（`0aa08f44…`，独立 holdout 8/8，最高 Wilson 3.668%）、
+T5 seq5（`f99445a1…`，`c_w=[-20.22,-28.49,-28.00,-28.88]`、`c_i=[19.93,26.49,26.35,26.09]`）、
+T6 seq19（`385c6f0d…`，report `44b64aae…` / md `5e2045ed…` / verdict `e44fda43…`）。
 
 测试：T6 77、lock 并发 4、身份 6、T2 边界 21、T4 172、T5 113 全绿；
 black/flake8 干净。
