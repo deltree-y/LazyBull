@@ -139,34 +139,43 @@ class CampaignRunLock:
         deadline = time.monotonic() + float(self.timeout_seconds)
         local = _local_lock_for(self.path)
         if not local.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            raise CampaignBusyError(
-                f"campaign 已被本进程内另一运行器持有: {self.path}"
-            )
+            raise CampaignBusyError(f"campaign 已被本进程内另一运行器持有: {self.path}")
         self._local = local
-        descriptor = os.open(str(self.path), os.O_CREAT | os.O_RDWR)
-        while True:
-            if _try_lock_file(descriptor):
-                break
-            if time.monotonic() >= deadline:
+        # ``__enter__`` 抛错时 Python 不会调用 ``__exit__``，因此取得资源的过程中
+        # 任何失败都必须在此显式回滚（R4-01：诊断写入失败曾泄漏 mutex + OS fd）。
+        descriptor: Optional[int] = None
+        locked = False
+        try:
+            descriptor = os.open(str(self.path), os.O_CREAT | os.O_RDWR)
+            while True:
+                if _try_lock_file(descriptor):
+                    locked = True
+                    break
+                if time.monotonic() >= deadline:
+                    raise CampaignBusyError(
+                        f"campaign 已被另一运行器持有（OS 文件锁获取超时）: {self.path}；"
+                        "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
+                    )
+                time.sleep(0.01)
+            payload = json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "token": self.token,
+                    "acquired_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            holder_path = self.path.with_name(f"{self.path.name}.holder")
+            holder_path.write_bytes(payload)
+        except BaseException:
+            if descriptor is not None:
+                if locked:
+                    _unlock_file(descriptor)
                 os.close(descriptor)
-                local.release()
-                self._local = None
-                raise CampaignBusyError(
-                    f"campaign 已被另一运行器持有（OS 文件锁获取超时）: {self.path}；"
-                    "并发运行会破坏族级事务的父代比较交换，必须先释放或人工清理"
-                )
-            time.sleep(0.01)
-        payload = json.dumps(
-            {
-                "pid": os.getpid(),
-                "host": socket.gethostname(),
-                "token": self.token,
-                "acquired_at": datetime.now().isoformat(timespec="seconds"),
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
-        holder_path = self.path.with_name(f"{self.path.name}.holder")
-        holder_path.write_bytes(payload)
+            self._local = None
+            local.release()
+            raise
         self._fd = descriptor
         self.acquired = True
         return self

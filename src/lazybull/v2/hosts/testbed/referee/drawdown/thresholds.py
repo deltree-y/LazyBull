@@ -276,8 +276,8 @@ def merge_aa_readings(items: Sequence[AaReadings]) -> AaReadings:
 def aa_summary(readings: Sequence[AaReadings]) -> List[Dict[str, Any]]:
     """逐场景 A/A 读数的位置量（零假设偏移的披露材料，§5.4.4「保留噪声」）。
 
-    ``MDD`` 是路径的非线性泛函 ⇒ 固定基准臂 + 单侧加噪会让 ``D_k`` 的中位数系统性偏负；
-    该偏移直接决定 ``c^W_k`` 的位置与 ``DD-W`` 的功效，必须与阈值一起报告。
+    `MDD` 是路径的非线性泛函 ⇒ 双独立路径配对下 `D_k` 的中位数仍有系统性偏移
+    （两侧极值统计不同）；该偏移决定 `c^W_k` 位置与 `DD-W` 功效，必须与阈值一起报告。
     """
     rows: List[Dict[str, Any]] = []
     for item in readings:

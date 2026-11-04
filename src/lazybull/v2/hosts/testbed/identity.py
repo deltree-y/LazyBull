@@ -226,13 +226,9 @@ def _panel_window_files(root: Path, day: str) -> list[Dict[str, Any]]:
     """
     files: list[Dict[str, Any]] = []
     hot_dir = root / _PANEL_DATASET / day
-    hot = sorted(hot_dir.glob("*.parquet"))
-    if not hot:
-        raise FileNotFoundError(
-            f"虚拟日 {day} 缺 panel 分区: {hot_dir}（宿主实际消费该输入，禁止缺日或填旧值）"
-        )
-    for path in hot:
+    for path in sorted(hot_dir.glob("*.parquet")):
         files.append(file_identity(path, base_dir=root))
+    # 纯冷区布局（无热区根）是 DataStore 的合法形态：此时 archive 就是实际读域
     for month in (f"{day[:4]}-{day[4:6]}", day[:6]):
         archive_dir = root / _PANEL_ARCHIVE / month
         if not archive_dir.is_dir():
@@ -240,6 +236,11 @@ def _panel_window_files(root: Path, day: str) -> list[Dict[str, Any]]:
         for path in sorted(archive_dir.glob("*.parquet")):
             files.append(file_identity(path, base_dir=root))
         break
+    if not files:
+        raise FileNotFoundError(
+            f"虚拟日 {day} 缺 panel 分区（热区 {hot_dir} 与冷区 {_PANEL_ARCHIVE} 均无可用文件）"
+            "（宿主实际消费该输入，禁止缺日或填旧值）"
+        )
     return files
 
 
@@ -256,7 +257,8 @@ def collect_data_state_identity(*, data_root: str, virtual_days: Sequence[str]) 
     if not days:
         raise TestbedError("数据态身份需要至少一个虚拟日（D0）")
     window_files: list[Dict[str, Any]] = []
-    panel_present = (root / _PANEL_DATASET).is_dir()
+    # 是否存在热区根**不能**代表是否存在 panel：纯冷区（archive-only）是合法布局
+    panel_present = (root / _PANEL_DATASET).is_dir() or (root / _PANEL_ARCHIVE).is_dir()
     for day in days:
         for dataset in _REQUIRED_WINDOW_DATASETS:
             path = _partition_path(root, dataset, day)

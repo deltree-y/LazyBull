@@ -1615,7 +1615,8 @@ python scripts/v2_p5b/drawdown_export_table.py --campaign-root <campaign>
 ### P5b T6 历史端到端演练入口（治理/验收用途，非生产工具）
 
 「多臂运行器 → 配对账本 → 裁判 → 报告」全链路的历史演练（五臂：基准 / 机械 A/A / 收益 −5δ /
-DD-I +12pp / DD-W −12pp），同样只落 `data/paper_shadow/p5b_testbed/<campaign_id>/reports/`，
+DD-I `c^I_anchor+2pp` / DD-W `c^W_anchor−2pp`——臂角色名保留 `12pp` 后缀，实际目标由冻结阈值
+推导，当前为 +28.09pp / −30.88pp），同样只落 `data/paper_shadow/p5b_testbed/<campaign_id>/reports/`，
 `evidence_class=calibration_only`，**不是前向证据、不产生频率/MDE、闸门由用户在合并验收时确认**：
 
 ```bash
@@ -1705,6 +1706,11 @@ class MyStrategy(Signal):
         # 实现信号生成逻辑
         return {stock: weight for stock, weight in ...}
 ```
+
+### 测试数据隔离
+
+纯冷区测试使用 `bootstrap_manifest` 与 `append_archive_features` 在临时数据根构造归档分区，
+并确认 `features/panel` 热区目录不存在。此类测试应使用独立夹具，避免混入共用夹具创建的热区数据。
 
 ### 代码风格
 

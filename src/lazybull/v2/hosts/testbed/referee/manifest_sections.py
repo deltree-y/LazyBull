@@ -234,10 +234,21 @@ def deviation_registry_section(counts: Mapping[str, Any]) -> list:
         {
             "item": "holdout realization 身份",
             "design_value": "相对训练独立 seed 子流 + 独立实现编号",
-            "frozen_value": "阶段子流 holdout=2（= T0.5b validation 子流）与训练互斥，实现编号同一份",
+            "frozen_value": (
+                "阶段子流 holdout_independent_v1（编码 4，与 T0.5b 的 holdout=2 子流互斥）"
+                "与训练互斥，实现编号同一份"
+                if HOLDOUT_STAGE == "holdout_independent_v1"
+                else "阶段子流 holdout=2（= T0.5b validation 子流）与训练互斥，实现编号同一份"
+            ),
             "reason": (
-                "冻结 manifest 不可重写；改用新 seed 属另立新预登记（超出 T4 范围）。"
-                "本次 holdout 与 r3 同一 realization 集，不宣称相对 r3 的新独立实现"
+                "本次 holdout 使用一次性独立子流（预登记：docs/reports/"
+                "p5b_t4_holdout_independent_preregistration_20261103.md），其 rate/Wilson 在此前"
+                "未观察，构成独立验收；训练与 holdout 仍共享同一对真实源、源折已观察属固定条件"
+                if HOLDOUT_STAGE == "holdout_independent_v1"
+                else (
+                    "冻结 manifest 不可重写；改用新 seed 属另立新预登记（超出 T4 范围）。"
+                    "本次 holdout 与 r3 同一 realization 集，不宣称相对 r3 的新独立实现"
+                )
             ),
         },
         {
