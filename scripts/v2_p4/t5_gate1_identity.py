@@ -120,10 +120,35 @@ def _latest_open_day(data_root: Path) -> str:
     return days[-1]
 
 
-def assess_holdings(account: Mapping[str, Any], data_root: Path) -> Dict[str, Any]:
-    """按最新 clean 截面复核持仓有效性与 D10 原位估值回退，不改账户。"""
-    day = _latest_open_day(data_root)
-    path = data_root / "clean" / "daily" / f"{day[:4]}-{day[4:6]}-{day[6:]}.parquet"
+def _daily_section_path(data_root: Path, day: str) -> Path:
+    """``clean/daily`` 分区路径（``day`` = YYYYMMDD）。"""
+    return data_root / "clean" / "daily" / f"{day[:4]}-{day[4:6]}-{day[6:]}.parquet"
+
+
+def assess_holdings(
+    account: Mapping[str, Any],
+    data_root: Path,
+    market_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """按指定交易日（缺省最新 clean 截面）复核持仓有效性与 D10 原位估值回退，不改账户。
+
+    ``market_date`` 非 None 时**必须**取该日分区；分区缺失直接报错、**禁止回退到最新
+    截面**——用最新价格给旧业务日估值会把估值时点错位写进历史净值（v0.209.9 迁移缺陷
+    根因：2026-10-29 收盘价被写进 2026-06-03 的权威净值行）。
+    """
+    day = (
+        _latest_open_day(data_root)
+        if market_date is None
+        else str(market_date).replace("-", "").strip()
+    )
+    if len(day) != 8 or not day.isdigit():
+        raise ValueError(f"market_date 必须为 YYYYMMDD 字符串，实际: {market_date!r}")
+    path = _daily_section_path(data_root, day)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"指定估值日的 clean/daily 分区缺失: {day}（{path}）；"
+            "禁止用其他日期截面替代（估值时点错位会把新价格写成旧日净值）"
+        )
     frame = pd.read_parquet(path)
     if "ts_code" not in frame.columns:
         raise ValueError(f"持仓有效性截面缺 ts_code: {path}")

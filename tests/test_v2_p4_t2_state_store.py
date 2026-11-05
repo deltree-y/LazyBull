@@ -34,6 +34,7 @@ from src.lazybull.v2.hosts.paper.state_store import (
     build_rebalance_state_projection,
     build_stop_loss_projection,
     build_strategy_state_projection,
+    build_valuation_preview,
     trim_engine_state_blob,
 )
 
@@ -64,6 +65,7 @@ def _make_blob(
     cash: float = 496997.915,
     positions: dict = None,
     pv_dates=(D0,),
+    pv_cash=None,
     trades=None,
     holdings=None,
     ranked=None,
@@ -72,7 +74,12 @@ def _make_blob(
     live_anchor=None,
     stop_loss_monitor=None,
 ) -> bytes:
-    """构造合成引擎快照字节（全 21 字段；trades/holdings 默认非空以证裁剪）。"""
+    """构造合成引擎快照字节（全 21 字段；trades/holdings 默认非空以证裁剪）。
+
+    ``pv_cash`` 给出每处理日的现金（逐日历史不可回溯改写；缺省 = 全历史与当前同值）。
+    """
+    if pv_cash is not None and len(pv_cash) != len(pv_dates):
+        raise ValueError("pv_cash 长度必须与 pv_dates 一致")
     fields = {
         "current_capital": cash,
         "positions": _make_positions() if positions is None else positions,
@@ -83,11 +90,11 @@ def _make_blob(
         "portfolio_values": [
             {
                 "date": pd.Timestamp(d),
-                "portfolio_value": cash + 3000.0,
-                "capital": cash,
+                "portfolio_value": (cash if pv_cash is None else pv_cash[index]) + 3000.0,
+                "capital": cash if pv_cash is None else pv_cash[index],
                 "market_value": 3000.0,
             }
-            for d in pv_dates
+            for index, d in enumerate(pv_dates)
         ],
         "trades": (
             [{"date": pd.Timestamp(D0), "stock": "000001.SZ", "action": "buy"}]
@@ -480,7 +487,10 @@ class TestConsistency:
                 **_commit_kwargs(
                     date=D1,
                     engine_state_blob=_make_blob(
-                        cash=cash2, positions=positions2, pv_dates=[D0, D1]
+                        cash=cash2,
+                        positions=positions2,
+                        pv_dates=[D0, D1],
+                        pv_cash=[496997.915, cash2],  # D0 历史行不随 D1 现金变化改写
                     ),
                     account=build_account_projection(cash2, positions2, D1),
                 )
@@ -583,6 +593,102 @@ class TestConsistency:
     def test_repair_without_authority_rejected(self, store):
         with pytest.raises(PaperStateError, match="无权威快照"):
             store.repair_projections()
+
+
+# ---------------------------------------------------------------------------
+# 4b. nav 估值口径不变量（第三腿，v0.209.9）
+# ---------------------------------------------------------------------------
+
+
+class TestNavValuationInvariant:
+    """nav.parquet 末行 ↔ 权威**同日**行（cash/position_value/total_value）。"""
+
+    @staticmethod
+    def _rewrite_last_nav(store, *, position_value: float) -> None:
+        frame = store.load_all_nav()
+        frame.loc[frame.index[-1], "position_value"] = position_value
+        frame.loc[frame.index[-1], "total_value"] = (
+            float(frame.loc[frame.index[-1], "cash"]) + position_value
+        )
+        frame.to_parquet(store.nav_path / "nav.parquet", index=False)
+
+    def test_divergence_reported_and_nothing_rewritten(self, store):
+        store.commit_day(**_commit_kwargs())
+        authority_before = store.load_engine_state_blob()
+        self._rewrite_last_nav(store, position_value=501736.0)
+        nav_before = store.load_all_nav()
+
+        assert store.check_consistency() == "nav_divergence"
+        # 只暴露不修复：两侧逐字节保持不变
+        assert store.load_engine_state_blob() == authority_before
+        pd.testing.assert_frame_equal(store.load_all_nav(), nav_before)
+
+    def test_gap_semantics_still_ok(self, store):
+        """nav 只在有成交日追加 ⇒ 末行早于权威末日是合法形态。"""
+        store.commit_day(**_commit_kwargs(date=D0))
+        store.commit_day(
+            **_commit_kwargs(
+                date=D1,
+                engine_state_blob=_make_blob(pv_dates=[D0, D1]),
+                nav_row=None,
+            )
+        )
+        nav = store.load_all_nav()
+        assert len(nav) == 1 and nav.iloc[-1]["trade_date"] == D0
+        assert store.check_consistency() == "ok"
+
+    def test_nav_day_unknown_to_authority_failfast(self, store):
+        """nav 出现权威不认识的业务日 = 结构性冲突，禁止静默处置。"""
+        store.commit_day(**_commit_kwargs(date=D0))
+        pd.DataFrame(
+            [
+                {
+                    "trade_date": D1,
+                    "cash": 1.0,
+                    "position_value": 2.0,
+                    "total_value": 3.0,
+                    "nav": 1.0,
+                }
+            ],
+            columns=list(NAV_COLUMNS),
+        ).to_parquet(store.nav_path / "nav.parquet", index=False)
+        with pytest.raises(PaperStateError, match="不存在"):
+            store.check_consistency()
+
+    def test_missing_nav_projection_is_not_divergence(self, store):
+        """尚无成交日（无 nav.parquet）⇒ 无可比行，不影响判断。"""
+        store.commit_day(**_commit_kwargs(nav_row=None))
+        assert store.load_all_nav() is None
+        assert store.check_consistency() == "ok"
+
+    def test_build_valuation_preview_binds_market_date(self):
+        preview = build_valuation_preview(
+            market_date="2026-10-29",
+            cash=100.0,
+            market_value=900.0,
+            mark_prices={"B": 8.0, "A": 8.0},
+            source="unit",
+            authority_last_date=D0,
+        )
+        assert preview["market_date"] == "20261029"
+        assert preview["authority_last_date"] == D0
+        assert preview["total_value"] == pytest.approx(1000.0)
+        assert list(preview["mark_prices"]) == ["A", "B"], "股票键稳定升序"
+
+    def test_valuation_preview_roundtrip_and_isolated(self, store):
+        preview = build_valuation_preview(
+            market_date="20261029",
+            cash=100.0,
+            market_value=900.0,
+            mark_prices={"A": 8.0},
+            source="unit",
+        )
+        assert store.write_valuation_preview(preview) is True
+        assert store.load_valuation_preview() == preview
+        # 只读旁路：不写权威快照、不写 nav 投影，也不影响一致性判定
+        assert store.load_engine_state_blob() is None
+        assert store.load_all_nav() is None
+        assert store.check_consistency() == "fresh"
 
 
 # ---------------------------------------------------------------------------

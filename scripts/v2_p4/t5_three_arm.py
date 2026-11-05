@@ -147,10 +147,17 @@ def _assert_frozen_source(frozen_paper_root: Path, gate1: Mapping[str, Any]) -> 
     return {"account_sha256": source_hash, "account_last_update": account.get("last_update")}
 
 
-def _frozen_valuation(gate1: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    """门 1 冻结时点的 D10 估值：迁移必须绑定该日价格，不允许首个影子日回填。"""
+def _frozen_valuation(gate1: Mapping[str, Any], *, business_day: str) -> Optional[Dict[str, Any]]:
+    """门 1 冻结的 D10 估值；**仅当它绑定的是账户最后处理日**才可作为迁移估值。
+
+    v0.209.9：门 1 的 holdings 估值按最新 clean 截面采集（D10 原位预检），其
+    ``market_date`` 通常晚于账户最后处理日——这种「当前市值」不得写成历史业务日的
+    净值行，故返回 None，由迁移侧改用旧 nav 同日行 / 业务日截面复算。
+    """
     holdings = gate1.get("holdings_validity") or {}
     if not holdings.get("market_date") or not holdings.get("positions"):
+        return None
+    if str(holdings["market_date"]) != str(business_day):
         return None
     marks = {
         str(row["ts_code"]): row["mark_price"]
@@ -294,7 +301,7 @@ def prepare_three_arms(
         evidence=migration_evidence,
         execute=True,
         host_builder=host_builder,
-        valuation=_frozen_valuation(gate1),
+        valuation=_frozen_valuation(gate1, business_day=str(source["account_last_update"])),
     )
     if migration.get("verdict") != "PASS":
         raise RuntimeError(f"v2 影子首次迁移未通过: {migration.get('verdict')}")

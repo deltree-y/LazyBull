@@ -39,6 +39,7 @@ from src.lazybull.v2.hosts.paper.factory import create_paper_host  # noqa: E402
 from src.lazybull.v2.hosts.paper.state_store import (  # noqa: E402
     GENERATION_INFO_KEY,
     build_account_projection,
+    build_valuation_preview,
 )
 
 STATIC_INVENTORY: Tuple[Tuple[str, str, str, str], ...] = (
@@ -208,13 +209,31 @@ def migrate_state(
     storage: PaperStorage,
     trading_config: Any,
     calendar: Sequence[str],
-    mark_prices: Mapping[str, float],
+    valuation: Mapping[str, Any],
+    nav_frame: Optional[pd.DataFrame] = None,
 ) -> EngineState:
-    """把完整旧状态映射到基线 EngineState；缺任何必需语义即 fail-fast。"""
+    """把完整旧状态映射到基线 EngineState；缺任何必需语义即 fail-fast。
+
+    ``valuation`` = **业务日**估值（``{cash, market_value, total_value, market_date, source}``，
+    由 :func:`resolve_business_valuation` 产出），``market_date`` 必须等于账户
+    「最后处理日」。历史 NAV 行**禁止重估**：同日行已存在则逐位沿用（旧链已发布事实），
+    缺失（无成交日不写 nav 的跳空语义）才追加一条按业务日收盘复算的行。
+    """
     account = storage.load_account_state()
     if account is None or not account.last_update:
         raise RuntimeError("迁移源账户缺失或 last_update 为空")
+    business_day = pd.Timestamp(account.last_update).strftime("%Y%m%d")
+    valuation_day = str(valuation.get("market_date") or "")
+    if valuation_day != business_day:
+        raise RuntimeError(
+            f"迁移估值日期与账户最后处理日不一致: 估值={valuation_day!r} 业务日={business_day}；"
+            "禁止把其他时点的价格写成该业务日净值"
+        )
     state.current_capital = float(account.cash)
+    if abs(float(valuation["cash"]) - state.current_capital) > 1e-6:
+        raise RuntimeError(
+            f"迁移估值现金与账户不一致: 估值={valuation['cash']} 账户={state.current_capital}"
+        )
     state.positions = map_account(account)
     anchor = map_anchor(
         storage.load_rebalance_state() or {},
@@ -222,13 +241,15 @@ def migrate_state(
         default_tranches=int(trading_config.stagger_tranches),
     )
     state.live_anchor_state = anchor.to_dict()
-    market_value = sum(
-        int(position["shares"]) * float(mark_prices.get(code, position["buy_trade_price"]))
-        for code, position in state.positions.items()
-    )
-    total_value = state.current_capital + market_value
+    market_value = float(valuation["market_value"])
+    total_value = float(valuation["total_value"])
+    if abs(total_value - (state.current_capital + market_value)) > 1e-6:
+        raise RuntimeError(
+            f"迁移估值自洽失败: total_value={total_value} cash={state.current_capital} "
+            f"market_value={market_value}"
+        )
     state.pending_order_manager = map_pending_orders(storage, total_value)
-    nav = storage.load_all_nav()
+    nav = storage.load_all_nav() if nav_frame is None else nav_frame
     portfolio_values: List[Dict[str, Any]] = []
     if nav is not None and not nav.empty:
         for raw in nav.to_dict("records"):
@@ -240,21 +261,20 @@ def migrate_state(
                     "market_value": float(raw.get("position_value", raw.get("market_value", 0.0))),
                 }
             )
-    # account.json 是当前权威账户快照：同日 NAV 行可能停留在当日成交前，
-    # 迁移只能用账户重算值覆盖该行；历史 NAV 行与跳空保持原语义。
-    authoritative_day = pd.Timestamp(account.last_update).strftime("%Y%m%d")
-    replaced = False
-    for item in portfolio_values:
-        if pd.Timestamp(item["date"]).strftime("%Y%m%d") == authoritative_day:
-            item.update(
-                {
-                    "portfolio_value": total_value,
-                    "capital": state.current_capital,
-                    "market_value": market_value,
-                }
+    # 业务日同日行 = 旧链已发布的历史事实：逐位沿用，绝不重估（v0.209.9 缺陷修复点）。
+    authoritative = [
+        item
+        for item in portfolio_values
+        if pd.Timestamp(item["date"]).strftime("%Y%m%d") == business_day
+    ]
+    if authoritative:
+        published = float(authoritative[-1]["portfolio_value"])
+        if abs(published - total_value) > 1e-6:
+            raise RuntimeError(
+                f"迁移估值与旧 NAV 同日行冲突（{business_day}）: 估值={total_value} "
+                f"旧行={published}；两载体描述同一业务日却不同值，禁止择一覆盖"
             )
-            replaced = True
-    if not replaced:
+    else:
         portfolio_values.append(
             {
                 "date": pd.Timestamp(account.last_update),
@@ -264,6 +284,9 @@ def migrate_state(
             }
         )
     state.portfolio_values = sorted(portfolio_values, key=lambda item: pd.Timestamp(item["date"]))
+    last_day = pd.Timestamp(state.portfolio_values[-1]["date"]).strftime("%Y%m%d")
+    if last_day != business_day:
+        raise RuntimeError(f"迁移后权威末日 {last_day} 与账户最后处理日 {business_day} 不一致")
     trades = storage.load_all_trades()
     state.trades, state.ledger = map_trades_and_ledger(
         trades if trades is not None else pd.DataFrame()
@@ -390,13 +413,87 @@ def rollback_account(state: EngineState, trade_date: str) -> Dict[str, Any]:
     return build_account_projection(state.current_capital, state.positions, trade_date)
 
 
+def _business_day_nav_row(
+    nav: Optional[pd.DataFrame], business_day: str
+) -> Optional[Dict[str, float]]:
+    """旧 ``nav.parquet`` 中**业务日当日**的行（无该日行 ⇒ None，跳空语义下合法）。"""
+    if nav is None or nav.empty:
+        return None
+    for raw in nav.to_dict("records"):
+        raw_day = pd.Timestamp(str(raw.get("trade_date") or raw.get("date"))).strftime("%Y%m%d")
+        if raw_day != business_day:
+            continue
+        return {
+            "cash": float(raw.get("cash") or 0.0),
+            "position_value": float(raw.get("position_value", raw.get("market_value", 0.0)) or 0.0),
+            "total_value": float(raw.get("total_value") or 0.0),
+        }
+    return None
+
+
+def resolve_business_valuation(
+    *,
+    account: Mapping[str, Any],
+    business_day: str,
+    legacy_row: Optional[Mapping[str, Any]],
+    frozen: Optional[Mapping[str, Any]],
+    data_root: Path,
+) -> Dict[str, Any]:
+    """解析「业务日」组合估值；三来源按优先级收敛，且全部绑定账户最后处理日。
+
+    优先级：① 旧 ``nav.parquet`` 同日行（历史事实，逐位沿用）→ ② 显式冻结输入
+    （``market_date`` 必须 = 业务日）→ ③ 按**业务日** ``clean/daily`` 截面复算。
+    任何「用最新截面价格回填旧业务日」的路径一律拒绝——v0.209.9 NAV 不一致缺陷的根因
+    就是把 2026-10-29 收盘价写进了 2026-06-03 的权威净值行。
+    """
+    cash = float(account.get("cash") or 0.0)
+    if legacy_row is not None:
+        row_cash = float(legacy_row["cash"])
+        if abs(row_cash - cash) > 1e-6:
+            raise RuntimeError(
+                f"旧 NAV 同日行现金与账户不一致（{business_day}）: "
+                f"nav={row_cash} 账户={cash}；两载体描述不同状态，禁止迁移"
+            )
+        market_value = float(legacy_row["position_value"])
+        total_value = float(legacy_row["total_value"])
+        if abs(total_value - (cash + market_value)) > 1e-6:
+            raise RuntimeError(
+                f"旧 NAV 同日行自洽失败（{business_day}）: total={total_value} "
+                f"cash={cash} position_value={market_value}"
+            )
+        return {
+            "cash": cash,
+            "market_value": market_value,
+            "total_value": total_value,
+            "market_date": business_day,
+            "source": "legacy_nav_row",
+        }
+    assessment = assess_holdings(account, data_root, market_date=business_day)
+    marks, total_value, meta = _frozen_valuation(
+        assessment=assessment, valuation=frozen, account=account
+    )
+    return {
+        "cash": cash,
+        "market_value": total_value - cash,
+        "total_value": total_value,
+        "market_date": business_day,
+        "source": meta["source"],
+        "mark_prices": marks,
+        "content_fingerprint": meta.get("content_fingerprint"),
+    }
+
+
 def _frozen_valuation(
     *,
     assessment: Mapping[str, Any],
     valuation: Optional[Mapping[str, Any]],
     account: Mapping[str, Any],
 ) -> Tuple[Dict[str, float], float, Dict[str, Any]]:
-    """确定迁移估值：显式冻结输入优先，否则用最新截面（须显式登记来源）。"""
+    """确定**业务日**估值：显式冻结输入优先，否则用业务日截面（须显式登记来源）。
+
+    ``assessment`` 必须是 ``market_date=<业务日>`` 的截面（调用方保证），因此默认分支
+    是「业务日收盘复算」而非「最新截面」——两者语义不同，混用即估值时点错位。
+    """
     if valuation is None:
         marks = {
             str(row["ts_code"]): float(row["mark_price"])
@@ -407,7 +504,7 @@ def _frozen_valuation(
             marks,
             float(assessment["total_value"]),
             {
-                "source": "latest_clean_section",
+                "source": "business_day_clean_section",
                 "market_date": assessment["market_date"],
             },
         )
@@ -467,6 +564,27 @@ def _account_projection_matches(source: Mapping[str, Any], projection: Mapping[s
     return True
 
 
+def _write_valuation_preview(
+    store: Any, *, assessment: Mapping[str, Any], authority_last: str
+) -> Dict[str, Any]:
+    """落「当前市值」只读旁路（显式带行情日；**禁止**回流 portfolio_values/NAV 曲线）。"""
+    cash = float(assessment["cash"])
+    preview = build_valuation_preview(
+        market_date=assessment["market_date"],
+        cash=cash,
+        market_value=float(assessment["total_value"]) - cash,
+        mark_prices={
+            str(row["ts_code"]): float(row["mark_price"])
+            for row in assessment["positions"]
+            if row.get("mark_price") is not None
+        },
+        source="migration.latest_clean_section",
+        authority_last_date=authority_last,
+    )
+    store.write_valuation_preview(preview)
+    return preview
+
+
 def migrate_isolated(
     *,
     source: Path,
@@ -480,7 +598,10 @@ def migrate_isolated(
     """默认 dry-run；execute 也只允许全新隔离 target，禁止直接写生产根。
 
     ``valuation`` 给出时（``{market_date, mark_prices, total_value, content_fingerprint}``）
-    迁移估值绑定冻结时点；缺省沿用最新 clean 截面并在证据中登记来源。
+    ``market_date`` **必须绑定账户最后处理日**；缺省按旧 ``nav.parquet`` 同日行沿用，
+    无同日行时按**业务日** clean 截面复算并在证据中登记来源。三种来源都不得用最新截面
+    价格回填旧业务日（v0.209.9 修复）。「当前市值」另落 ``state/valuation_preview.json``
+    只读旁路（显式带 ``market_date``），**不写进** ``portfolio_values``/NAV 曲线。
     """
     if target == data_root / "paper" or data_root / "paper" in target.parents:
         raise RuntimeError("迁移工具只允许全新隔离 target；生产迁移须另行走授权切换程序")
@@ -509,24 +630,34 @@ def migrate_isolated(
     engine = host._new_engine({})
     calendar = [day.strftime("%Y%m%d") for day in host.trading_calendar]
     source_account = json.loads((source / "state" / "account.json").read_text(encoding="utf-8"))
+    if not source_account.get("last_update"):
+        raise RuntimeError("迁移源账户 last_update 为空，无法绑定估值业务日")
+    # 持仓有效性仍按最新截面（股票是否还能交易），与估值时点无关。
     assessment = assess_holdings(source_account, data_root)
     if assessment["valid_count"] != assessment["position_count"]:
         raise RuntimeError(f"迁移日 D10 持仓现价验证未过: {assessment}")
-    marks, frozen_total, valuation_meta = _frozen_valuation(
-        assessment=assessment, valuation=valuation, account=source_account
+    business_day = pd.Timestamp(str(source_account["last_update"])).strftime("%Y%m%d")
+    nav_frame = storage.load_all_nav()
+    business_valuation = resolve_business_valuation(
+        account=source_account,
+        business_day=business_day,
+        legacy_row=_business_day_nav_row(nav_frame, business_day),
+        frozen=valuation,
+        data_root=data_root,
     )
     state = migrate_state(
         export_state(engine),
         storage=storage,
         trading_config=host.trading_config,
         calendar=calendar,
-        mark_prices=marks,
+        valuation=business_valuation,
+        nav_frame=nav_frame,
     )
     migrated_total = float(state.portfolio_values[-1]["portfolio_value"])
-    if abs(migrated_total - frozen_total) > 1e-6:
+    if abs(migrated_total - float(business_valuation["total_value"])) > 1e-6:
         raise RuntimeError(
-            "迁移组合总值与 D10 现价验证不一致: "
-            f"migrated={migrated_total} frozen={frozen_total} meta={valuation_meta}"
+            "迁移组合总值与业务日估值不一致: "
+            f"migrated={migrated_total} valuation={business_valuation}"
         )
     blob = state_to_blob(state)
     blob[GENERATION_INFO_KEY] = {
@@ -537,6 +668,9 @@ def migrate_isolated(
     with host.store.write_lock():
         host.store._atomic_write_bytes(host.store.state_path / "engine_state.bin", raw)
         host.store.repair_projections()
+    preview = _write_valuation_preview(
+        host.store, assessment=assessment, authority_last=business_day
+    )
     projection = rollback_account(state, storage.load_account_state().last_update)
     if not _account_projection_matches(source_account, projection):
         raise RuntimeError("迁移后账户投影与冻结源不等价（现金/股数/买价/费用）")
@@ -547,7 +681,8 @@ def migrate_isolated(
         "inventory": inventory,
         "account_projection": projection,
         "account_projection_equivalent": True,
-        "valuation": {**valuation_meta, "total_value": frozen_total},
+        "valuation": business_valuation,
+        "valuation_preview": preview,
         "pending_orders": len(state.pending_order_manager.get("pending_orders") or {}),
         "ledger_keys": len((state.ledger or {}).get("applied_keys") or []),
         "generation": blob.get(GENERATION_INFO_KEY),
@@ -555,7 +690,10 @@ def migrate_isolated(
             "engine": persisted.get("engine"),
             "exposure_policy": persisted.get("exposure_policy"),
         },
-        "nav_gap_semantics": "nav.parquet 原行保留；portfolio_values 仅用于权威恢复，不补 NAV 投影",
+        "nav_gap_semantics": (
+            "nav.parquet 原行保留；权威末日行 = 旧 NAV 同日行逐位沿用（缺失才按业务日收盘"
+            "追加）；当前市值走 state/valuation_preview.json 只读旁路，不进 portfolio_values"
+        ),
     }
     _dump(evidence / "migration_result.json", result)
     return result

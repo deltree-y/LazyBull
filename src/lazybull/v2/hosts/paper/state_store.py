@@ -33,6 +33,19 @@ last_trade_date / rebalance_state / instructions（None 或空帧跳过）/ pend
 :class:`PaperStateError` fail-fast（禁止静默以任何一侧为准）。权威「最后处理日」= blob ``fields.portfolio_values``
 最后一条的 ``date``（每个处理日都追加，无成交日不缺）。无权威有投影 = 旧链遗产布局（T5 迁移前形态）⇒ 告警返回
 ``"legacy_projection"``（不校验不修复；首个权威代由 T5 迁移建立）；两侧皆无 ⇒ ``"fresh"``。
+
+估值口径不变量（第三腿，v0.209.9；2026-11-05 追加）：``check_consistency`` 在 account 族校验通过后
+再比对 **nav.parquet 末行 ↔ 权威同日行**的 ``cash`` / ``position_value`` / ``total_value``（容差 1e-6）。
+跳空语义下 nav 末行日期可以早于权威末日，此时取 ``portfolio_values`` 中**同日**行比对；同日行缺失 =
+结构性冲突 fail-fast；数值不一致记 warning 并返回 ``"nav_divergence"``——**只暴露不修复**，因为两侧
+都可能承载已发布事实，静默改写任一侧都会伪造历史。本不变量是「权威末日行被写成其他时点价格」这类
+缺陷的唯一自动出口（该缺陷曾使 2026-06-03 净值被 2026-10-29 收盘价覆盖，差 98,754.00）。
+**估值口径硬契约**：``portfolio_values`` = 逐**业务日收盘**估值的历史序列（NAV 曲线源），其末日行必须
+与 ``nav.parquet`` 同业务日行同值；「某一行情日的当前市值」只能走只读旁路
+:meth:`write_valuation_preview` ⇒ ``state/valuation_preview.json``（显式带 ``market_date``），
+**禁止**写进 ``portfolio_values`` 或 nav.parquet。该口径的纯函数族（`build_valuation_preview` /
+`nav_projection_divergence` / 容差与文件名常量）已拆至同包 ``nav_valuation.py``（§7.4 + 复杂度门
+1200 行硬上限，2026-11-05），本模块 import 重导出公开名（导入面不变）。
 :meth:`PaperStateStore.repair_projections` = 显式修复入口（供 T5 迁移/回滚演练），修复范围 = account.json /
 last_trade_date.json / strategy_state.json / ranked_candidates.json（有候选时）/ rebalance_state.json
 （live 锚定非 None 时）/ stop_loss_state.json（监控器非 None 时）；instructions 与 pending 两队为宿主映射
@@ -107,7 +120,7 @@ import json
 import os
 import pickle
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 import yaml
@@ -128,6 +141,12 @@ from src.lazybull.v2.hosts.paper.instruction_projection import (
     _yyyymmdd,
     build_instruction_frame,
 )
+from src.lazybull.v2.hosts.paper.nav_valuation import (
+    VALUATION_PREVIEW_FILENAME,
+    NavProjectionDayMissing,
+    build_valuation_preview,
+    nav_projection_divergence,
+)
 from src.lazybull.v2.hosts.paper.write_lock import WRITE_LOCK_FILENAME, PaperWriteLockMixin
 
 # 指令投影纯函数族自同包 instruction_projection.py import（拆分登记见该模块头；
@@ -146,7 +165,9 @@ __all__ = [
     "build_ranked_candidates_projection",
     "build_stop_loss_projection",
     "build_strategy_state_projection",
+    "build_valuation_preview",
     "build_instruction_frame",
+    "VALUATION_PREVIEW_FILENAME",
     "INSTRUCTION_COLUMNS",
     "TRADES_COLUMNS",
     "NAV_COLUMNS",
@@ -690,6 +711,33 @@ class PaperStateStore(PaperWriteLockMixin):
         with self.write_lock():
             self._atomic_write_json(self.runs_path / f"{run_kind}_{date_str}.json", run_record)
 
+    def write_valuation_preview(self, preview: Mapping[str, Any]) -> bool:
+        """落「当前市值」只读旁路 ``state/valuation_preview.json``（远端只读跳过）。
+
+        只读旁路契约：本文件**不参与**任何一致性判定，也**不得**回流
+        ``portfolio_values``/NAV 曲线；其 ``market_date`` 是该估值的真实行情日。
+        """
+        if self._is_remote:
+            logger.warning("远端只读模式，跳过 write_valuation_preview")
+            return False
+        with self.write_lock():
+            self._atomic_write_json(self.state_path / VALUATION_PREVIEW_FILENAME, dict(preview))
+        return True
+
+    def load_valuation_preview(self) -> Optional[Dict[str, Any]]:
+        """读取当前市值只读旁路（缺失/损坏 ⇒ None；不参与一致性判定）。"""
+        if self._is_remote:
+            return None
+        path = self.state_path / VALUATION_PREVIEW_FILENAME
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(f"valuation_preview.json 读取失败（忽略）: {path}（{exc}）")
+            return None
+        return data if isinstance(data, dict) else None
+
     def load_engine_state_blob(self) -> Optional[bytes]:
         """读取权威快照原始字节（远端只读模式不暴露本通道 ⇒ None）。"""
         path = self.state_path / ENGINE_STATE_FILENAME
@@ -871,15 +919,36 @@ class PaperStateStore(PaperWriteLockMixin):
             return None
         return data
 
+    def _nav_projection_divergence(self, state: EngineState) -> Optional[str]:
+        """第三腿不变量：``nav.parquet`` 末行 ↔ 权威**同日**行比对（口径见 nav_valuation）。
+
+        nav 读取失败 / 同日行缺失属结构性问题 ⇒ :class:`PaperStateError` fail-fast；数值
+        不一致只返回差异描述（调用方记 warning 并显式暴露，不自动改写任一侧）。
+        """
+        try:
+            nav = self.load_all_nav()
+        except (OSError, ValueError) as exc:
+            raise PaperStateError(
+                f"nav.parquet 读取失败，无法执行估值一致性校验: {type(exc).__name__}: {exc}"
+            ) from exc
+        if nav is None or nav.empty:
+            return None  # 无 nav 投影（尚无成交日）⇒ 无可比行
+        try:
+            return nav_projection_divergence(state.portfolio_values, nav.iloc[-1].to_dict())
+        except NavProjectionDayMissing as exc:
+            raise PaperStateError(str(exc)) from exc
+
     def check_consistency(self, *, auto_repair: bool = True) -> str:
-        """启动双状态一致性校验（语义全量见模块 docstring）。
+        """启动一致性校验（account 族双状态 + nav 估值口径；语义全量见模块 docstring）。
 
         Returns:
             ``"remote_skipped"`` / ``"fresh"`` / ``"legacy_projection"`` / ``"ok"`` /
-            ``"repaired"`` / ``"lag_detected"``（auto_repair=False 时检出滞后但不修复）。
+            ``"repaired"`` / ``"lag_detected"``（auto_repair=False 时检出滞后但不修复）/
+            ``"nav_divergence"``（nav 末行与权威同日行市值/总值不一致——只暴露不修复）。
 
         Raises:
-            PaperStateError: 冲突形态（投影日期晚于权威，或同代值不一致）fail-fast。
+            PaperStateError: 冲突形态（投影日期晚于权威、同代值不一致，或 nav 末行业务日
+                在权威快照中不存在）fail-fast。
         """
         if self._is_remote:
             return "remote_skipped"
@@ -914,6 +983,14 @@ class PaperStateStore(PaperWriteLockMixin):
                 "account.json 投影与权威快照逐字段比对不一致（冲突形态，禁止静默处置）；"
                 "请人工核查后以 repair_projections() 显式修复或回滚"
             )
+        divergence = self._nav_projection_divergence(state)
+        if divergence is not None:
+            logger.warning(
+                f"nav.parquet 与权威快照同日估值不一致（{divergence}）："
+                "两载体描述同一业务日却给出不同市值/总值，**不自动改写任一侧**；"
+                "须经授权修正程序（前后 diff + 复算证据）消除后再推进日跑"
+            )
+            return "nav_divergence"
         return "ok"
 
     def _handle_lag(self, reason: str, auto_repair: bool) -> str:

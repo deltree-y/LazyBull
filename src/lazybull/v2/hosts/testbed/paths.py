@@ -75,11 +75,15 @@ class TestbedScopeError(TestbedError):
     __test__ = False
 
 
-def project_root() -> Path:
-    """仓库根目录（``src`` 的上两级；不依赖配置文件）。"""
-    from src.lazybull import PROJECT_ROOT
+#: 仓库根 = 本文件（``src/lazybull/v2/hosts/testbed/paths.py``）上溯 5 级祖先目录。
+#: 不经旧顶层包 ``src.lazybull`` 取 ``PROJECT_ROOT``——v2 依赖方向约束（T7 G 组 AST 扫描：
+#: ``v2/hosts`` 不得 import 旧顶层包），且数值与原 ``Path(PROJECT_ROOT)`` 逐字符一致。
+_REPO_ROOT = Path(__file__).parents[5]
 
-    return Path(PROJECT_ROOT)
+
+def project_root() -> Path:
+    """仓库根目录（``src/lazybull/v2/hosts/testbed`` 的上溯 5 级；不依赖配置文件）。"""
+    return _REPO_ROOT
 
 
 def _configured_data_root() -> Optional[Path]:

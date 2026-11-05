@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
-"""T5 账户迁移、adjust 与回滚投影的合成测试。"""
+"""T5 账户迁移、adjust 与回滚投影的合成测试。
+
+估值口径（v0.209.9）：迁移**不得**用最新截面价格回填旧业务日；业务日同日 nav 行逐位
+沿用，缺失才按业务日 clean 截面复算；「当前市值」只落 ``state/valuation_preview.json``。
+"""
 
 from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 
 import pandas as pd
@@ -16,8 +21,12 @@ if str(ROOT) not in sys.path:
 
 from scripts.v2_p4 import t5_migration as migration  # noqa: E402
 from src.lazybull.paper import PaperStorage  # noqa: E402
-from src.lazybull.paper.models import AccountState, Position  # noqa: E402
+from src.lazybull.paper.models import AccountState, NAVRecord, Position  # noqa: E402
 from src.lazybull.v2.core.accounting.engine_state import EngineState  # noqa: E402
+from src.lazybull.v2.hosts.paper.state_store import PaperStateStore  # noqa: E402
+
+#: migrate_state 只需 trading_config 的三个属性（不构造完整宿主）
+_CFG = types.SimpleNamespace(rebalance_freq=20, stagger_tranches=2, stop_loss_enabled=False)
 
 
 def _state() -> EngineState:
@@ -313,3 +322,231 @@ def test_migrate_isolated_dry_run_does_not_create_target(tmp_path: Path) -> None
     )
     assert result["verdict"] == "DRY_RUN"
     assert not target.exists()
+
+
+# ---------------------------------------------------------------------------
+# 估值口径（v0.209.9）：业务日绑定、旧行沿用、只读旁路
+# ---------------------------------------------------------------------------
+
+
+def _write_section(data_root: Path, day: str, closes: dict) -> None:
+    """合成 clean/daily 分区（day = YYYYMMDD）。"""
+    directory = data_root / "clean" / "daily"
+    directory.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "ts_code": list(closes),
+            "close": list(closes.values()),
+            "pre_close": list(closes.values()),
+            "tradable": [1] * len(closes),
+            "is_st": [0] * len(closes),
+            "is_suspended": [0] * len(closes),
+        }
+    ).to_parquet(directory / f"{day[:4]}-{day[4:6]}-{day[6:]}.parquet", index=False)
+
+
+def _legacy_storage(
+    tmp_path: Path, *, cash: float = 100.0, last_update: str = "20260603", nav_rows=()
+) -> PaperStorage:
+    """旧链布局（state/account.json + nav/nav.parquet）。"""
+    storage = PaperStorage(root_path=str(tmp_path / "paper"))
+    storage.save_account_state(
+        AccountState(cash=cash, positions={"A": _position()}, last_update=last_update)
+    )
+    for row_cash, position_value in nav_rows:
+        total = row_cash + position_value
+        storage.append_nav(
+            NAVRecord(
+                trade_date=last_update,
+                cash=row_cash,
+                position_value=position_value,
+                total_value=total,
+                nav=total / 1000.0,
+            )
+        )
+    return storage
+
+
+def test_assess_holdings_honors_explicit_market_date(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    _write_section(data_root, "20260603", {"A": 10.0})
+    _write_section(data_root, "20261029", {"A": 8.0})
+    account = {"cash": 0.0, "positions": {"A": {"shares": 100}}}
+
+    latest = migration.assess_holdings(account, data_root)
+    assert latest["market_date"] == "20261029"
+    assert latest["total_value"] == pytest.approx(800.0)
+
+    # 显式业务日必须取该日分区（接受 2026-06-03 形态）
+    frozen = migration.assess_holdings(account, data_root, market_date="2026-06-03")
+    assert frozen["market_date"] == "20260603"
+    assert frozen["total_value"] == pytest.approx(1000.0)
+
+
+def test_assess_holdings_rejects_missing_explicit_section(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    _write_section(data_root, "20261029", {"A": 8.0})
+    account = {"cash": 0.0, "positions": {"A": {"shares": 100}}}
+    with pytest.raises(FileNotFoundError, match="clean/daily 分区缺失"):
+        migration.assess_holdings(account, data_root, market_date="20260603")
+
+
+def test_valuation_prefers_legacy_nav_row_without_pricing(tmp_path: Path) -> None:
+    """旧 NAV 同日行 = 已发布事实：逐位沿用，且**不需要任何行情分区**。"""
+    valuation = migration.resolve_business_valuation(
+        account={"cash": 100.0, "positions": {"A": {"shares": 100}}},
+        business_day="20260603",
+        legacy_row={"cash": 100.0, "position_value": 900.0, "total_value": 1000.0},
+        frozen=None,
+        data_root=tmp_path / "data",  # 无 clean/daily：若尝试定价会直接报错
+    )
+    assert valuation["source"] == "legacy_nav_row"
+    assert valuation["market_date"] == "20260603"
+    assert valuation["total_value"] == pytest.approx(1000.0)
+    assert valuation["market_value"] == pytest.approx(900.0)
+
+
+def test_valuation_rejects_legacy_row_cash_mismatch() -> None:
+    with pytest.raises(RuntimeError, match="现金与账户不一致"):
+        migration.resolve_business_valuation(
+            account={"cash": 100.0, "positions": {"A": {"shares": 100}}},
+            business_day="20260603",
+            legacy_row={"cash": 90.0, "position_value": 900.0, "total_value": 990.0},
+            frozen=None,
+            data_root=Path("unused"),
+        )
+
+
+def test_valuation_falls_back_to_business_day_section(tmp_path: Path) -> None:
+    """无同日 nav 行 ⇒ 用**业务日**收盘复算，不得用最新截面价格。"""
+    data_root = tmp_path / "data"
+    _write_section(data_root, "20260603", {"A": 10.0})
+    _write_section(data_root, "20261029", {"A": 8.0})
+    valuation = migration.resolve_business_valuation(
+        account={"cash": 0.0, "positions": {"A": {"shares": 100}}},
+        business_day="20260603",
+        legacy_row=None,
+        frozen=None,
+        data_root=data_root,
+    )
+    assert valuation["source"] == "business_day_clean_section"
+    assert valuation["market_date"] == "20260603"
+    assert valuation["total_value"] == pytest.approx(1000.0)  # 10.0×100，不是 8.0×100
+
+
+def test_valuation_fallback_rejects_missing_business_day(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    _write_section(data_root, "20261029", {"A": 8.0})
+    with pytest.raises(FileNotFoundError, match="clean/daily 分区缺失"):
+        migration.resolve_business_valuation(
+            account={"cash": 0.0, "positions": {"A": {"shares": 100}}},
+            business_day="20260603",
+            legacy_row=None,
+            frozen=None,
+            data_root=data_root,
+        )
+
+
+def test_migrate_state_keeps_business_day_nav_row_verbatim(tmp_path: Path) -> None:
+    """权威末日行 = 旧 NAV 同日行（1000.0），不得按行情重估为 1100.0。"""
+    storage = _legacy_storage(tmp_path, cash=100.0, nav_rows=[(100.0, 900.0)])
+    valuation = {
+        "cash": 100.0,
+        "market_value": 900.0,
+        "total_value": 1000.0,
+        "market_date": "20260603",
+        "source": "legacy_nav_row",
+    }
+    state = migration.migrate_state(
+        _state(),
+        storage=storage,
+        trading_config=_CFG,
+        calendar=[],
+        valuation=valuation,
+    )
+    assert len(state.portfolio_values) == 1
+    row = state.portfolio_values[-1]
+    assert row["date"] == pd.Timestamp("20260603")
+    assert row["portfolio_value"] == pytest.approx(1000.0)
+    assert row["capital"] == pytest.approx(100.0)
+    assert row["market_value"] == pytest.approx(900.0)
+
+
+def test_migrate_state_appends_row_when_business_day_missing(tmp_path: Path) -> None:
+    """无同日行（无成交日不写 nav）⇒ 追加一条按业务日复算的行。"""
+    storage = _legacy_storage(tmp_path, cash=100.0, nav_rows=[])
+    valuation = {
+        "cash": 100.0,
+        "market_value": 950.0,
+        "total_value": 1050.0,
+        "market_date": "20260603",
+        "source": "business_day_clean_section",
+    }
+    state = migration.migrate_state(
+        _state(),
+        storage=storage,
+        trading_config=_CFG,
+        calendar=[],
+        valuation=valuation,
+    )
+    assert len(state.portfolio_values) == 1
+    assert state.portfolio_values[-1]["portfolio_value"] == pytest.approx(1050.0)
+
+
+def test_migrate_state_rejects_valuation_from_other_day(tmp_path: Path) -> None:
+    storage = _legacy_storage(tmp_path, cash=100.0, nav_rows=[(100.0, 900.0)])
+    with pytest.raises(RuntimeError, match="其他时点的价格"):
+        migration.migrate_state(
+            _state(),
+            storage=storage,
+            trading_config=_CFG,
+            calendar=[],
+            valuation={
+                "cash": 100.0,
+                "market_value": 800.0,
+                "total_value": 900.0,
+                "market_date": "20261029",
+                "source": "latest_clean_section",
+            },
+        )
+
+
+def test_migrate_state_rejects_conflict_with_published_nav_row(tmp_path: Path) -> None:
+    storage = _legacy_storage(tmp_path, cash=100.0, nav_rows=[(100.0, 900.0)])
+    with pytest.raises(RuntimeError, match="禁止择一覆盖"):
+        migration.migrate_state(
+            _state(),
+            storage=storage,
+            trading_config=_CFG,
+            calendar=[],
+            valuation={
+                "cash": 100.0,
+                "market_value": 700.0,
+                "total_value": 800.0,
+                "market_date": "20260603",
+                "source": "business_day_clean_section",
+            },
+        )
+
+
+def test_valuation_preview_is_sidecar_only(tmp_path: Path) -> None:
+    """当前市值只落 valuation_preview.json（带 market_date），不碰权威/NAV 投影。"""
+    store = PaperStateStore(root_path=str(tmp_path / "paper"))
+    assessment = {
+        "market_date": "20261029",
+        "cash": 100.0,
+        "total_value": 900.0,
+        "positions": [{"ts_code": "A", "mark_price": 8.0}],
+    }
+    preview = migration._write_valuation_preview(
+        store, assessment=assessment, authority_last="20260603"
+    )
+    assert preview["market_date"] == "20261029"
+    assert preview["authority_last_date"] == "20260603"
+    assert preview["market_value"] == pytest.approx(800.0)
+    assert preview["total_value"] == pytest.approx(900.0)
+    assert preview["mark_prices"] == {"A": 8.0}
+    assert store.load_valuation_preview() == preview
+    # 只读旁路：既不写权威快照，也不写 nav 投影
+    assert store.load_engine_state_blob() is None
+    assert store.load_all_nav() is None
