@@ -109,9 +109,21 @@ import check_inuse_closure as cic  # noqa: E402
 # readiness_evidence 两模块 + B′ 新增 coverage_history（滚动分位历史）⇒ 静态闭包
 # 266→269、在用 270→273、全仓 372→375、不在用 102 不变；基线按实测显式更新，
 # 底稿同步刷新（沿用既有约定）。
-INUSE_BASELINE = 273
-NOTIN_BASELINE = 102
-STATIC_BASELINE = 269
+# v0.209.9（2026-11-05）两笔并存的对账：
+# ① **存量漂移补登**：P5b T1~T6 新增试车场/演练/裁判件共 57 模块，均只被
+#    `scripts/v2_p5b/*` 入口可达（不属两条主链路三入口）⇒ 静态闭包与在用数不变、
+#    全仓 375→432、不在用 102→159；此前该棘轮因未补登一直为红，本次按实测登记。
+# ② **本修复新增** v2/hosts/paper/nav_valuation（估值口径纯函数族，由 state_store
+#    导入 ⇒ 进纸面主链路闭包）⇒ 静态闭包 269→270、在用 273→274、全仓 432→433。
+# 底稿 tests/fixtures/inuse_closure_baseline_20261006.json 同步刷新（沿用既有约定）。
+# v0.209.10 补登（2026-11-05）：P6 T0.5 交付新增 v2/reporting 5 模块（包 __init__ +
+# contracts/deps/perf_gate/validation），仅被 scripts/v2_p6/* 验收入口与测试可达
+#（不属两条主链路三入口）⇒ 静态闭包与在用数不变、全仓 433→438、不在用 159→164。
+# 该棘轮在 T0.5 交付时漏登记（全量回归 2 failed 暴露），本次按实测补登；
+# 底稿同步刷新（沿用既有约定）。
+INUSE_BASELINE = 274
+NOTIN_BASELINE = 164
+STATIC_BASELINE = 270
 
 
 @pytest.fixture()

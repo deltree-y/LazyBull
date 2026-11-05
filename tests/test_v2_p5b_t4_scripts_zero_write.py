@@ -42,6 +42,12 @@ SUBPROCESS_TIMEOUT = 900
 
 
 def _run(script: str, *args: str) -> subprocess.CompletedProcess:
+    import os
+
+    # 子进程按 UTF-8 输出：否则非 UTF-8 控制台（如 Windows GBK）的中文断言文本会被
+    # 父侧 `encoding="utf-8"` 替换成 U+FFFD，导致「已存在/生产根/只允许」类断言假失败。
+    environment = dict(os.environ)
+    environment["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "v2_p5b" / script), *args],
         cwd=str(ROOT),
@@ -50,6 +56,7 @@ def _run(script: str, *args: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         timeout=SUBPROCESS_TIMEOUT,
+        env=environment,
     )
 
 
@@ -266,7 +273,11 @@ def test_testbed_root_and_frozen_docs_untouched(tmp_path):
         if path.is_file():
             return (path.stat().st_size, env._sha256(path))
         if path.is_dir():
-            return env.tree_state(path)
+            # 目录用元数据快照（size+mtime_ns）：任何写入必改其一，"被写入"检测语义
+            # 与内容哈希等价（production_snapshot 对 data/models 的既有先例），且不受
+            # 试车场根体积增长影响——曾因 77 万文件/25.5 GB 演练产物堆积，单测试
+            # 全量哈希 51 GB 令全量回归在 ~80% 处假性卡死（2026-11-05 根因裁决）。
+            return env.metadata_state(path)
         return None
 
     before = {path.as_posix(): digest(path) for path in watched}

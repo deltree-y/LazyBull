@@ -1052,6 +1052,29 @@ clean 行情、事件 freshness 与 derived 实际产出；cs_infer freshness �
 （通过/失败日均有）、滚动历史 `runs/coverage_history.json`，失败日另有 `runs/gap_<date>.json`；
 推送文本附 `数据质量: error N / warning M`。**生产纸面入口与默认链路已于 2026-10-31 切至 v2**（观察期未启动——切换后尚无日跑记录，最后处理日仍为 `20260603`）。
 
+**纸面估值口径（v0.209.9）：** `engine_state.bin` 的 `portfolio_values` 是**逐业务日收盘估值**
+的历史序列（NAV 曲线源），其末日行必须与 `nav.parquet` 同业务日行同值；「某一行情日的当前
+市值」只落只读旁路 `state/valuation_preview.json`（显式带 `market_date` 与
+`authority_last_date`），**不得**写进 `portfolio_values` 或 `nav.parquet`。迁移估值三来源按
+优先级收敛且全部绑定账户最后处理日：旧 `nav.parquet` 同日行逐位沿用 → 显式冻结输入（须为
+业务日）→ 按业务日 clean 截面复算（缺分区直接报错，禁止回退最新截面）。启动一致性校验含
+**第三腿**：`nav.parquet` 末行 ↔ 权威同日行的 `cash`/`position_value`/`total_value`（容差
+1e-6），数值不一致返回 `"nav_divergence"`（记 warning、**不自动改写任一侧**），同日行缺失
+fail-fast。出现该状态时先按授权程序修正，再推进日跑：
+
+```bash
+# 只读规划（打印 row_before / row_after / 差异），零写入
+python scripts/v2_p4/t5_nav_row_repair.py --evidence-dir <证据目录> \
+    --expect-total-value <业务日复算总值> --expect-market-value <业务日复算市值>
+# 落盘（三重校验：当日分区复算 + nav 同日行交叉 + 操作者期望值；先备份原字节）
+python scripts/v2_p4/t5_nav_row_repair.py --evidence-dir <证据目录> \
+    --expect-total-value <业务日复算总值> --expect-market-value <业务日复算市值> --apply
+```
+
+该工具只改权威末日行三数值（日期/持仓/现金/账本/`nav.parquet` 均不动），原始字节备份在
+`<证据目录>/engine_state.before.bin` 可整字节回滚；`20260603` 行已于 2026-11-05 按此程序
+修正（证据 `data/frozen_reference/v2_p4/t5_nav_row_repair_20261105/`）。
+
 **v2 到期义务清偿（P4 T3，已闭合）：** 新宿主 normalize/Kelly 统一回测侧语义；行业映射、
 停牌日历与行情读取由回测/纸面宿主显式注入，core/common 不反向依赖 `v2/store`。
 正常 v2 回测缺省经原生 `TargetPortfolio` 调用单袖 merge，显式 `legacy_bypass` 仅用于
@@ -1634,6 +1657,25 @@ python scripts/v2_p5b/rehearsal.py --report --campaign-id <campaign> --apply
 # 5) 只读校验（三环哈希/上游链接/A-A/判定边界）
 python scripts/v2_p5b/rehearsal.py --check --campaign-id <campaign>
 ```
+
+### P6 报告系统 T0.5 验收入口（治理/验收用途，非生产工具）
+
+P6 报告系统当前只完成 T0.5（依赖、合成语料、双性能入口与审计基线），**投影/渲染实现尚未开始**。
+固定合成语料与参考生成器只验证计时/体积/离线协议，不代表 P6 报告已验收：
+
+```bash
+# 一次性执行完整 T0.5 验收（语料双跑 + 参考生成 + 5 冷/5 热打开 + 5 次生成 + 契约/基线）
+python scripts/v2_p6/run_t05_acceptance.py --validation-id <new_id> --json
+# 不传 --validation-id 时自动生成全小写默认 id（p6_t05_acceptance_<UTC时间数字>），亦合法可用
+# 产物（原始 JSON 与 SHA）：data/reports/p6/validations/research/<new_id>/
+# 契约冻结件：docs/contracts/p6_t05_contract_freeze_20261105.json
+# 打开测量依赖可选组 verification（Playwright + Chromium）；生产生成器禁止 import Playwright
+```
+
+依赖安装（精确版本，供复跑）：`python -m pip install "jinja2==3.1.6" "playwright==1.64.1"` +
+`python -m playwright install chromium`；浏览器缓存默认位于 `%LOCALAPPDATA%\ms-playwright`
+（Linux 为 `~/.cache/ms-playwright`），离线复跑复用同一缓存或本地 wheel 源，不把 Playwright
+装进生产路径。
 
 ### 添加新因子（v0.5.0）
 

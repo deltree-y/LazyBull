@@ -18,6 +18,7 @@ efinance>=0.5.5.2
 tqdm>=4.64.0
 python-dateutil>=2.8.2
 openpyxl>=3.0.0
+Jinja2>=3.1,<4.0
 
 # Machine Learning dependencies
 xgboost>=3.4.0
@@ -32,6 +33,9 @@ pytest-cov>=4.0.0
 black>=24.0.0
 flake8>=5.0.0
 isort>=5.10.0
+
+# Verification-only dependencies (P6 T0.5 open-time measurement; production must not import Playwright)
+playwright>=1.47,<2.0
 
 # Optional: 钉钉机器人服务（PyPI 最高 0.24.x，无 1.x 版本）
 dingtalk-stream>=0.24.0

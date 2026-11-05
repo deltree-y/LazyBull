@@ -16,6 +16,7 @@
 | [events_state_schema.md](events_state_schema.md) | 事件库 / 状态库统一 schema + 公告源试数据协议（词表已修 + 审计样本量升级） | **已生效（2026-10-01 P0 确认）** |
 | [hypothesis_ledger_schema.md](hypothesis_ledger_schema.md) | 假设台账 schema（含候选池分母 / α 预算 / 顺序检验规格——块方差已拍板；**F4**：`supersede_reasons` 字段登记，2026-10-07） | **已生效（2026-10-01 P0 确认；F4 = 2026-10-07）** |
 | [netting_freeze.md](netting_freeze.md) | 净额化冻结文档（分层语义 / 状态机表 / 三恒等式 / lot 模型 + 同向分摊 / 双口径 / 兜底链） | **已生效（2026-10-01 P0 确认）** |
+| [p6_t05_contract_freeze_20261105.json](p6_t05_contract_freeze_20261105.json) | P6 T0.5 冻结件（compare 映射 / canonical 字段 / 精确写白名单 / validation 根 / 依赖上下限与验收精确版本 / §7.3 语料规模；与 `src/lazybull/v2/reporting/contracts.py` 同源，测试逐项比对） | **已冻结（2026-11-05，由 F23 派生，不含新裁决）** |
 
 配套（非契约但属 P0 交付）：术语库 `docs/glossary/terms.yaml`（首版 71 条）；
 复杂度 hook `scripts/check/check_complexity.py`（存量棘轮基线同目录 `complexity_baseline.json`）；

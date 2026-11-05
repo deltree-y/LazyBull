@@ -2,6 +2,144 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.13] - 2026-11-05
+
+### Fixed（P6 T0.5 第一次复核整改：reviewer1 通过；reviewer2 4 项续项全接纳）
+
+reviewer1 复核**通过**（R1-1~R1-7 全闭合 + 2 条不要求整改的观察项）；reviewer2 复核
+**暂不通过**（04/05 闭合，01/02/03 部分闭合 + C1 边界缺口），4 项续意见逐条甄别后
+**全部接纳**，处置增记于处置登记文档。核心修复：
+
+- R2-T05-01 续（P1）：资源观测升级到 **context 级**——popup/new page 及其首批请求一并
+  捕获（含 `context.on("page")` 追踪）；WebSocket 保持 page 级监听（Playwright 该事件
+  无 context 级形态），经 `context.on("page")` 对每个新页挂载覆盖 popup；新增 popup
+  动态 HTTP 负例（真实浏览器，复现 reviewer2 场景）证明既可在原始记录看到又可使门失败。
+- R2-T05-02 续（P2）：Playwright/Chromium 可控临时目录（driver 缺省在 `os.tmpdir()` 建
+  `playwright-artifacts-*`）经 `TMP/TEMP/TMPDIR` 重定向进本次 validation；写域证据门
+  升级为三方证据（user-data-dir 全部位于 validation + profile 实际落盘 + OS TEMP
+  零新增 `playwright-*` 条目），`gates.browser_write_domain` 取代原 profile 门。
+- R2-T05-03 续（P2）：打开测量改由验收驱动以 **CLI 子进程**执行，执行层在
+  `t05_acceptance.json` 保存实际命令、**实际退出码**与原始记录路径（不再只有退出码约定）。
+- C1 续（P3）：版本门对齐 packaging specifier 语义——上限为无预发布正式版时，其同
+  数字段预发布版（`4.0rc1`/`4.0.dev0` 之于 `<4.0`）不放行；非上限同段预发布按区间判定。
+
+测试：T0.5 套件 17 → **18 项**（新增 popup 负例），**18/18 通过**；复杂度双口径
+exit=0、新增硬超限 0（整改途中 `run_acceptance` 曾超 150 行硬上限，抽函数归位）。
+证据：`data/reports/p6/validations/research/p6_t05_acceptance_run6/t05_acceptance.json`
+（9 项全 pass；open 检查含实际 exit_code=0 与完整命令；资源门 11 请求全为合法导航、
+0 WebSocket；写域 300 文件全落 validation、OS TEMP 零新增；打开 max 9.2ms /
+生成 max 1608.6ms；schema `p6_t05_performance/v3`）。run5 为整改途中 fail 现场
+（复杂度硬超限），按历史不覆盖保留。
+
+### Closed（P6 T0.5 闭合）
+
+- 交付：依赖契约（Jinja2 fail-closed + Playwright 可选组 + 精确版本门）、标准/压力合成
+  语料（双跑 SHA 一致）、固定合成参考件、双性能入口（5 冷+5 热打开、5 次生成）、
+  验收驱动（P6-M0.5 可复跑命令，9 项检查）、契约冻结与工作树/复杂度/依赖基线。
+- 评审闭环：两位独立专家（用户发起）——reviewer1 首轮"有条件通过"（R1-1~7）+ 复核 1
+  **通过**；reviewer2 首轮"暂不通过"（R2-T05-01~05 + C1）+ 复核 1 暂不通过（4 续项）+
+  复核 2 **通过**。13 条意见（去重 11 项缺陷）+ 复核续项逐条甄别、全部接纳修复、无拒纳项。
+- 最终证据：`p6_t05_acceptance_run6`（9 项全 pass；打开 max 9.2ms / 生成 max 1608.6ms /
+  资源门严格协议全过 / 写域三方证据齐备 / 实际退出码落盘）；run1~run5 历史现场保留。
+- 闭合报告：`docs/reports/p6_t05_closure_20261105.md`；处置登记：
+  `docs/review/v2_p6/p6_t05_implementation_disposition_20261105.md`。
+- 边界：P6-M0.5 契约闭合；精确写审计器归 T1、正式三面性能归 T2+、Linux 门归 T5；
+  生产链路未切换；提交边界由用户裁决（逐 task 闭合≠逐 task 提交）。
+
+## [0.209.12] - 2026-11-05
+
+### Fixed（P6 T0.5 实现评审整改：13 条意见全接纳，11 项唯一缺陷修复）
+
+两位独立评审（reviewer1「有条件通过」R1-1~R1-7；reviewer2「暂不通过」R2-T05-01~05 + C1；
+R1-1≡R2-T05-05、R1-2≡R2-T05-04 重叠）逐条甄别后**全部接纳、无拒纳项**，处置登记见
+`docs/review/v2_p6/p6_t05_implementation_disposition_20261105.md`（评审文档 append-only）。
+
+- R2-T05-01（P1）：打开测量补 `websocket` 事件捕获；资源门升级为设计 §6.6 严格协议——
+  仅允许被测 HTML 的 file 导航（含热 reload），任何子资源（含本地 `file:`）与一切
+  WebSocket 均违规；新增本地 CSS 与 WebSocket 两个**真实浏览器负例**证明各自可使门失败。
+- R2-T05-02（P2）：浏览器 profile 显式绑定本次 validation（5 冷全新 + 1 热独立持久，
+  冷启动全新 profile 语义守卫保留），以运行期子进程 `--user-data-dir` 命令行证据 +
+  profile 落盘文件数构成写域证据门 `gates.browser_profiles`，不再落系统临时目录。
+- R2-T05-03（P2）：原始观测逐次导航落盘（`observations`：请求 url/method/resource_type/
+  导航标记、WebSocket、失败信息；预热导航一并观测），与推导 gate 分离；原始 JSON 记录
+  CLI 退出码约定（0/3/2）。
+- R1-1/R2-T05-05（高/P2）：默认 validation_id 改为全小写数字生成
+  （`run_t05_acceptance._default_validation_id`），默认复跑命令恢复可用；
+  `utc_stamp()` 的时间字段语义不变。
+- R1-2/R2-T05-04（中/P2）：环境门"键在但值为 None"判 invalid；数值字段严格正整数
+  （拒布尔/字符串/浮点/零负），补键缺失与值无效两类负例。
+- R1-3（中）：`measure_report`/`measure_generation` 输出守卫补 evidence_class 白名单
+  （`validations` 根自身与未知首段一律拒绝，与 `resolve_validation_dir` 强度对齐）。
+- R1-5/R1-6/R1-7（低）：语料清单缺失改 fail-closed（不再静默空标识）；语料 JSON 补
+  `allow_nan=False`（对齐 canonical 规则）；隔离测试补体积门判定断言。
+- C1（低）：Jinja2 版本比较升级为 PEP 440 预发布语义（`3.1rc1`/`3.1.dev0` 不得冒充
+  `3.1` 越下限，post 高于正式版），不可解析后缀 fail-closed。
+- R1-4（低）：计划文档 §8 以增补方式注明最终证据为 run4（run1~run3 为历史中间态保留）。
+
+测试：T0.5 套件 13 → **17 项**（默认 id 守卫、evidence_class 白名单正负例、环境门
+None/类型负例、两个真实浏览器资源门负例），**17/17 通过**；复杂度双口径 exit=0、
+新增硬超限 0、存量基线 136/199 不变。
+证据：`data/reports/p6/validations/research/p6_t05_acceptance_run4/t05_acceptance.json`
+（9 项检查全 pass；打开 max 8.8ms / 生成 max 1571.2ms / 资源门 11 请求全为合法导航、
+0 WebSocket / profile 300 文件全部落 validation 内；schema `p6_t05_performance/v2`）。
+
+## [0.209.11] - 2026-11-05
+
+### Fixed（全量回归 ~80% 假性卡死根因修复 + 试车场产物瘦身）
+
+- 根因：`tests/test_v2_p5b_t4_scripts_zero_write.py::test_testbed_root_and_frozen_docs_untouched`
+  守卫对 `data/paper_shadow/p5b_testbed` 做两次全量 SHA-256 `tree_state`；该树被
+  `p5b_t6_rehearsal_*` 演练产物膨胀至 77.2 万文件/25.5 GB（单测试即哈希 51 GB、stat 150 万次），
+  叠加 `pytest -q` 落盘 8KB 块缓冲（尾部 ~44 个测试输出不足一个缓冲区、永不刷新），
+  全量回归在 ~80% 处表现为长时间零输出的假性卡死（两次连续复现，单跑复现定位）。
+- 守卫瘦身（2026-11-05 用户裁决，与演练产物清理一并执行）：目录分支改用
+  `metadata_state`（size+mtime_ns；任何写入必改其一，"被写入"检测语义等价，与
+  `production_snapshot` 对 `data/models` 的既有先例一致）；单文件分支维持内容哈希。
+- 产物清理：删除 `p5b_t6_rehearsal_*` r1~r20 共 20 代历史演练产物（~73.3 万文件/~24.2 GB）；
+  保留 r21——`tests/test_v2_p5b_t6_script_runbook.py` 运行手册一致性守卫与已记录 T6 判定的
+  证据基座。清理后试车场根 38,724 文件/1,311 MB。
+- 影响：零写入守卫测试由不可完成（>30 分钟仍在外）降至秒级；全量回归尾部恢复
+  可见进度（重跑协议建议 `python -u` 无缓冲 + 脱离会话直接文件句柄重定向）。
+- 全量回归收口（安全协议，38 分 11 秒）：**5157 passed / 2 failed → 修复后全绿**。
+  2 failed 为 0.209.10 漏登的 inuse closure 棘轮：P6 T0.5 新增 `v2/reporting` 5 模块
+  未登记（不在用 159→164，静态闭包与在用数不变、守恒成立），本次按实测补登
+  `NOTIN_BASELINE` 与底稿 `tests/fixtures/inuse_closure_baseline_20261006.json`。
+  原卡死区域（p5b_t4 零写入守卫 + p6 尾部）本次全程畅通。
+
+## [0.209.10] - 2026-11-05
+
+### Feat（P6 T0.5：依赖、合成语料、双性能入口与审计基线）
+
+F23 治理门（`b476ef5`）后进入 P6 T0.5；本版只交付**验收协议与规模语料**，不写 P6 投影/渲染实现，
+不宣称 P6 已验收。
+
+- 依赖：`pyproject.toml` / `requirements.txt` 同步声明 `Jinja2>=3.1,<4.0`（运行时，缺失
+  fail-closed，禁止字符串拼接降级）；Playwright 仅进 `verification` 可选组/验收侧，生产包
+  `src/lazybull/v2/reporting/**` 禁止 import。验收精确版本 Jinja2 3.1.6 / Playwright 1.64.1 /
+  Chromium 156.0.8078.4。
+- 新增 `src/lazybull/v2/reporting/`：`contracts`（compare 映射 11 行 / canonical 规则 / 精确写
+  白名单 / validation 根 / §7.3 规模 / 阈值）、`deps`、`perf_gate`（体积/打开/生成判定与注入合成
+  度量）、`validation`（新目录守卫、隔离 JSON 写盘）。
+- 新增 `scripts/v2_p6/`：`build_corpus.py`（标准+压力语料，双跑 SHA 一致：
+  `974ff111…6ae3`）、`reference_generator.py`（固定合成参考件，12,695 字节、零外部引用）、
+  `measure_report.py`（5 冷+5 热）、`measure_generation.py`（5 次完整进程）、
+  `freeze_t05_contracts.py`、`run_t05_acceptance.py`（P6-M0.5 可复跑命令）。
+- 契约冻结：`docs/contracts/p6_t05_contract_freeze_20261105.json`
+  （`contract_sha256=d6a4847c…87b3`，与代码同源校验）。
+- 实测（Windows 11 build 26300 / 20 核 / 32GB / 平衡电源）：打开 5 冷 7.9~9.6ms、5 热
+  4.3~23.6ms（阈值 <2,000ms）；生成 5 次 1,569~1,608ms（阈值 <10,000ms）；阈值负例
+  3,000,001B / 2,000ms / 10,000ms 全部由注入合成记录触发。
+- 证据：`data/reports/p6/validations/research/p6_t05_acceptance_run3/t05_acceptance.json`
+  （9 项检查全 pass；含原始 `performance.json` / `generation_performance.json` /
+  `baseline.json`）；复杂度双口径 exit=0、新增硬超限 0。
+- 测试：`tests/test_v2_p6_t05_{corpus,perf_gate,deps,isolation}.py` 13 项。
+- 收尾修复：`env_probe.power_plan` 改为按字节捕获并 UTF-8 → GBK → replace 逐级解码
+  （`text=True` 依赖机器 locale，控制台代码页切到 UTF-8 后曾致 run3 环境
+  `power_plan=unavailable` 判无效 fail）；7 个验收脚本入口注入
+  `sys.dont_write_bytecode`（验收进程禁写 `__pycache__`，pytest 导入不改全局）。
+- 边界：Linux 验收未执行（最终跨平台门归 T5）；工作树仍含未提交 P4 NAV 修复，P6 不改变其
+  代码/测试，提交边界由用户裁决。
+
 ### Closed（P5b 阶段闭合）
 
 - 交付：T1 注册/D0、T2 虚拟时钟多臂与族级事务、T3 分片账本与故障矩阵、T4 收益裁判
@@ -11,6 +149,77 @@ All notable changes to this project will be documented in this file.
   H6 **not_executed**（DD 两臂因锚 500/冻窗终点 218 超出 78 样本而不可构造）；判定权归用户。
 - 限制：历史试车场，非前向证据；回撤裁判只能判极大效应；训练与 holdout 共享同一对真实源。
 - 闭合记录：docs/reports/p5b_phase_closure_20261104.md（本地归档）。
+
+## [0.209.9] - 2026-11-05
+
+### Fix（纸面权威快照估值时点错位：NAV 两载体永久分裂）
+
+现象：同一纸面账户、同一最后处理日 `20260603`，权威 `engine_state.bin` 的持仓市值
+`501,736.00` / 总资产 `520,262.18`，旧 `nav.parquet` 为 `600,490.00` / `619,016.18`，差
+`98,754.00`（现金与持仓身份完全一致）。根因 = 2026-10-31 P4 生产迁移把**最新 clean 截面
+（`20261029` 收盘价）**写入了**业务日 `20260603`** 的 `portfolio_values` 行；按两个交易日的
+收盘价分别复算，`20260603` = 600,490.00、`20261029` = 501,736.00，逐位对上，差异 100% 为
+估值时点错位（全持仓同期下跌 16.45%），非资金/成本口径错误。
+
+- **迁移估值绑定业务日（`scripts/v2_p4/t5_migration.py`）**：新增
+  `resolve_business_valuation`，三来源按优先级收敛且全部绑定账户「最后处理日」——
+  ① 旧 `nav.parquet` 同日行逐位沿用（已发布历史事实，**不重估**）→ ② 显式冻结输入
+  （`market_date` 必须 = 业务日）→ ③ 按**业务日** clean 截面复算（缺分区 fail-fast）。
+  `migrate_state` 不再覆盖已存在日期的行，只在无同日行时追加；估值/账户现金不一致、
+  与已发布同日行冲突均 fail-fast。默认来源登记由 `latest_clean_section` 改为
+  `business_day_clean_section`。
+- **`assess_holdings` 增加 `market_date`（`scripts/v2_p4/t5_gate1_identity.py`）**：显式
+  取该日分区，分区缺失直接报错，**禁止回退到最新截面**；持仓有效性（tradable/is_st/
+  停牌）仍按最新截面，与估值时点解耦。三臂工具仅在门 1 冻结估值确实绑定业务日时才
+  复用该冻结值。
+- **当前市值改走只读旁路**：新增 `build_valuation_preview` /
+  `write_valuation_preview` / `load_valuation_preview`（`state/valuation_preview.json`，
+  显式带 `market_date` 与 `authority_last_date`），迁移工具落该文件；**禁止**写进
+  `portfolio_values` 或 `nav.parquet`。
+- **第三腿不变量（`PaperStateStore.check_consistency`）**：account 族校验通过后再比对
+  **`nav.parquet` 末行 ↔ 权威同日行**的 `cash` / `position_value` / `total_value`
+  （容差 1e-6）。跳空语义下取 `portfolio_values` 同日行比对；同日行缺失 = 结构性冲突
+  fail-fast；数值不一致记 warning 并返回新状态 `"nav_divergence"`——**只暴露不修复**
+  （两侧都可能承载已发布事实，静默改写任一侧都会伪造历史）。该不变量在现网数据上
+  已复现本次缺陷（输出 `position_value nav=600490.0 权威=501736.0` 等）。
+- 测试：迁移新增业务日绑定 / 旧行沿用 / 缺分区 fail-fast / 冲突拒绝 / 旁路隔离 12 项；
+  状态库新增不变量 6 项（含跳空合法、未知业务日 fail-fast、旁路往返）；修正
+  `_make_blob` 逐日现金口径（历史行不随后一日现金改写）。P4 全量 704 项全绿。
+
+### Fix（例行全量验证发现的存量红项，非本缺陷引入）
+
+- `tests/test_v2_p5b_t4_scripts_zero_write.py`：子进程补 `PYTHONIOENCODING=utf-8`（与
+  T5 同款）。此前父侧以 `encoding="utf-8"` 捕获、子进程按控制台本地编码输出，非 UTF-8
+  控制台（Windows GBK）下「已存在 / 生产根 / 只允许」中文断言会被替换成 U+FFFD 而假失败。
+- `src/lazybull/v2/hosts/testbed/paths.py`：`project_root()` 改由本文件上溯 5 级求得，
+  不再 `from src.lazybull import PROJECT_ROOT`（T7 G 组「v2/hosts 不得依赖旧顶层包」）；
+  实测取值与原实现逐字符一致（`True` / `D:\my_pro\LazyBull`），不动任何身份口径。
+- `tests/test_check_inuse_closure.py` + 底稿 `inuse_closure_baseline_20261006.json`：
+  按实测补登两笔——① P5b T1~T6 新增 57 个仅 `scripts/v2_p5b/*` 可达的模块（全仓
+  375→432、不在用 102→159，静态闭包与在用数不变）；② 本修复新增 `nav_valuation`
+  （静态 269→270、在用 273→274、全仓→433）。棘轮常量与底稿同步刷新。
+
+### Fix（现网权威末日行数据修正，已执行 2026-11-05）
+
+新增 `scripts/v2_p4/t5_nav_row_repair.py`（阶段专用，默认 dry-run）：只改权威快照**末日行**
+的三个估值数值，日期/持仓/现金/账本/`nav.parquet` 全不动。落盘前三重独立校验——① 业务日
+`clean/daily` 分区逐股复算；② 与 `nav.parquet` 同日行 `cash`/`position_value`/`total_value`
+交叉（1e-6）；③ 操作者 `--expect-total-value` / `--expect-market-value` 与复算一致。原字节
+备份为 `<证据目录>/engine_state.before.bin`（可整字节回滚），落盘用整日写锁 + sha256 比较交换，
+事后自动跑 `check_consistency` 与第三腿校验。
+
+- 执行结果：`20260603` 行 `501,736.00 / 520,262.18` → **`600,490.00 / 619,016.18`**
+  （现金 `18,526.18` 不变；其余 5 个历史行逐位未动；`nav.parquet` 未改写）。
+  blob sha256 `70078810…876c` → `c976909b…1f0e`；`check_consistency = ok`、
+  `nav_divergence = null`；事后逐行核对权威 ↔ `nav.parquet` 六个业务日 **max |diff| = 0.0**。
+- 证据：`data/frozen_reference/v2_p4/t5_nav_row_repair_20261105/nav_row_repair.json`
+  （含 `row_before` / `row_after` / `nav_divergence_before` / 逐股复算表 / 前后 sha256）。
+- 测试：`tests/test_v2_p4_t5_nav_row_repair.py` 7 项（dry-run 零写入 / 只改末日行 + 备份可
+  回滚 / 复算与 nav 冲突拒绝 / nav 行缺失拒绝 / 期望值不符拒绝 / 缺分区拒绝 / 修完幂等
+  `ALREADY_OK`）。
+
+谱系：本版只修 P4 纸面迁移、一致性校验与上述一处历史行数值；决策/成交/NAV 派生公式未改，
+`nav.parquet` 与全部历史净值行未改写；账本、持仓、现金、仓位与 config 未动。
 
 ## [0.209.8] - 2026-11-04
 
