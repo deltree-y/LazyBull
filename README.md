@@ -1677,6 +1677,29 @@ python scripts/v2_p6/run_t05_acceptance.py --validation-id <new_id> --json
 （Linux 为 `~/.cache/ms-playwright`），离线复跑复用同一缓存或本地 wheel 源，不把 Playwright
 装进生产路径。
 
+### P6 报告系统 T1 验收入口（只读投影层，非生产工具）
+
+T1 交付只读投影层（稳定快照 / 权威内容核对 / 驾驶舱 projection / 自封存 manifest / 精确写
+审计器），**仍未开始 HTML/CSV 渲染**。真实生产根核对归 T5，本入口只用合成夹具：
+
+```bash
+# T1 七组测试（P6-T1-01~17 全场景 + 整改负例）+ 治理面六组定向集
+#  + 复杂度双口径（含 mccabe 正控制）+ 报告包 Playwright 零 import + 工作树指纹
+python scripts/v2_p6/run_t1_acceptance.py --validation-id <new_id> --json
+# 不传 --validation-id 时自动生成默认 id（p6_t1_acceptance_<UTC时间数字>）
+# 产物：data/reports/p6/validations/research/<new_id>/t1_acceptance.json
+# 已存在的 validation 目录一律拒绝（无覆盖）；失败即以新 id 重取证
+# 证据 schema p6_t1_acceptance/v2：counts/expected_min_passed/mccabe_ran/worktree
+```
+
+实现位置：`src/lazybull/v2/reporting/{status,snapshot,authority,cockpit,instructions,
+config_view,quality,sources,bundle,manifest,readonly_audit}.py`；契约见 `CLAUDE.md` §5
+「P6 报告系统 T1 契约」。
+
+直接调用写审计器时，前快照须由 `snapshot_tree` 获取并保留其 `FileTree.dirs` 目录证据；
+转换成普通 `dict` 会丢失空目录身份，带新目录前缀的命令将拒绝判定。T6 合成兼容性用例使用
+上游原生构造与封存函数生成 manifest、报告和判定表，不替代 T5 的真实 golden 验收。
+
 ### 添加新因子（v0.5.0）
 
 LazyBull 使用模块化的因子库架构。添加新因子只需在 `src/lazybull/factors/` 中添加函数，无需修改核心代码。

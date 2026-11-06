@@ -2,6 +2,316 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.22] - 2026-11-06
+
+### Closed（P6 T1 收口：独立评审与整改链条全部闭合）
+
+- 评审链：2026-11-05 六轮（reviewer1 24 条 + reviewer2 22 条 = 44 条）→ 2026-11-06 复审 9 条
+  （4 P1 + 5 P2）→ 复审 1 判 4 项未闭合 → **复审 2 判通过**（9 项全部闭合，0 新增业务缺陷）。
+- 累计 **53 条意见全部处置**（其中 3 条部分采纳，均有双方确认的事实理由）。
+- 收口验证：定向集 **141 passed / 0 failed / 0 skipped**；**全量回归 5269 passed / 0 failed
+  （36:56）**；复杂度双口径 `exit=0`、新增硬超限 0；`flake8 --max-line-length=100` 全清；
+  生产根零写（`git status -- data` 空）。
+- 收口证据：`data/reports/p6/validations/research/p6_t1_closure_20261106/t1_acceptance.json`。
+  历史 fail 现场（`run1`、`p6_t1_reviewer2_recheck1_20261106`、`p6_t1_reviewer2_recheck2_20261106`）
+  全部保留未覆盖。
+- 明确的后续边界：真实 `data/paper` 根、真实 seq10/7/21 bundle、T6 完整演练 → T5；HTML/CSV 渲染
+  与指标 → T2~T4。T1 交付面到此冻结，不再接受功能性改动（如需变更须重新走评审）。
+
+### Fixed（P6 T1 复核时发现的测试适配缺口）
+
+- 复核补跑发现 5 项失败：两个旧审计断言未包含新增的“目录已存在”诊断、两个绑定边界用例
+  仍传缺少目录证据的普通 dict、T6 手组夹具未登记原生 calibrator 身份。按 `CLAUDE.md §7.6`
+  即时修复测试；业务实现与验收判据均未修改，首次 FAIL 证据保留。
+- 写审计用例通过 `snapshot_tree` 取得目录证据，同时精确核对目录存在及文件覆盖两条诊断；
+  缺目录证据必须报错的负例继续保留。
+- T6 夹具改由上游原生 manifest/report/verdict 构造函数及独占封存写口生成，登记真实合成
+  calibrator 摘要；新增主报告与判定表各自不支持 schema 的负例。仅为合成协议验证，
+  不代表完整演练或真实 golden 验收。
+- 修复后的两个受影响文件 `40 passed`；完整 T1 定向门 **141 passed / 0 failed / 0 skipped**，
+  独立复现 24 项全部通过，复杂度双口径通过。新证据：
+  `data/reports/p6/validations/research/p6_t1_reviewer2_recheck2_fix1_20261106/t1_acceptance.json`；
+  复核记录：`docs/review/v2_p6/p6_t1_implementation_recheck2_reviewer2_20261106.md`。
+
+## [0.209.21] - 2026-11-06
+
+### Fixed（P6 T1 复审 1 的 4 项未闭合分支整改）
+
+reviewer2 复审 1（`p6_t1_implementation_recheck1_reviewer2_20261106.md`）：9 项中 5 项通过、
+**4 项部分通过未闭合**（-01/-02/-04/-07）。作者逐条复核，4 条全部成立并整改：
+
+- **-01 链校验退化为“认识哪个键就查哪个键”**：空链、幽灵键、T6 已引用的 Markdown 缺失均返回
+  available；`calibrator_sha256` 未进映射；T6 schema 常量为 None；缺 manifest 抛裸异常。
+  改为：① 每族声明**原生必需链键**（T4/T5 报告与判定表 5 键；T6 判定表 4 键含
+  `rehearsal_report(.md)_sha256`），缺键即 fail；② **空链即 fail**；③ 任何链键若无载体
+  （找不到字节来源）即 fail（幽灵键不再放行）；④ `calibrator_sha256` 映射到
+  `manifest.files.calibrator.sha256` 并交叉核对；⑤ T6 引用原生 `REPORT_SCHEMA`/`VERDICT_SCHEMA`；
+  ⑥ 被链引用的非 JSON 产物（`rehearsal_report.md`）纳入存在性门；⑦ 先做文件存在性门再取哈希
+  （缺 manifest 不再抛 `FileNotFoundError`，按区返回 invalid）。
+- **-02 指令区绕过完整代门禁**：`project_instructions` 新增 `generation_gate`，record `invalid`
+  时指令区直接 `invalid`（带 `gate_reason_code`、`projection_only`，不给出 `authority_verified`）；
+  切换前形态仍保留专用 `not_available/run_record_pre_switch_shape`。
+- **-04 日期不可解析的成交仍被当历史行**：`project_authority_trade_record` 对坏日期返回空串不抛错，
+  旧过滤把它当“非当前日”。改为**日期过滤前显式判定**：空/不可解析 ⇒ 进 `broken_rows` 并使
+  成交区 `invalid`（同时计入“当前日有成交”，保持 NAV 门保守）。
+- **-07 空旧目录无法识别**：`TreeScan` 增 `dirs`，`snapshot_tree` 返回
+  `FileTree`（dict 语义 + `dirs`）；`_new_dir_violations` 以**扫描前目录集合**判定前缀是否已存在
+  （空目录同样拦），且 `new_prefixes` 非空而调用方未提供目录证据时直接 `ValueError`（禁止
+  “默认不存在”）。
+
+新增测试 7 项：空链、幽灵键、缺 manifest 降级、schema 不符、T6 schema+被引用 md 缺失、
+指令区门禁（含缺 marker 分支）、坏日期成交、空旧目录复用（含缺目录证据报错）。
+按用户要求**本轮未跑回归**（定向/全量留待复审通过后执行），仅做 `flake8` 与导入静态检查。
+
+## [0.209.20] - 2026-11-06
+
+### Fixed（P6 T1 复审整改：4×P1 + 5×P2 全部整改）
+
+reviewer2 于 2026-11-06 发起新一轮复审（结论：本轮不通过）。作者逐条独立复核，**9 条全部成立**，
+本轮全部整改（无一条不接纳）：
+
+- **R2-20261106-01（P1，最严重）**：`bundle.py` 自造了上游不存在的协议（`artifact_sha256` 表、
+  顶层 `manifest_sha256`、以**文件名**为键的 `hash_chain`、报告级 `evidence` 块），导致**原生 T4/T5
+  产物全部被拒**。重写为**按上游原生协议读取**：三族一律 `artifacts.load_artifact(sealed=True,
+  schema=<原生常量>)`，`hash_chain` 按语义键解析（`manifest_sha256` → manifest 字节、
+  `thresholds/holdout/power_sha256` → 对应产物字节、`calibrator_sha256` → manifest.files 登记值、
+  `<文件名>_sha256` → 该文件），报告/判定表用原生 `identity.manifest_sha256`、
+  `identity.verdict_sha256`、`hash_chain.manifest_sha256` 做**双向绑定**，`manifest.files` 上游引用
+  按“bundle 内比对字节、否则登记 `external_refs`”处理；`schema` 逐文件比对原生常量。
+  **正向依据改为上游管线真实产出的合成 bundle**（`tests.p5b_t4_env.full_pipeline` /
+  `tests.p5b_t5_env.full_t5`，module 级 fixture 只跑一次），自造 JSON 仅作负例。
+  验证：原生 T4/T5 均 `available`；改判定表/改临界值并**重封存**后均 `invalid/bundle_chain_broken`。
+- **R2-20261106-02（P1）**：发布标记校验只影响 record 区，账户/成交/配置仍认证为可用。新增
+  `_generation_gate` + `_apply_gate`：record `invalid` ⇒ 依赖区一并 `invalid`（带 `gate_reason_code`），
+  切换前形态 ⇒ 依赖区 `degraded`（值保留不认证），`recovered_generation_count_missing` 不拦。
+- **R2-20261106-03（P1）**：写审计丢弃 `root_id`，输入根写入可借同名相对路径进白名单。改为
+  `output_root` **必填**，非输出根差异一律进 `foreign_root_paths` 判 fail。
+- **R2-20261106-04（P1）**：损坏的权威成交被静默丢弃成“权威确认零成交”。`_current_day_trades`
+  改为返回 `(rows, broken)`，非对象/不可投影的行进 `broken_rows` 并使成交区 `invalid`，且计入
+  “当前日有成交”（影响 NAV 缺行门）。
+- **P2-05**：缺失输入未登记身份 ⇒ 读取期间新增文件仍判稳定。`capture` 记录 `missing`，
+  `verify_live` 对“由缺失变存在”判漂移。
+- **P2-06**：金额/NAV 比较未先验有限，NaN 可通过内容门。`_compare_scalar` 与 `_diff_nav_values`
+  均先 `isfinite`，非有限即 `authority_mismatch`。
+- **P2-07**：“新目录”判据只禁止改删旧文件，仍允许追加。绑定前缀在 `before` 已有任何文件即 fail。
+- **P2-08**：`runtime_violations` 不参与 verdict。非空即 fail。
+- **P2-09**：质量摘要同值重复行被判 available。改为按**行数**判唯一（`multiple_quality_value`），
+  且 `partition_count` 的冲突状态不被解析结果覆盖。
+
+测试：T1 七组 **95 项**（bundle 六项自造夹具测试整体替换为**原生管线**契约测试，另新增 7 项负例：
+代门禁、损坏成交、非有限金额、迟到文件、追加旧目录、输入根写入、质量重复行）；**全量回归
+5259 passed / 0 failed（38:05）**；`flake8` 全清；复杂度双口径 `exit=0`、新增硬超限 0
+（`audit_command` 软超限已拆出 `_audit_report`）。证据：
+`data/reports/p6/validations/research/p6_t1_acceptance_r2review_run1/t1_acceptance.json`。
+
+覆盖边界（如实登记）：T6 `t6_seq21` 仍只做**原生常量对齐 + 结构对照**，未跑 T6 演练管线动态正向
+（该族的动态核对归 T5 的 `check_real_golden`）；T4/T5 已用上游原生管线产物做实。
+
+## [0.209.19] - 2026-11-05
+
+### Fixed（P6 T1 第五轮复核整改：2 条建议级意见闭环）
+
+第五轮复核：两位专家均判**可闭环**（0 阻断 / 0 重要），reviewer2 结论为“证据资格可以、**不需要附加条件**”。
+本轮把最后 2 条建议一并闭环：
+
+- **R5-01（建议）**：① `bind_patterns` 改为**只校验被本次模式引用的占位符**（共享绑定表可整体透传，
+  不再因无关键含 `*` 被整体拒绝）；② `CLAUDE.md` §5 ⑫ 补登记“中性空列表（`nav.rows=[]`）表示**未读取**
+  而非确实没有行，判断零成交只看 `empty_valid` 状态词”与字面量字符集；③ 一并拒绝以点开头/结尾的绑定值。
+  负例：`test_p6_t1_16l_binding_edge_cases`（未引用键忽略 → pass；`run9.`/`.run9` → `ValueError`）。
+- **R2-N10（建议）**：同上第 ③ 条（Windows 会剥离尾点，导致白名单永不匹配、报错语义含糊）。
+
+证据：`data/reports/p6/validations/research/p6_t1_acceptance_run9/`（`verdict=pass`）；
+复杂度双口径 `exit=0`、新增硬超限 0；`flake8` 全清；`run1`(fail)~`run8` 历史现场全部保留未覆盖。
+
+### Closed（P6 T1 独立评审闭环：六轮，两位专家全部意见闭合）
+
+- 第六轮（最终轮，硬上限 6/6）：reviewer1 **全部 PASS、新增意见 0 条、可闭环**（逐项声明其 24 条意见闭合）；
+  reviewer2 **全部 PASS、新增 0 阻断/0 重要/0 建议**，证据资格最终结论“**可以、不需附加条件**，覆盖
+  `generate`/`verify`/`measure`/`real_golden`/`reproduce` 五命令面”（逐项声明其 22 条意见闭合）。
+- 累计意见 **44 条**（首轮 29 + R2 7 + R3 4 + R4 2 + R5 2 + R6 0），处置：**41 全采纳 + 3 部分采纳**
+  （部分采纳均有双方确认的事实理由，见处置文档 §九）。
+- 遗留观察（无需整改）：`unbound_patterns` 成功路径恒空（前瞻字段）；驱动零写自证维持
+  “暂缓 + 补偿控制”（完整工作树指纹 + `audit_command` 单测层判定，两位专家均已接受）。
+- 收口证据：`p6_t1_acceptance_run9`（`verdict=pass`）；定向集 **129 passed / 0 skipped**；
+  **全量回归 5257 passed / 0 failed（37:51）**；复杂度双口径 `exit=0`、新增硬超限 0；生产根零写。
+
+## [0.209.18] - 2026-11-05
+
+### Fixed（P6 T1 第四轮复核整改：2 条建议级意见，1 条 fail-open 收敛 + 1 条口径登记）
+
+第四轮复核：两位专家均判 **可闭环**（0 阻断/0 重要）。reviewer2 的最终结论升级为“审计器可作为
+P6-T1-16 合格证据，覆盖 `generate`/`verify`/`measure`/`real_golden`/`reproduce` 五个命令面”。
+本轮仍按“关键意见全部闭环”执行剩余 2 条建议：
+
+- **R2-N9（建议但我方判为 fail-open，必修）**：`bind_patterns` 把 `bindings` 值按原文替换进模式串，
+  值里的 `*` 会被当通配符 ⇒ 白名单与“新目录”判据同时放宽（假通过）。改为**绑定值必须是字面量**
+  （`^[A-Za-z0-9_.\-]+$`，含 `*`/`?`/分隔符即 `ValueError`）。
+  负例：`test_p6_t1_16k_bindings_must_be_literal`（`*`/`**`/`run?`/`a/b` 全部拒绝；正常绑定下
+  写别的 run 目录仍 `fail` + `outside_whitelist` 命中）。
+- **R4-01（建议）**：不可用态还缺“纯数据/计数”字段（如 `config.account_start_date`、`trades.authority_rows`）。
+  选择**在契约登记口径**而非伪造 0/空值：`CLAUDE.md` §5 ⑫ 增写“不可用态保证区键集 + 结构子键集恒定，
+  但不伪造明细与计数；渲染侧必须防御读取，禁止把字段缺席当 0 或空串”（伪造占位会把“来源缺失”
+  伪装成“值等于 0”，与零修复纪律冲突）。
+
+证据：`data/reports/p6/validations/research/p6_t1_acceptance_run8/`（`verdict=pass`、
+`counts={passed:128, failed:0, skipped:0}`）；定向集 **128 passed / 0 skipped**；
+复杂度双口径 `exit=0`、新增硬超限 0；`flake8` 全清；`run1`(fail)~`run7` 历史现场全部保留未覆盖。
+
+## [0.209.17] - 2026-11-05
+
+### Fixed（P6 T1 第三轮复核整改：4 条新意见全接纳）
+
+第三轮复核：reviewer1「本轮 3 条整改全部 PASS、0 FAIL、可闭环」；reviewer2「R2-N6 闭合、
+其余全部 PASS、审计器证据资格 = **可以**（限 generate/verify 面）」；两位共新增 4 条意见：
+
+- **R2-N7（重要）**：`derive_new_prefixes` 的强制绑定只覆盖 `generate`，`measure`/`real_golden`/
+  `reproduce` 未传 `bindings` 时“新 `<new_id>`”判据静默关闭（可用 `measure` 就地改写已存在
+  validation 目录而判 pass）。改为**任何带占位符的命令**未绑定即 `ValueError`（`verify` 白名单为空
+  不受影响），`derive_new_prefixes` docstring 与 `CLAUDE.md` §5 ⑫ 同步登记各命令须绑的键。
+  负例：`test_p6_t1_16i_measure_and_reproduce_require_bindings`（未绑定 `ValueError`；绑定后覆盖
+  已存在 validation 目录 → `fail` + `overwrote_existing`）。
+- **R2-N8（建议）**：`_nav_result` 的显式 `annualization_allowed=True` 可压过状态推导（invalid 也放行）。
+  改为矛盾即 `ValueError`（标志位不得与状态自相矛盾）。负例：`test_p6_t1_nav_flag_cannot_contradict_status`。
+- **R3-01（建议）**：权威不可读时 `config` 只有扁平状态行，`config.annualization` 子键缺失会让 T2 取字段
+  `KeyError`。`_unavailable_sections` 为 `config` 补 `model`/`annualization` 两个 `not_available`
+  子行（子键集恒定），并加断言。
+- **R3-02（建议）**：`generate` 四键绑定约定属新调用约定——已在 `CLAUDE.md` §5 ⑫ 明确写出
+  （`attempt/evidence_class/kind/report_id`，`measure`/`real_golden` 绑 `evidence_class/validation_id`，
+  `reproduce` 绑 `new_id`）。
+
+证据：`data/reports/p6/validations/research/p6_t1_acceptance_run7/`（`verdict=pass`）；
+定向集 **127 passed / 0 skipped**；复杂度双口径 `exit=0`、新增硬超限 0；`flake8` 全清；
+`run1`(fail)~`run6` 历史现场全部保留未覆盖。
+
+## [0.209.16] - 2026-11-05
+
+### Fixed（P6 T1 第二轮复核整改：9 条新意见，1 条复核 FAIL 项闭环）
+
+两位专家第二轮复核：reviewer1「17 条 16 PASS + 1 部分 PASS、0 FAIL」并新增 3 条建议；
+reviewer2「12 条 10 PASS + 1 部分 PASS + **1 FAIL（R2-03 部分）**」并新增 1 条重要 + 5 条建议。
+本轮清零复核 FAIL 项与全部高价值新意见（登记见处置文档「复核轮次 R2 整改」小节）：
+
+- **R2-N6（复核 FAIL）**：`new_prefixes` 未由 `bindings` 自动推导 ⇒ “新目录”硬判据默认静默失效。
+  改为 `derive_new_prefixes()` 由绑定后的字面量**自动推导**（`generate` 强制绑定全部占位符，
+  缺一或只绑一部分即 `ValueError`），并在报告里登记 `unbound_patterns`；负例
+  `test_p6_t1_16h_generate_without_bindings_is_rejected`。
+- **R2-N3**：审计钩子改为对**栈内全部** guard 执法（原仅最内层，外层更严时被绕过）；
+  `test_p6_t1_nested_guards_both_enforced`。
+- **R2-02（复核轮）**：`ReadonlyGuard` 构造时校验执法根“未解析 == 解析后”，不等即 fail-fast
+  （原实现会让经 symlink/junction/别名传入的根静默不执法）；`test_p6_t1_guard_rejects_reparse_worktree_root`。
+- **R2-01（复核轮）**：NAV 区 `annualization_allowed` 改由状态推导（`invalid`/`not_available` 一律
+  False），`nav_only` 与 `nav_source_missing` 早退也携带 `rows/verified_rows/nav_values`；
+  权威不可读时 `nav` 区补齐同类中性字段；`test_p6_t1_invalid_nav_forbids_annualization`（3 例）。
+- **R2-N1**：`worktree_fingerprint()` 改取 `git status --porcelain` **完整**输出并给出
+  `status_lines/status_sha256/dirty`（原经 `_run` 的 tail 截断恒 ≤3）；`driver_sha256` 独立字段。
+- **R2-N2/R2-N4**：`bundle.py` 与 `readonly_audit.py` docstring 增“诚实边界”——自封存无密钥不能抵御
+  拥有完整写权的重写；guard 之前已持有的 fd（`open(fd,"wb")`）与解释器外写入不可见。
+- **R2-N5**：`bundle._escape` 拒绝 Windows 保留设备名（`con/nul/aux/prn/com1..9/lpt1..9`）。
+
+证据：`data/reports/p6/validations/research/p6_t1_acceptance_run6/`（schema v2，`verdict=pass`，
+`counts={passed:125, skipped:0}`，`worktree.dirty=true / status_lines=27`）；
+`run1`(fail)~`run5` 历史现场全部保留未覆盖。
+
+## [0.209.15] - 2026-11-05
+
+### Fixed（P6 T1 第一次独立评审整改：29 条意见，26 全接纳 + 3 部分接纳）
+
+两位独立评审专家共提 6 条阻断 + 13 条重要 + 10 条建议，逐条登记见
+`docs/review/v2_p6/p6_t1_implementation_disposition_20261105.md`。本版为**契约级修正**
+（不是放宽判据），核心是把合成夹具与真实生产形态对齐：
+
+- **NAV 跳空语义（R1-01/R1-04）**：`nav.parquet` 只在有成交日追加行，原实现把“权威有业务日、
+  nav 无行”当断线 ⇒ 正常根每天 `degraded`。改为只比对两侧都有行的日期，`broken_links` 收窄为
+  “数值不一致”，新增反向差集 `nav_only_days`（nav 有行而权威无该日 ⇒ `invalid/authority_mismatch`）。
+- **权威成交 schema（R1-02）**：`EngineState.trades` 是引擎记录（`date/stock/...`）而非 11 列投影，
+  原实现按投影列名读 ⇒ 成交核对恒 invalid 且“有成交缺 NAV 行”门永不触发。新增
+  `authority.project_authority_trade_record` 只读镜像（与 `PaperHost._project_trade_row`/
+  `_trade_reason` 逐字段 parity，测试守卫），`_current_day_trades` 改用投影后日期过滤。
+- **写审计（R1-05/06、R2-01~03）**：`audit_command` 的 `expected_paths` 改为**必填**（缺参 TypeError）；
+  新增 `bindings`（占位符字面量绑定）与 `new_prefixes`（`generate` 下历史报告被就地覆盖即 fail）；
+  白名单拒绝 `.`/`..`/空段与绝对路径，占位符不匹配点段；`is_forbidden` 段比较做大小写/尾点/空白归一；
+  `snapshot_tree` 升级为 `scan_tree`（重解析点不穿透并登记）；`ReadonlyGuard` 弃用逐属性 patch，
+  改为 **CPython 审计事件钩子**（覆盖 `Path.open`/`io.open`/`os.open`/链接/时间戳/截断/删除/
+  `shutil.*`/子进程），并如实声明“解释器外写入不可见 ⇒ 运行期层尽力而为、判定以树哈希为准”。
+- **P5b bundle 双向绑定（R1-07、R2-04）**：`hash_chain` 键集必须**恰为**声明要绑的上游集合，
+  `manifest_sha256` 必需，manifest 新增必需 `artifact_sha256` 表（摘要剔除回指字段以打断循环），
+  故“改数值 + 重封存”仍 `invalid`；bundle 目录需 `scope_base` 且复用 `is_reparse_point`。
+- **manifest 链（R1-12/15、R2-08）**：`recompute_chain` 的 `inputs`/`projection` 必填、`outputs`
+  与登记双向比对（新增 `outputs.keys` 环）；`build_inputs` 拒绝重复路径并校验 SHA 形态；
+  `verify_manifest` 增输入/输出哈希形态校验。
+- **逐区降级（R1-03/08/09）**：登记 `not_authority_verifiable` 原因码；账户投影捕获
+  `PaperStateError`（持仓形态非法 ⇒ `invalid` 不抛）；权威不可读时 projection **键集恒定**
+  （新增 `SECTION_KEYS`，各区独立 `not_available`）；账户核对增“多余顶层键”mismatch。
+- **夹具保真（R1-10/16）**：`tests/p6_t1_env.py` 重写（默认根按跳空语义只写成交日 NAV 行、
+  权威侧恒引擎形态、新增 `authority_trade_record`/`to_engine_trade_record`）；新增
+  `tests/test_v2_p6_t1_negatives.py`（15 项：坏 JSON 逐区降级、空 `portfolio_values`、
+  空未来指令帧、JSON 可序列化、staging 受信与副本复核、包内重型依赖 AST 守卫等）。
+- **验收驱动（R1-17、R2-09/10/11）**：解析 `N passed/skipped` 并断言
+  `passed >= EXPECTED_MIN_PASSED ∧ failed=0 ∧ skipped=0`；复杂度增 mccabe 正控制（软超限 > 0）
+  与 `[warn]` 即 fail；证据 schema 升 `p6_t1_acceptance/v2`，新增 `worktree`（HEAD/status/驱动 SHA/
+  python）指纹；定向集扩为 T1 七组 + 治理面六组（实测 **119 passed**）。
+- `CLAUDE.md` §5「P6 报告系统 T1 契约」③⑩⑪⑫ 与 ⑧ 同步改写为上述可判定口径，并新增
+  “权威成交必须经镜像投影”“NAV 跳空合法”“运行期层不得冒充完整拦截”等硬约束。
+
+证据：`data/reports/p6/validations/research/p6_t1_acceptance_run5/`（pass）；`run1`(fail)/
+`run2`/`run3`/`run4` 历史现场全部保留未覆盖。生产根零写、复杂度双口径 `exit=0`、
+新增硬超限 0、`flake8 --max-line-length=100` 全清。
+
+## [0.209.14] - 2026-11-05
+
+### Added（P6 T1：稳定快照、权威内容、只读投影与 manifest；P6-M1 作者侧自验）
+
+按计划 v6 §3-T1 交付 `src/lazybull/v2/reporting/` 的 11 个只读模块（不实现 HTML/CSV/指标，
+不改 P4/P5b，不碰生产根）：
+
+- `status.py`：六状态词 + 验证级别 + 闭集降级原因码注册表（`make_status` 强制 degraded/
+  not_available/invalid/stale 必带 reason_code）。
+- `snapshot.py`：**受信根判定**（本地目录；目录只检 symlink/junction/reparse 与解析逃逸，
+  **不用目录 st_nlink**；文件拒 `st_nlink>1` 硬链接；UNC/SMB 拒）+ **单读字节私有快照**
+  （原路径只读一次 → `.staging/<attempt>/snapshot/<root_id>/…` → 以副本字节算 SHA-256）+
+  **二次身份核验**（重算路径集/字节/目录枚举，漂移即丢弃 staging 并换 attempt；最多重试 2 次，
+  仍漂移 `invalid/unstable_snapshot`）。
+- `authority.py`：代形态判定（正常 v2 / 切换前记录形态 / 只缺一项即 invalid）、账户投影逐字段
+  全等、NAV 三原值逐行核对（历史保留、当前行不匹配或当前日有成交缺行即 invalid 且年化不回退、
+  最新行早于账户日为合法 stale）、当前日成交七元组**排序多重集**核对（保留重复次数）。
+- `cockpit.py` + `instructions.py` + `config_view.py` + `quality.py`：驾驶舱 projection 装配
+  （未来指令/ pending / 调仓 / 配置 / 模型 / 年化 / 质量聚合；缺文件与合法空严格区分；
+  恢复代缺计数两分支；`account_start_date` 展平前冲突检测；实跑模型固定
+  `no_persisted_actual_model`，latest 固定 `no_readonly_resolution`）。
+- `sources.py`：chain 有限性门（调用唯一实现**之前**逐行拒绝 NaN/Inf/非正/坏日期，坏行整臂
+  `invalid/nonfinite_chain_nav`，合法须 `trading_days=N−S`）+ 规范化 runs 与旧 WF 白名单读口。
+- `bundle.py`：P5b 三族 `calibration_only` sealed bundle 校验（seal + 声明字段路径 + 证据类 +
+  hash_chain/manifest_sha256 交叉；campaign 身份 = 目录名 + manifest 字节哈希，不硬编码真实
+  campaign/target_pp）。
+- `manifest.py`：canonical projection 哈希、`record_sha256` 自封存（移除自身后全字段）、
+  `report_id` 形态、链序复算（输入 → input_manifest → projection → outputs → seal，verify 先验
+  schema+seal）。
+- `readonly_audit.py`：**P6-T1-16 精确写审计器**（`ReadonlyGuard` 运行期拦截 open/mkdir/改名/
+  删除/socket；`audit_command` 前后全树哈希判定「白名单外全等 ∧ 白名单内恰为本命令允许集合」；
+  `logs/`、`temp/`、`__pycache__/`、`.pytest_cache/` 禁作兜底例外）。
+- `scripts/v2_p6/run_t1_acceptance.py`：可复跑验收驱动（T1 六组测试 + 复杂度双口径 + 报告包
+  Playwright 零 import 守卫），输出只落新 validation 目录。
+- 测试 `tests/test_v2_p6_t1_{snapshot,authority,instructions,config_model,sources,manifest}.py`
+  + 合成夹具 `tests/p6_t1_env.py`：覆盖 P6-T1-01~17 全场景（受信根负例、代推进重试、NAV/成交
+  篡改、切换前形态、恢复缺计数、多未来指令歧义、pending 五态、chain NaN、三族 bundle 篡改、
+  自 seal 复算、精确写审计）。
+
+边界：真实 `data/paper` 根核对归 T5（本轮 pytest 只用合成夹具）；HTML/CSV 渲染归 T2~T4；
+production 证据类混入仍由后续面的生成入口拦截；不提交、不改 P4/P5b 字节。
+
+### Changed（在用闭包棘轮补登与验收证据）
+
+- `tests/test_check_inuse_closure.py` + `tests/fixtures/inuse_closure_baseline_20261006.json`：
+  T1 新增 11 个 `v2/reporting` 模块均不在两条主链路闭包内，按既有约定显式补登
+  （静态 270 / 在用 274 不变，全仓 438→449、不在用 164→175），底稿同步刷新；
+  修复前全量回归 `2 failed, 5219 passed` 的 2 项即此棘轮（已复跑 `6 passed`）。
+- `data/reports/p6/validations/research/`：`p6_t1_acceptance_run3/t1_acceptance.json`
+  （verdict=pass：57 passed + 复杂度双口径 exit=0 + 报告包 Playwright 零 import）；
+  历史现场全部保留——`run1` 为 fail（包纯度用文本包含误判 T0.5 文档里的“Playwright”提及）、
+  `run2` 为改用 AST import 判定后的 pass、`run3` 为 flake8 折行后的重取证。
+- `README.md`：新增“P6 报告系统 T1 验收入口”小节（`run_t1_acceptance.py` 用法与产物路径、
+  真实根核对归 T5 的边界说明）。
+
 ## [0.209.13] - 2026-11-05
 
 ### Fixed（P6 T0.5 第一次复核整改：reviewer1 通过；reviewer2 4 项续项全接纳）

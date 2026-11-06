@@ -121,8 +121,13 @@ import check_inuse_closure as cic  # noqa: E402
 #（不属两条主链路三入口）⇒ 静态闭包与在用数不变、全仓 433→438、不在用 159→164。
 # 该棘轮在 T0.5 交付时漏登记（全量回归 2 failed 暴露），本次按实测补登；
 # 底稿同步刷新（沿用既有约定）。
+# v0.209.14（2026-11-05）：P6 T1 交付新增 v2/reporting 11 模块（status/snapshot/authority/
+# cockpit/instructions/config_view/quality/sources/bundle/manifest/readonly_audit），
+# 仅被 tests/p6_t1_env.py 与 scripts/v2_p6/run_t1_acceptance.py 可达（不属两条主链路
+# 三入口；T2~T4 生成入口接入后才会进闭包）⇒ 静态闭包 270、在用 274 不变，
+# 全仓 438→449、不在用 164→175。底稿同步刷新（沿用既有约定）。
 INUSE_BASELINE = 274
-NOTIN_BASELINE = 164
+NOTIN_BASELINE = 175
 STATIC_BASELINE = 270
 
 
