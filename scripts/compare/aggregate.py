@@ -473,10 +473,15 @@ def sort_by_latest_run_time(
     return result.reset_index(drop=True)
 
 
-def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
-    """按参数组合跨时间段聚合，输出稳定性汇总。"""
+def stability_group_columns(comp_df: pd.DataFrame) -> list[str]:
+    """跨时间段稳定性函数的**实际分组列**（P6 报告复用同一判定，禁止各自重写）。
+
+    口径与 ``build_period_stability_table`` 完全一致：按 ``PARAM_COLS`` 顺序取
+    ``COL_NAMES`` 映射后存在于输入表的列，排除 varying/metric 列与 seed 相关键。
+    该函数只返回列名，不读数值、不改变分组行为（P6 T3 用于识别动态身份列）。
+    """
     if comp_df.empty:
-        return pd.DataFrame()
+        return []
 
     varying_cols = {
         COL_NAMES["wf_run_id"],
@@ -502,7 +507,15 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         col = COL_NAMES.get(key, key)
         if col and col in comp_df.columns and col not in varying_cols and col not in metric_cols:
             group_cols.append(col)
+    return group_cols
 
+
+def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
+    """按参数组合跨时间段聚合，输出稳定性汇总。"""
+    if comp_df.empty:
+        return pd.DataFrame()
+
+    group_cols = stability_group_columns(comp_df)
     if not group_cols:
         return pd.DataFrame()
 

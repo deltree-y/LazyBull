@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+<title>{{ title|p6text }}</title>
+<style>
+:root {
+  --ink: #111827;
+  --muted: #4b5563;
+  --line: #d1d5db;
+  --bg: #f9fafb;
+  --card: #ffffff;
+  --production: #1d4ed8;
+  --research: #4b5563;
+  --calibration: #b45309;
+  --error: #b91c1c;
+  --warning: #d97706;
+  --ok: #047857;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 0 0 48px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.page { max-width: 1180px; margin: 0 auto; padding: 16px; }
+.banner { border-left: 8px solid var(--research); background: var(--card); padding: 12px 16px;
+  border-radius: 6px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+.banner--production { border-left-color: var(--production); }
+.banner--research { border-left-color: var(--research); }
+.banner--calibration { border-left-color: var(--calibration); }
+body.banner--calibration { border: 6px solid var(--calibration); }
+.banner__text { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.banner__note { margin: 0; color: var(--muted); }
+.identity { display: grid; grid-template-columns: 168px 1fr; gap: 2px 10px; margin: 10px 0 0;
+  font-size: 13px; }
+.identity dt { color: var(--muted); }
+.identity dd { margin: 0; word-break: break-all; }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.toc a { color: var(--production); text-decoration: none; border: 1px solid var(--line);
+  padding: 2px 8px; border-radius: 999px; background: var(--card); font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  padding: 12px 16px 16px; margin-bottom: 12px; }
+.card h2 { font-size: 16px; margin: 0 0 8px; }
+.card h3 { font-size: 14px; margin: 14px 0 6px; color: var(--muted); }
+.status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 4px; }
+.status--available strong, .status--empty_valid strong { color: var(--ok); }
+.status--degraded strong, .status--stale strong { color: var(--warning); }
+.status--invalid strong { color: var(--error); }
+.status--not_available strong { color: var(--muted); }
+.chip { border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; font-size: 12px;
+  color: var(--muted); background: var(--bg); }
+.detail { margin: 0 0 10px; color: var(--muted); word-break: break-word; }
+.facts { display: grid; grid-template-columns: 220px 1fr; gap: 4px 12px; margin: 0 0 10px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; word-break: break-word; }
+.mini { color: var(--muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 6px; }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left;
+  vertical-align: top; word-break: break-word; }
+th { background: var(--bg); color: var(--muted); font-weight: 600; }
+.note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.empty { color: var(--muted); margin: 4px 0; }
+.chart-box { margin: 10px 0; }
+.chart-box figcaption { color: var(--muted); font-size: 13px; }
+.chart { width: 100%; height: auto; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; }
+.chart-note { fill: var(--muted); font-size: 13px; }
+.chart-axis { fill: var(--muted); font-size: 11px; }
+.nav-line { stroke: var(--production); stroke-width: 1.6; }
+.nav-point { fill: var(--production); }
+.nav-point--broken { fill: var(--error); }
+.footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
+.footer ul { list-style: none; padding: 0; margin: 6px 0; }
+.footer li { margin: 2px 0; }
+.footer a { color: var(--production); }
+</style>
+</head>
+<body class="evidence {{ banner.css }}">
+<div class="page">
+  <header id="evidence-banner" class="banner {{ banner.css }}">
+    <p class="banner__text">{{ banner.text|p6text }}</p>
+    <p class="banner__note">{{ banner.note|p6text }}</p>
+    <dl class="identity">
+      <dt>report_id</dt><dd>{{ report.report_id|p6text }}</dd>
+      <dt>report_kind</dt><dd>{{ report.report_kind|p6text }}</dd>
+      <dt>evidence_class</dt><dd>{{ report.evidence_class|p6text }}</dd>
+      <dt>input_evidence_classes</dt><dd>{{ report.input_evidence_classes|p6text }}</dd>
+      <dt>generated_at（UTC）</dt><dd>{{ report.generated_at|p6text }}</dd>
+      <dt>显式基线臂</dt><dd>{{ report.baseline_arm|p6text }}</dd>
+      <dt>projection schema</dt><dd>{{ report.projection_schema|p6text }}</dd>
+      <dt>projection generated_at</dt><dd>{{ report.projection_generated_at|p6text }}</dd>
+    </dl>
+  </header>
+  <nav class="toc">
+    {% for section in sections %}<a href="#{{ section.id }}">{{ section.title|p6text }}</a>{% endfor %}
+  </nav>
+  {% for section in sections %}
+  <section id="{{ section.id }}" class="card">
+    <h2>{{ section.title|p6text }}</h2>
+    <p class="{{ section.status.css }}" data-status="{{ section.status.word }}">
+      <strong>{{ section.status.label|p6text }}</strong>
+      <span class="chip">状态词 {{ section.status.word|p6text }}</span>
+      <span class="chip">原因码 {{ section.status.reason|p6text }}</span>
+      <span class="chip">验证级别 {{ section.status.verification|p6text }}</span>
+    </p>
+    <p class="detail">{{ section.status.detail|p6text }}</p>
+    {% if section.facts %}
+    <dl class="facts">
+      {% for fact in section.facts %}
+      <dt>{{ fact.label|p6text }}</dt>
+      <dd>{{ fact.value|p6text }}{% if fact.status %}
+        <span class="mini">［{{ fact.status.label|p6text }} / {{ fact.status.reason|p6text }}］</span>
+        {% endif %}</dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% for chart in section.charts %}
+    <figure class="chart-box">
+      <figcaption>{{ chart.caption|p6text }}</figcaption>
+      {{ chart.svg|p6svg }}
+      <figcaption>{{ chart.note|p6text }}</figcaption>
+    </figure>
+    {% endfor %}
+    {% for table in section.tables %}
+    <div class="table-box">
+      <h3>{{ table.caption|p6text }}</h3>
+      {% if table.status %}
+      <p class="mini">本表状态 {{ table.status.label|p6text }}（{{ table.status.reason|p6text }}）</p>
+      {% endif %}
+      {% if table.rows %}
+      <table>
+        <thead><tr>{% for column in table.columns %}<th>{{ column|p6text }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in table.rows %}
+          <tr>{% for cell in row %}<td>{{ cell|p6text }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">{{ table.note|p6text }}</p>
+      {% endif %}
+      {% if table.rows and table.note %}<p class="note">{{ table.note|p6text }}</p>{% endif %}
+    </div>
+    {% endfor %}
+    {% if section.note %}<p class="note">{{ section.note|p6text }}</p>{% endif %}
+  </section>
+  {% endfor %}
+  <footer class="footer">
+    <p>{{ footer.note|p6text }}</p>
+    <p>generator：{{ footer.generator|p6text }}</p>
+    <p>companion 只读文件（固定文件名，不提供用户可控 URL；完整 CSV 不参与本页渲染）：</p>
+    <ul>
+      {% for link in companions %}
+      <li><a href="{{ link.href }}">{{ link.name|p6text }}</a> — {{ link.note|p6text }}</li>
+      {% endfor %}
+    </ul>
+  </footer>
+</div>
+</body>
+</html>
