@@ -95,14 +95,16 @@ def _make_store(
     store = PanelDataStore(tmp_path / "store")
     bootstrap_manifest(store)
     rows_by_day = dict(day_rows or {})
-    for day in _CALENDAR:
-        if day in skip_days:
-            continue
-        nan_column, nan_count = nan_spec if (nan_spec and day == _TARGET) else (None, 0)
-        frame = _panel_day_frame(
-            day, n_rows=rows_by_day.get(day, 5), nan_column=nan_column, nan_count=nan_count
-        )
-        store.append_features(TradeDate.from_str(day), "core", frame)
+    # 批量回填延迟 manifest 落盘（逐次落盘为 O(n²) 全量重写）
+    with store.defer_manifest_save():
+        for day in _CALENDAR:
+            if day in skip_days:
+                continue
+            nan_column, nan_count = nan_spec if (nan_spec and day == _TARGET) else (None, 0)
+            frame = _panel_day_frame(
+                day, n_rows=rows_by_day.get(day, 5), nan_column=nan_column, nan_count=nan_count
+            )
+            store.append_features(TradeDate.from_str(day), "core", frame)
     return store
 
 
@@ -161,25 +163,27 @@ def _make_store_with_extra_columns(tmp_path, extra_columns: dict) -> PanelDataSt
         if col not in registered:
             store.manifest.register_column(col, "core", source="test")
     group_of = {col: str(store.manifest.column_group(col)) for col in extra_columns}
-    for day in _CALENDAR:
-        core_frame = _panel_day_frame(day)
-        side_columns: dict[str, dict] = {}
-        for col, value in extra_columns.items():
-            if group_of[col] == "core":
-                core_frame[col] = value
-            else:
-                side_columns.setdefault(group_of[col], {})[col] = value
-        store.append_features(TradeDate.from_str(day), "core", core_frame)
-        for group, columns in side_columns.items():
-            n = len(core_frame)
-            frame = pd.DataFrame(
-                {
-                    "trade_date": [day] * n,
-                    "ts_code": core_frame["ts_code"].tolist(),
-                    **{col: [value] * n for col, value in columns.items()},
-                }
-            )
-            store.append_features(TradeDate.from_str(day), group, frame)
+    # 批量回填延迟 manifest 落盘（逐次落盘为 O(n²) 全量重写）
+    with store.defer_manifest_save():
+        for day in _CALENDAR:
+            core_frame = _panel_day_frame(day)
+            side_columns: dict[str, dict] = {}
+            for col, value in extra_columns.items():
+                if group_of[col] == "core":
+                    core_frame[col] = value
+                else:
+                    side_columns.setdefault(group_of[col], {})[col] = value
+            store.append_features(TradeDate.from_str(day), "core", core_frame)
+            for group, columns in side_columns.items():
+                n = len(core_frame)
+                frame = pd.DataFrame(
+                    {
+                        "trade_date": [day] * n,
+                        "ts_code": core_frame["ts_code"].tolist(),
+                        **{col: [value] * n for col, value in columns.items()},
+                    }
+                )
+                store.append_features(TradeDate.from_str(day), group, frame)
     return store
 
 

@@ -657,43 +657,45 @@ def _build_panel_root(root: Path):
         }
     )
     store.manifest.save()
-    for day_idx, day in enumerate(_panel_days()):
-        rows = _frame_rows(day, day_idx)
-        for group in PANEL_GROUPS:
-            if group == "core":
-                core_cols = (
-                    ("trade_date", "ts_code")
-                    + tuple(_BASE_COLUMNS)
-                    + tuple(_FILTER_COLS)
-                    + ("amount_ma20", "total_mv", "sw_l1_code")
+    # 批量回填延迟 manifest 落盘（逐次落盘为 O(n²) 全量重写）
+    with store.defer_manifest_save():
+        for day_idx, day in enumerate(_panel_days()):
+            rows = _frame_rows(day, day_idx)
+            for group in PANEL_GROUPS:
+                if group == "core":
+                    core_cols = (
+                        ("trade_date", "ts_code")
+                        + tuple(_BASE_COLUMNS)
+                        + tuple(_FILTER_COLS)
+                        + ("amount_ma20", "total_mv", "sw_l1_code")
+                    )
+                    payload = {col: rows[col] for col in core_cols}
+                else:
+                    # readiness 要求八族当日齐备（非 core 族仅键列）
+                    payload = {"trade_date": rows["trade_date"], "ts_code": rows["ts_code"]}
+                store.append_features(TradeDate.from_str(day), group, pd.DataFrame(payload))
+            for table_idx, table in enumerate(LABEL_TABLES):
+                raw_col = _LABEL_COLS[table_idx]  # y_ret_5/10/20
+                neu_col = _LABEL_COLS[table_idx + 3]  # neu_y_ret_5/10/20
+                store.append_labels(
+                    table,
+                    pd.DataFrame(
+                        {
+                            "ts_code": rows["ts_code"],
+                            "trade_date": rows["trade_date"],
+                            "label_value": rows[raw_col],
+                            "neu_label_value": rows[neu_col],
+                            "maturity_status": ["sealed"] * len(rows["ts_code"]),
+                        },
+                        columns=[
+                            "ts_code",
+                            "trade_date",
+                            "label_value",
+                            "neu_label_value",
+                            "maturity_status",
+                        ],  # readiness 协议列序强校验
+                    ),
                 )
-                payload = {col: rows[col] for col in core_cols}
-            else:
-                # readiness 要求八族当日齐备（非 core 族仅键列）
-                payload = {"trade_date": rows["trade_date"], "ts_code": rows["ts_code"]}
-            store.append_features(TradeDate.from_str(day), group, pd.DataFrame(payload))
-        for table_idx, table in enumerate(LABEL_TABLES):
-            raw_col = _LABEL_COLS[table_idx]  # y_ret_5/10/20
-            neu_col = _LABEL_COLS[table_idx + 3]  # neu_y_ret_5/10/20
-            store.append_labels(
-                table,
-                pd.DataFrame(
-                    {
-                        "ts_code": rows["ts_code"],
-                        "trade_date": rows["trade_date"],
-                        "label_value": rows[raw_col],
-                        "neu_label_value": rows[neu_col],
-                        "maturity_status": ["sealed"] * len(rows["ts_code"]),
-                    },
-                    columns=[
-                        "ts_code",
-                        "trade_date",
-                        "label_value",
-                        "neu_label_value",
-                        "maturity_status",
-                    ],  # readiness 协议列序强校验
-                ),
-            )
     return store
 
 

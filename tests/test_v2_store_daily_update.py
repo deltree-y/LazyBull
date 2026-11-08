@@ -104,10 +104,12 @@ def _write_forming(store: PanelDataStore, panel: pd.DataFrame) -> None:
 def _complete_store(data_root: Path, end_date: str) -> PanelDataStore:
     store = PanelDataStore(data_root)
     bootstrap_manifest(store)
-    for date in (d for d in _CALENDAR if _DAY <= d <= end_date):
-        panel = _panel_frame(date)
-        _write_complete_panel(store, panel)
-        _write_forming(store, panel)
+    # 批量回填延迟 manifest 落盘（≈65 日 × 14 次写入；逐次落盘为 O(n²) 全量重写）
+    with store.defer_manifest_save():
+        for date in (d for d in _CALENDAR if _DAY <= d <= end_date):
+            panel = _panel_frame(date)
+            _write_complete_panel(store, panel)
+            _write_forming(store, panel)
     return store
 
 

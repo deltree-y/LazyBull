@@ -949,12 +949,24 @@ class TestEvalDIForwardSpy:
         assert captured["availability_ensurer"] is sentinel_ensurer
 
 
+@pytest.fixture(scope="module")
+def boundary_panel_root(tmp_path_factory):
+    """真实 panel 根(构造一次;各用例自行新建 store 消费,互不共享读取态)。
+
+    构造 160 日 × 八族 + 六标签表约 14s,原写法每用例重建一份;三者均只做
+    单日特征查询(读侧),共享同一份落盘数据不改变断言口径。
+    """
+    root = tmp_path_factory.mktemp("boundary_panel") / "root"
+    e2e._build_panel_root(root)
+    return root
+
+
 class TestRealStoreContractBoundary:
     """codex 复核二 F05:真实 store 边界的列登记/PIT 守卫必须穿透为
     ReplayContractError(不允许只让 runner 人工抛出);PIT 满足的正常读取放行。"""
 
-    def test_unregistered_column_wraps_contract_error(self, tmp_path):
-        store = e2e._build_panel_root(tmp_path / "root")
+    def test_unregistered_column_wraps_contract_error(self, boundary_panel_root):
+        store = PanelDataStore(boundary_panel_root)
         from src.lazybull.v2.hosts.backtest import replay as replay_mod
 
         with pytest.raises(ReplayContractError, match="特征查询契约失败"):
@@ -970,9 +982,8 @@ class TestRealStoreContractBoundary:
                 feature_columns=["recheck2_missing_column"],
             )
 
-    def test_pit_violation_wraps_contract_error(self, tmp_path):
-        root = tmp_path / "root"
-        store = e2e._build_panel_root(root)
+    def test_pit_violation_wraps_contract_error(self, boundary_panel_root):
+        store = PanelDataStore(boundary_panel_root)
         # 登记一列带 available_from 晚于查询窗 ⇒ PIT 越界
         store.manifest.register_columns(
             {
@@ -998,11 +1009,10 @@ class TestRealStoreContractBoundary:
                 feature_columns=["recheck2_pit_column"],
             )
 
-    def test_pit_satisfied_normal_read_ok(self, tmp_path):
+    def test_pit_satisfied_normal_read_ok(self, boundary_panel_root):
         """正例:available_from 已满足 ⇒ 正常读取(不被守卫误伤;分区无该列时
         reindex 补 NaN,不追加写——append 同日同族不同内容会被指纹冲突拒绝)。"""
-        root = tmp_path / "root"
-        store = e2e._build_panel_root(root)
+        store = PanelDataStore(boundary_panel_root)
         store.manifest.register_columns(
             {
                 "recheck2_ok_column": {

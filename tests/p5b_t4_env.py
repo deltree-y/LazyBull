@@ -122,10 +122,14 @@ def metadata_state(root: Path) -> Dict[str, Any]:
 
 
 def production_snapshot() -> Dict[str, Any]:
-    """生产根快照：``data/paper``、``data/runs`` 递归哈希 + ``data/models`` 元数据。"""
+    """生产根快照：三个生产根均按 (size, mtime_ns) 元数据快照。
+
+    零写入断言只需「有任何改动即不等」：写入必改 size 或 mtime_ns（含同内容重写），
+    故元数据快照与原 ``sha256`` 全量读盘等价且更省。
+    """
     return {
-        "paper": tree_state(ROOT / "data" / "paper"),
-        "runs": tree_state(ROOT / "data" / "runs"),
+        "paper": metadata_state(ROOT / "data" / "paper"),
+        "runs": metadata_state(ROOT / "data" / "runs"),
         "models": metadata_state(ROOT / "data" / "models"),
     }
 

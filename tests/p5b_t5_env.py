@@ -120,19 +120,30 @@ def tree_state(root: Path) -> Dict[str, str]:
     }
 
 
+def metadata_state(root: Path) -> Dict[str, Any]:
+    """目录元数据快照（相对路径 → (size, mtime_ns)）；大目录免哈希。"""
+    base = Path(root)
+    if not base.exists():
+        return {}
+    state: Dict[str, Any] = {}
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        state[path.relative_to(base).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return state
+
+
 def production_snapshot() -> Dict[str, Any]:
-    """生产根快照：``data/paper``、``data/runs`` 递归哈希 + ``data/models`` 元数据。"""
-    models = ROOT / "data" / "models"
-    metadata = {}
-    if models.exists():
-        for path in sorted(models.rglob("*")):
-            if path.is_file():
-                stat = path.stat()
-                metadata[path.relative_to(models).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    """生产根快照：三个生产根均按 (size, mtime_ns) 元数据快照。
+
+    零写入断言只需「有任何改动即不等」：写入必改 size 或 mtime_ns（含同内容重写），
+    故元数据快照与原 ``sha256`` 全量读盘等价且更省。
+    """
     return {
-        "paper": tree_state(ROOT / "data" / "paper"),
-        "runs": tree_state(ROOT / "data" / "runs"),
-        "models": metadata,
+        "paper": metadata_state(ROOT / "data" / "paper"),
+        "runs": metadata_state(ROOT / "data" / "runs"),
+        "models": metadata_state(ROOT / "data" / "models"),
     }
 
 
