@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.53] - 2026-11-08
+
+### Added（M1 里程碑出口收口登记）
+
+F24-A2 生效后 M1 出口判据改历史等效，补登正式收口文档与状态描述（零代码改动）：
+
+- 新增 `docs/reports/m1_closure_20261108.md`：M1（P0~P4 与 P5a）出口逐项判定——
+  对账门（P2a 批次 `p2a_b0replay_20261008_144307_d79f3f` / P2b `p2b_t5_closed_20261017_203508` /
+  P3 commit `14da715` / P4 门 2b/2/3）、影子门（`SHADOW_SIM` 10 日、`difference=0`、`unexplained=0`）、
+  回滚门（门 7 = 12 PASS + `device_smb_read` WAIVED，11 注入点「恢复 ≡ 无中断参照」）、
+  日频运行证据（`SLA_SIM` 10/10）、生产默认切换（`switch_result.json` PASS、`db6d03b`、20 只持仓、可回滚）；
+  同时登记残余项（**F24-R9 无真实前向运行证据**、P4 实耗回填与总账 v27 未执行、旧链删除时点待用户裁决）
+  与预算核对（编码 ≈28.3 单元 / 机器 ≈63.8~67.5h，均低于停止线 57 单元 / 71h；机器值为区间估计、非精确回填）。
+- 架构方案 §8.1-M1 出口状态 → 「**M1 出口已闭合（2026-11-08）**」并指向收口报告；`CLAUDE.md` §5 F24 条与 `AGENTS.md` 同步。
+
 ## [0.209.52] - 2026-11-08
 
 ### Changed（v2 F24 治理生效：开发前置解除与日历判据删除）
