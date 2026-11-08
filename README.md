@@ -1212,6 +1212,11 @@ pytest tests/test_v2_p3_t5_arm_runner.py --basetemp=temp/pytest_t5_arm_runner
 pytest --cov=src/lazybull --cov-report=html
 ```
 
+全量回归约 5,400+ 用例，单次 30 分钟以上属正常（耗时集中在 P5b 试车场与训练/回测端到端
+真实运行）。测试夹具批量写入 `PanelDataStore` 时必须走
+`with store.defer_manifest_save():` —— 逐次 append 会触发 manifest 全量落盘，
+160 日 × 14 次写入实测慢 5.2 倍（见 `tests/test_v2_train_wf_orchestrator_e2e.py`）。
+
 ---
 
 ## 📁 项目结构
@@ -1699,6 +1704,224 @@ config_view,quality,sources,bundle,manifest,readonly_audit}.py`；契约见 `CLA
 直接调用写审计器时，前快照须由 `snapshot_tree` 获取并保留其 `FileTree.dirs` 目录证据；
 转换成普通 `dict` 会丢失空目录身份，带新目录前缀的命令将拒绝判定。T6 合成兼容性用例使用
 上游原生构造与封存函数生成 manifest、报告和判定表，不替代 T5 的真实 golden 验收。
+
+### P6 报告系统 T2 生成入口（静态驾驶舱，只读离线）
+
+T2 交付**自包含静态驾驶舱**：Jinja2 模板 + 内联静态 SVG，六区（账户 / 持仓 / 指令 /
+pending / 调仓 / 模型·质量·新鲜度）+ 证据横幅 + 降级清单 + research 三端身份卡；
+CSS/SVG/数据全内联，无运行时 JavaScript / CDN / 外部字体图片，CSP 固定，
+companion 只链固定文件名（`projection.json` / `report_manifest.json`；全量 CSV 归 T3）。
+
+```bash
+# 生成并原子发布一份驾驶舱 run（默认写 data/reports/p6/<evidence>/dashboard/<report_id>/）
+python scripts/p6_report.py generate --evidence-class production \
+    --paper-root data/paper --quality-root data/reports/quality
+
+# 带精确写审计（审计件落本次新 validation 目录；已存在即拒绝）
+python scripts/p6_report.py generate --evidence-class research \
+    --audit-out data/reports/p6/validations/research/<new_id> --json
+
+# T2 验收驱动（六组 T2 + T1 七组 + T0.5 四组 + 棘轮；三份关键证据 + 双档性能 + 两次审计）
+python scripts/v2_p6/run_t2_acceptance.py --validation-id <new_id>
+```
+
+口径要点：
+
+- **证据域隔离 fail-closed**：`production` 只接受 production 输入，`calibration_only` 只接受
+  calibration 输入，`research` 可含 production/research 但不得混入 calibration；混合或空声明即
+  抛 `EvidenceIsolationError` 并非零退出（**不落任何产物**）；
+- **原子新 run**：目标 `report_id` 目录已存在即拒绝（无 latest、不覆盖、不追加），失败清理本次
+  staging，不留半成品；`attempt_id` 与 T1 快照同一字面量口径（禁点段/大写）；
+- **安全**：来源文本一律 Unicode NFC + 转义 `< > & U+2028 U+2029` 后只写文本节点（scheme 字面量的
+  冒号写成字符引用，可见文本不变）；**属性位只允许闭集常量**（`security.ALLOWED_ATTRIBUTES`，
+  未登记属性与同元素重复属性即判定失败）；CSP
+  `default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'`
+  且须恰一个；渲染结果在**发布前**强制自检（不可关闭）；除初始 file 导航外零 HTTP(S)/WebSocket 请求；
+- **性能门（不放宽）**：标准+压力每页 ≤3MB、5 冷 + 5 热逐次 <2s、生成逐次 <10s；口径为
+  “打开=页面自报 `loadEventEnd`、生成=in-process 生成调用”，验收载荷同时登记 `headroom`（实测÷阈值）；
+- **确定性**：同输入且同 `generated_at` 的 HTML 逐字节一致；换墙钟即新 run；manifest 登记
+  projection 链与渲染链的逐文件 SHA + 入口 SHA + `root_map`（含 `quality` 根）；
+- **写域证据**：`readonly_audit.json` 内的 `scan_scope` 登记有界扫描域、排除清单、未登记盲区
+  （须为空）与重解析点（须为空）；`logs/`、`temp/`、`__pycache__/` 任何写入即判定失败。
+
+实现位置：`src/lazybull/v2/reporting/{render,dashboard_view,dashboard_sections,view_primitives,
+svg,text_safety,html_check,security,evidence,publish,generate}.py` +
+`templates/dashboard.html.j2`；契约见 `CLAUDE.md` §5「P6 报告系统 T2 契约」。
+
+### P6 报告系统 T3 生成入口（实验报告 + 五份完整 CSV，只读离线）
+
+T3 交付**实验报告**：显式基线/臂、链式 NAV、Δ 指标、分折榜、跨期稳定性、19 列执行归因、
+成本/双边成交金额、旧 WF TopK 正日占比、制度摘要与四段证据卡；同时输出**五份完整 CSV**
+（`arm_metrics.csv` / `fold_metrics.csv` / `chain_nav.csv` / `execution_attribution.csv` /
+`stability.csv`），全值、非抽样、固定列序、UTF-8/LF、root-relative `source_ref`，
+manifest 逐份登记 `columns,row_count,key_columns,sha256`。
+
+```bash
+# 显式基线与臂（runs=规范化 runs 批次；legacy_wf=旧 WF 运行目录）
+python scripts/p6_report.py generate --kind experiment --evidence-class research \
+    --arm base=runs:data/runs/<batch_base> \
+    --arm arm=runs:data/runs/<batch_arm> \
+    --arm legacy=legacy_wf:data/walk_forward/<run_id> \
+    --baseline base --splits 0-13 \
+    --regime-json <p5a_regime.json> \
+    --audit-out data/reports/p6/validations/research/<new_id> --json
+
+# 标准/压力合成语料（确定性；写 temp/，可双跑比对 content_sha256）
+python scripts/v2_p6/build_t3_corpus.py --out temp/p6_t3_corpus --profile all
+
+# T3 验收驱动（T3 十一组 + T1/T2/T0.5 + 治理面；双档生成/打开/审计/CSV 守恒/包内复算）
+python scripts/v2_p6/run_t3_acceptance.py --validation-id <new_id>
+```
+
+口径要点：
+
+- **不重算公式**：链式指标只调 `calculate_chain_metrics`，Δ/分折只调既有 `compare_runs`，
+  旧 WF TopK 跨折均值只调 `aggregate_run`；生成链**禁止**调用 `bootstrap_delta/bootstrap_table`；
+- **Δ 符号**：`Δ = 臂 − 基线`，`ΔMaxDD > 0` 表示回撤改善；MaxDD 为非正小数；只是符号约定，
+  不构成采纳/闸门结论；
+- **链式有效性**：逐行校验可解析、有限、NAV>0，任一坏行整臂 `invalid/nonfinite_chain_nav`；
+  合法输入须 `rows_used = rows_total = N` 且 `trading_days = N − S`（折界重复点不计收益区间）；
+- **可比性**：数据态、折集合、逐折窗口、host_mode/实现、基线确认任一不同即
+  `not_comparable`（不产 Δ）；跨实现（runs vs 旧 WF）只做对账陈列；
+- **TopK**：规范化 runs 固定 `not_available/no_unique_implementation`（禁止从 `topk_detail`
+  私算）；旧 WF 仅把 `KEY_Top20/30_hit_rate` 改名，并在成品侧与 `aggregate_run` 对账；
+- **稳定性**：`DYNAMIC_EXACT` 单一分类 + 外层 `stable_identity`（代码态/数据态/host/实现不并组）；
+  缺 `综合得分`/指标列 ⇒ `missing_precondition` 且禁止打分；组内不足两条有限值 ⇒
+  `insufficient_periods`（不产生数值 `stability_score`）；`batch_run_id` 等动态分组列统一占位，
+  原始 run/折/窗口/模型版本仍在 CSV 与 `source_ref` 中保留；
+- **制度摘要**：只读显式 P5a JSON 的既有分箱计数；无 bins 固定 `not_available/no_regime_bins`，
+  不画伪分布、不重采样；
+- **四段证据卡**（信号 / 执行 / β暴露 / 成本）是独立证据，**不是守恒瀑布**；成本金额差不等于
+  NAV 贡献，β 暴露无来源即降级；
+- **证据目录**：`data/reports/p6/<evidence>/experiment/<report_id>/`；审计落兄弟
+  `validations/<evidence>/<id>_audit_<profile>/`；历史 run 不覆盖。
+
+实现位置：`src/lazybull/v2/reporting/{experiment_sources,experiment_metrics,experiment_stability,
+experiment_csv,experiment_projection,experiment_view}.py` + `templates/experiment.html.j2`；
+契约见 `CLAUDE.md` §5「P6 报告系统 T3 契约」。
+
+### P6 报告系统 T4 生成入口（趋势库 + 完整 run 索引，只读离线）
+
+T4 交付**三类物理隔离的趋势库**：`production`（P4 纸面 run）/ `research`（规范化 runs 与旧 WF）/
+`calibration_only`（P5b sealed bundle）。每个 run 一行身份（窗口/数据态/代码态/来源/哈希），
+五类指标按证据类分列（年化 / 回撤 / 双边成交金额 / 成本 / TopK 正日占比），
+并输出两份**完整 CSV**：`run_index.csv`（`index_mode=full`，永不抽样）与
+`trend.csv`（行键 `run_key+metric_name`，缺失留状态行，不插值）。
+
+```bash
+# research：规范化 runs + 旧 WF（一次全量重建；批任务）
+python scripts/p6_report.py generate --kind trend --evidence-class research \
+    --source runs:data/runs --source legacy_wf:data/walk_forward \
+    --audit-out data/reports/p6/validations/research/<new_id> --json
+
+# research：上一不可变快照 + 新 run（秒级增量；只把新 run 作为来源）
+python scripts/p6_report.py generate --kind trend --evidence-class research \
+    --source runs:data/runs/<new_batch> \
+    --previous data/reports/p6/research/trend/<previous_report_id> --json
+
+# production：只收 P4 纸面根（收 runs/legacy/bundle 即失败）
+python scripts/p6_report.py generate --kind trend --evidence-class production \
+    --paper-root data/paper --json
+
+# calibration_only：只收经封存校验的 P5b 回撤族 bundle
+python scripts/p6_report.py generate --kind trend --evidence-class calibration_only \
+    --bundle data/paper_shadow/p5b_testbed/<campaign>/reports --json
+
+# 合成语料与验收（标准 500 / 压力 2,000 run；含 Linux canonical 包）
+python scripts/v2_p6/build_t4_corpus.py --root temp/p6_t4_corpus --profile standard
+python scripts/v2_p6/run_t4_acceptance.py --validation-id <new_id>
+```
+
+口径要点：
+
+- **三类隔离**：根（`<evidence>/trend/<report_id>`）、索引、横幅与输入白名单四层隔离；
+  不提供跨类总览或混合趋势；跨类 `--previous` 直接失败；
+- **身份**：run 目录有 `manifest.json` 时 `source_identity_sha256` = manifest 字节 SHA；
+  旧 WF 无 manifest 时 = 实际消费白名单文件（chain/summary）的 `path+sha256` 排序后
+  canonical 哈希，`source_manifest_sha256` 为空并标 `manifest_absent`；不使用 mtime。
+  `root_id` 由来源根的**仓库相对路径 SHA-256 前 8 位**派生（`src_<8>`/`legacy_<8>`/
+  `bundle_<8>`，锚点为仓库根而非当前工作目录，仓库外根退化为绝对路径哈希属非可移植边界），
+  `--source` 顺序不参与身份；同一物理 run 出现在多个来源根、或同一身份换 root_id 再现，
+  一律拒绝（不静默双份）；**升级边界**：`0.209.39` 旧快照的 `src0/legacy1` 身份不能作为
+  `--previous`（会身份冲突 fail-closed），升级后需一次全量重建（单独授权批任务）；
+- **五类指标不同轴**：production 年化为自然日百分数、research 为 252 日小数 CAGR、
+  calibration 保留 log-MDD/pp；不互转、不跨域复用；规范化 runs 的 TopK 固定
+  `not_available/no_unique_implementation`，production 回撤固定
+  `not_available/no_unique_drawdown_series`；calibration 的回撤显示名为
+  “B0 冻结源窗口基准 MDD（500 样本，pp）”，**不是策略回撤**；
+- **production 权威门**：年化必须先过 T1 权威链路（`paper_generation` + NAV 三原值核对）；
+  缺权威即 `degraded/authority_missing`，记录形态冲突即 `invalid`，NAV 未核对不计算年化；
+  `runs/` 下 `readiness_*`/`gap_*` 属宿主诊断旁路，不计入趋势 run；
+- **金额来源与窗口**：金额行绑定逐折实际消费文件（run 目录 ref + 文件集合 canonical SHA），
+  先按行窗口闭区间过滤；缺窗口/缺日期即 `not_available`（不贴窄窗口、不部分求和）；
+- **可见性与抽样**：页面 `index_mode=visible` 只显示最近 500 行；图每序列最多
+  `min(1,200, 可见行)` 点（首尾与极值必留），抽样只影响图，不改 CSV 行键/值；
+- **增量与历史**：上一快照行原样继承、不重算不删除；`root_map` 由“本次来源 ∪ 上一快照 ∪ prev”
+  合并，`inherited_roots`/`inherited_source` 记录继承来源的包哈希，输出行引用的 root_id
+  未登记即生成期失败；同 `report_id` 再发布拒绝；
+  全历史重建是单独授权批任务，不冒充秒级交互；
+- **性能与门范围**：10s 门只覆盖 `generate`（projection + HTML + 两份 CSV + manifest）；
+  真实发布含两次整树审计（约 59s/档）单独登记，不参与该门；
+- **跨平台**：路径一律 `root_id:relative_posix`（NFC），拒绝盘符/URI/`..`；
+  `run_t4_acceptance.py` 产出 canonical Linux 验收包（固定四文件 + 期望哈希 + **可执行**
+  复跑命令：`--upto` 分步建语料、上一快照相对位置与其 SHA、显式 `--reports-root`），
+  真实 Linux 执行门归 T5。
+
+实现位置：`src/lazybull/v2/reporting/{csv_core,trend_contract,trend_csv,trend_metrics,
+trend_observe,trend_sources,trend_projection,trend_svg,trend_view,trend_portability}.py` +
+`templates/trend.html.j2`；契约见 `CLAUDE.md` §5「P6 报告系统 T4 契约」。
+
+### P6 报告系统 T5 验收入口（联验 / 真实 golden / 真实 smoke / 双平台）
+
+T5 只新增**验收侧**工具，生产生成入口不变。
+
+```bash
+# 1) 真实 P5b golden 独立核验（非 pytest；真实根缺失/不符即失败，禁止 skipif）
+python scripts/v2_p6/check_real_golden.py \
+    --root data/paper_shadow/p5b_testbed \
+    --out data/reports/p6/validations/research/<new_id> \
+    --freeze docs/contracts/p6_t5_real_golden_freeze_20261107.json
+
+# 2) T5 联验全链（CI/本地一次跑完；产出 t5_acceptance.json 与兄弟证据目录）
+python scripts/v2_p6/run_t5_acceptance.py --validation-id <new_id>
+```
+
+覆盖内容（逐项写入 `t5_acceptance.json`）：
+
+- `real_golden`：三族真实 campaign（`t4_seq10`/`t5_seq7`/`t6_seq21`）的精确路径与文件集合、
+  逐文件 SHA、原生封存、`hash_chain`/`identity` 链、冻结关键值；
+- `real_smoke`：三条**只读**真实 smoke，每条都带产品精确写审计 + 驱动侧独立整树判定 +
+  输入根 before/after 全树 path+SHA 比对：
+  - P4 生产驾驶舱（`data/paper`）：账户 `degraded/run_record_pre_switch_shape`、指令
+    `not_available/run_record_pre_switch_shape`、实跑模型 `not_available/no_persisted_actual_model`、
+    NAV 六业务日三原值与权威 blob 逐值相等、末日总值 `619016.1802662`、可年化；
+  - 真实 `data/runs` 规范化批次：整根当批次必须 fail-closed（异构根含 paper replay 目录），
+    批次生成的 `run_index.csv`/`trend.csv` 行数与身份自洽；
+  - 真实 P5b campaign：`calibration_only` 趋势面，`source_identity_sha256` = 回撤族 manifest
+    字节 SHA，log-MDD 与上游原生报告值逐值相等；
+- `three_faces`：dashboard/experiment/trend × standard/stress 的 5 次完整进程生成（<10s/次）、
+  5 冷 5 热打开（<2s/次）、体积门（≤3,000,000B），原始 JSON 逐档落盘；
+- `reproduce`：三面同输入同 `generated_at` 的**全链重建**逐字节一致（复算判据取层 3；
+  层 2「包内 projection→HTML」**仅 dashboard 面实测**（experiment/trend 未做，probe 为 null）存在 footer 生成器序归一问题，只作诊断登记）；
+- `dual_platform`：Windows 侧 canonical 哈希 + Linux 侧探测结论；**无可用 Linux 环境时显式
+  `not_achieved`** 并给出**单入口**准备包（不以“跳过”代替，一条命令跑完）：
+  `python scripts/v2_p6/run_t5_linux_replay.py --windows <windows t5_acceptance.json> --json`
+  （按载荷记录的相对路径重建语料 → 三面复算 → 与 Windows 逐文件 SHA/canonical 比对；
+  同一条闭环可先用 `python scripts/v2_p6/selftest_t5_linux_replay.py --json` 在本机自检）；
+  另可用驱动内联分支 `run_t5_acceptance.py --linux-python <py312> --linux-cwd <repo> --windows-evidence <json>`；
+- `zero_write` / `historical` / `global_scope`：白名单外零差异、既有文件零改写零删除、
+  新增仅落在本次报告 run 与 validation 产物内（扫描域与排除树边界随载荷登记）。
+
+P6 全部里程碑（M0.5~M5）的总收口报告见 `docs/reports/p6_closure_20261108.md`（证据索引、评审轨迹、
+残余项移交）；T5 细节见下方。
+
+契约见 `CLAUDE.md` §5「P6 报告系统 T5 契约」；证据与限制见
+`docs/reports/p6_t5_closure_20261107.md`。未达成/未测项按 L1~L10 编号登记（载荷
+`known_limitations`、计划 §24.4、闭合报告 §5 同编号）：L1 Linux 端到端（**2026-11-08 用户裁决豁免**）、
+L2 层 2 包内重建（仅 dashboard 面实测；**同日豁免为诊断项，复算判据取层 3**）、
+L3 audit 域量化、L4 UNC/file URI、L5 多源 manifest、L6 1,200 点抽样、L7 NFC/NFD、
+L8 `prev/` 增强、L9 P4 钉住态、L10 trend 路径敏感（`by_design`）。
+豁免后 `unmet_items` 为空、T5 验收为 `pass`（`p6_t5_acceptance_run11`）；**豁免不等于已达成**。
 
 ### 添加新因子（v0.5.0）
 

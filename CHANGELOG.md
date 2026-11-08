@@ -2,6 +2,1092 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.51] - 2026-11-08
+
+### Changed（P6 T5：完成判据豁免，T5 收口）
+
+用户裁决：「L1 无所谓可以豁免」「L2 走 A（降为诊断项）」，并要求按“改契约 → 新 run id 重取证 →
+更新文档”执行。仅动验收侧语义与文档，`src/lazybull/**` 零改动：
+
+- **L1 → `waived_by_user`**：不再要求真机 Linux 执行与跨平台字节对照；单入口准备包
+  `run_t5_linux_replay.py` 与本机自检（三面 MATCH）保留，环境就绪可随时补做。
+- **L2 → `waived_by_user`**：层 2（包内 projection→HTML 逐字节重建）只作诊断；**复算判据唯一取层 3**
+  （同输入同 `generated_at` 全链重建逐字节一致）。根因（footer `dict` repr 丢序）如实留档。
+- **L10 → `by_design`**：跨机复算须在同一仓库相对路径重建属使用约束，非缺口。
+- **机读语义**：`unmet_items` 仍只由 `status=not_achieved` 推导；新增载荷字段 `waivers`（含裁决日期、
+  决定与范围），`completion.note` 明确 `waived_by_user`/`by_design` 不计入未达成但如实登记。
+- **契约同步**：`CLAUDE.md` §5-T5 ⑭ 改写为豁免口径；计划新增 §24.7（裁决表），§24.4 状态更新。
+- **取证**：以**新 run id `p6_t5_acceptance_run11`** 重取 ⇒ **`verdict=pass`**、`failed_checks=[]`、
+  `unmet_items=[]`、`completion.complete=true`、`waivers=["L1","L2"]`、pytest **383 passed**、
+  `project_version=0.209.51`；旧 `run1~run10` 现场全部保留。**P6 总收口**：
+  `docs/reports/p6_closure_20261108.md`（M0.5~M5 全部闭环、证据索引、残余移交）。**最终树全量回归**：
+  `5,511 passed / 0 failed / 0 skipped`（2,047.58s / 34:07，252 warnings），较 T4 基线 `5,446`
+  多 65 例（= T5 新增用例）。**T5 用例净耗时**：典型 4.5~7s、最坏 ≈22s，占全量 **0.22%~1.1%**。
+
+## [0.209.50] - 2026-11-07
+
+### Fixed（P6 T5：reviewer3 独立评审 2 P1 + 2 P2，全部接纳）
+
+评审原文 `docs/review/v2_p6/p6_t5_implementation_review_reviewer3_20261107.md`（**不通过**，
+2 P1 + 2 P2）；逐条甄别与证据见 `docs/review/v2_p6/p6_t5_implementation_disposition_20261107.md` §4g。
+只改验收侧工具与判定语义，`src/lazybull/**` 零改动：
+
+- **R3-T5-01（P1）自检脚本可误删任意目录**：`selftest_t5_linux_replay.py` 原在 `rmtree(work)` 之后才
+  做路径归一。新增 `safe_work_dir()`：**任何删除/写入之前** `resolve()` 并要求目标**严格位于
+  `<repo>/temp/` 之下**，拒绝 `temp/` 本身、仓库根、生产根、`..`/绝对路径逃逸与父链重解析点；
+  `selftest()` 入口再次校验（防御性），两处删除共用同一已校验目标。新增
+  `tests/test_v2_p6_t5_selftest_guard.py`（`--work .`、`--work data/paper` 在 mock 下证明 **rmtree 未被调用**）。
+- **R3-T5-02（P1）未达成项仍判 pass**：总体验收改为三值 `pass / incomplete / fail`
+  （`_final_verdict`）：有检查项不通过 → `fail`；检查项全过但 `unmet_items` 非空 → **`incomplete`**
+  （退出码 3）；二者皆无 → `pass`。载荷新增 `completion{checks_passed,required_unmet,complete}`，
+  并显式写明“`pass` 仅在无未达成必需项时给出”。`dual_platform` 增 `achieved`（与“本项检查无缺陷”的
+  `passed` 分离），`linux.status=not_achieved` 时 `achieved=false` 且不再可能推出总 `pass`。
+- **R3-T5-03（P2）任意解释器可冒充 Linux**：内联补测分支先让**目标解释器自证**（
+  `sys.platform`/Python 版本/`jinja2`/`pandas`/`numpy` 版本）；非 `linux*` → `status=rejected_not_linux`、
+  版本或依赖不满足 → `rejected_identity`，两者均 `achieved=false`、`unmet` 保留 `linux_dual_platform`，
+  不执行任何跨平台对照。新增负例 `test_t5_acceptance_dual_platform_rejects_non_linux_python`
+  （把 Windows 解释器当 `--linux-python`）。
+- **R3-T5-04（P2）生成失败被上层丢弃**：`_face_evidence` 的面判定新增
+  `generation_all_succeeded`（逐条 `exit_code==0`）、`generation_repeat_protocol`（轮数必须等于
+  `THRESHOLDS.generation_repeats`）与 `generation_ok`（=`generation.passed ∧ all_succeeded ∧
+  下层 `timed.passed` 不为 False ∧ 轮数精确`）；失败执行的短耗时不再可能被当成合格性能。
+  新增负例 `test_t5_acceptance_face_rejects_failed_generation`（5 条 `exit_code=3` 仍须判面失败）。
+- **另有登记**：`dual_platform` 的 `passed` 语义在文档与载荷中改为“本项检查无缺陷”，达成与否看
+  `achieved` 与 `unmet_items`；评审提到的“包内重建（层 2）”仍为诊断项，但其未达成已计入
+  `unmet_items`（L2）并参与总 verdict。
+- **验证**：定向 `tests/test_v2_p6_t5_*` 全绿（**收集 64 例**：acceptance 36 + golden 13 +
+  selftest_guard 6，含 1 个 10 参数化）；复杂度双口径新增硬超限 0；证据见 `p6_t5_acceptance_run9`
+  （新语义下 **`verdict=incomplete`**，`unmet_items=["L1","L10","L2"]`）；**全量回归**在 reviewer3
+  复审 2 通过后一次性执行：**`5,510 passed / 0 failed / 0 skipped`（2,024.73s / 33:44，252 warnings）**，
+  较 T4 基线 `5,446` 多 64 例（= T5 新增用例数）。**T5 用例净耗时**：四次采样 4.93 / 8.00 / 18.49 /
+  22.24s ⇒ 典型 5~8s、最坏 ≈22s，占全量 **0.24%~1.1%**（逐用例 call 之和 ≈5.5s，最慢单例 3.38s）。
+
+### Fixed（P6 T5：reviewer3 复审 1 —— 3 P2 + 1 P3，全部接纳）
+
+复审原文 `docs/review/v2_p6/p6_t5_implementation_recheck1_reviewer3_20261107.md`（**复审不通过**，
+本轮无 P1）；逐条甄别见处置登记 §4h。仍只改验收侧工具：
+
+- **R3-T5-R1-01（P2）工作域残留两缺口**：①`safe_work_dir()` 现于**解析前**沿**原始路径链**逐级拒绝
+  symlink/junction/重解析点（别名不再被 `resolve()` 抹平），解析后仍做边界与二次链接检查；
+  ②新增 `safe_stub_write()`：stub 载荷若已存在且为**链接/硬链接**即拒绝，否则用**同目录临时文件 +
+  `os.replace` 原子替换**（替换目录项，不沿链接写目标）。新增真实硬链接负例、原路径别名负例与
+  原子替换正例。
+- **R3-T5-R1-02（P2）新增平台测试依赖宿主**：`dual_platform` 负例改为 mock `_linux_identity()`
+  固定身份（不再传真实 `sys.executable`，Linux 主机也不会误入生成分支）；另补“Linux 但 Python<3.12
+  或依赖缺失 ⇒ `rejected_identity`”与“身份合格 ⇒ `executed`/`achieved=true`”两条夹具（生成用替身，
+  不起真实子进程）。
+- **R3-T5-R1-03（P2）路径守卫回归未接入驱动**：`T5_TEST_FILES` 纳入
+  `tests/test_v2_p6_t5_selftest_guard.py`，并新增“清单覆盖”判据
+  `_missing_t5_test_files()`（磁盘 `tests/test_v2_p6_t5_*.py` 全部须在清单内，否则 `pytest` 项失败）；
+  新增用例 `test_t5_acceptance_t5_test_files_cover_disk`。
+- **R3-T5-R1-04（P3）闭合报告仍链接 run8**：§4 的载荷链接、兄弟目录（`_run9_*`）、pytest 计数（373）、
+  三条 smoke 耗时（119.2s / 81.6s / 81.8s）与自检 canonical（`3113dde1…`/`23eec59c…`/`4a11cb37…`）
+  全部改绑 run9，旧轮数字只在历史段保留。
+
+## [0.209.49] - 2026-11-07
+
+### Added（P6 报告系统 T5：联验、独立真实 golden/smoke、双平台）
+
+T5 只新增**验收侧**工具（`scripts/v2_p6/`，不入生产链路），`src/lazybull/**` 零改动：
+
+- **真实 golden 核验器** `scripts/v2_p6/check_real_golden.py`（非 pytest、禁用 skipif）：
+  对真实 P5b 三族（`t4_seq10` / `t5_seq7` / `t6_seq21`）逐族核验 ①精确路径与文件集合
+  （缺/多都失败）②逐文件字节 SHA ③上游原生 `load_artifact(sealed=True)` 封存与 schema
+  ④`hash_chain`/`identity` 链（经 `verify_p5b_bundle`）⑤冻结件登记的**关键值**；真实根缺失
+  即 fail（退出码 3）。期望值一次性冻结在 `docs/contracts/p6_t5_real_golden_freeze_20261107.json`
+  （**代码内不硬编码任何真实 campaign 名或数值**）。
+- **T5 验收驱动** `scripts/v2_p6/run_t5_acceptance.py`（P6-M5 可复跑证据包）：
+  `pytest`（T5+前序各面+治理面）/ `complexity`（双口径 + 基线零改动）/ `real_golden` /
+  `real_smoke`（P4 生产驾驶舱、真实 `data/runs` 批次、真实 P5b campaign，各带产品审计 +
+  驱动侧独立整树判定 + 输入根 before/after 全树 path+SHA）/ `zero_write` / `historical` /
+  `three_faces`（三面×标准/压力 5 次生成 + 5 冷 5 热打开 + 体积门）/ `reproduce`（同输入同
+  `generated_at` 全链重建逐字节一致）/ `dual_platform`（Windows canonical 哈希 + Linux 探测，
+  不可用时**显式未达成**并给可执行准备包）/ `documentation` / `global_scope`。
+- **跨平台复算包** `scripts/v2_p6/run_t5_linux_replay.py` + **自检**
+  `scripts/v2_p6/selftest_t5_linux_replay.py`：按 Windows 载荷记录的**同一仓库相对路径**重建
+  T2/T3/T4 语料与 trend 上一快照 → 三面复算 → 与载荷逐文件 SHA/canonical 比对（工作树已存在即
+  拒绝，`root_id` 由相对路径派生）；自检在独立前缀跑同一条闭环（参照 → 删树 → 重建 → 三面 MATCH）。
+- **测试** `tests/test_v2_p6_t5_{real_golden,acceptance}.py`（52 例）：golden 正向以
+  `tests/p5b_t6_env` 原生构造+封存合成包为依据；负例覆盖缺根/缺文件/多文件/改字节/改值/
+  链或封存篡改/冻结件形态/输出目录守卫；驱动侧覆盖写域判定、零写入汇总、历史不覆盖、
+  整轮写域、Linux 探测解析与“未达成”登记、包内重建诊断、参数形态与判定键集、AST 静态扫描
+  （禁 pytest/skip、禁网络/子进程）、前缀语义、限制编号与文档轮次一致。
+- **真实 P4 smoke 期望**（计划 §3-T5 第 3 条，非由报告反推）：账户 `degraded/
+  run_record_pre_switch_shape`、指令 `not_available/run_record_pre_switch_shape`、实跑模型
+  `not_available/no_persisted_actual_model`、NAV 六业务日（0506/0519/0522/0527/0601/0603）
+  三原值与权威 blob **逐值相等**、末日总值 `619016.1802662`、按既有实现可年化。
+- **登记边界（编号同载荷 `known_limitations` / 计划 §24.4）**：**L1** 真实 Linux 全链与跨平台字节
+  对照（验收机 WSL 只有 Python 3.10 且无 pandas/pip，未获装依赖授权 ⇒ `not_achieved`，附可执行
+  准备包 + 本机自检）；**L2** 设计 §8.3 层 2 包内重建实测不等（footer `generator_files` 的 dict repr
+  序问题，只作诊断，复算判据取层 3）；**L3** audit 域量化；**L4** UNC/`file://host`；**L5** 多源
+  manifest 输入复核；**L6** 1,200 点抽样端到端；**L7** NFC/NFD 端到端；**L8** `prev/` 副本增强；
+  **L9** P4 钉住态（by design）；**L10** 跨平台复算 trend 面对相对路径敏感。
+- **评审整改（R1，A 通过 / B 有条件通过，全部接纳）**：golden 冻结件缺族 fail-closed；`no_skip_no_xfail`
+  改 AST 静态扫描；P5b campaign 钉死常量；允许前缀改“精确等值或前缀+/”；`runtime_guard` 增
+  `guarded/unguarded` 范围并新增 `static_network_scan`（AST 扫报告包 import 与调用）；
+  `known_limitations` L1~L10 与 `unmet_items` 同源；`documentation` 增“计划/闭合报告须写明本次
+  validation id”；准备包改为单入口自包含。详见计划 §24.2d 与
+  `docs/review/v2_p6/p6_t5_implementation_disposition_20261107.md`。
+- **验证**：`p6_t5_acceptance_run8`（`verdict=pass`，`project_version=0.209.49`，单轮 18.9min）：
+  定向 **370 passed / 0 failed / 0 skipped**；复杂度双口径（477 / 684 文件）exit=0、新增硬超限 0、
+  基线 SHA 未变；真实 golden 三族 pass；三条真实 smoke 全 pass（P4 末日 `619016.1802662`、
+  NAV 六业务日逐值相等、年化 `-47.095…`；runs 异构根 fail-closed；P5b log-MDD
+  `-20.707605075531564` = 原生值）；三面两档生成 **2,248.7 / 2,444.4 / 3,675.7 / 5,853.7 /
+  2,763.5 / 3,089.8ms**、打开 **≤144.6ms**（冷启首测；门 2,000ms）、页面 **56,141 / 142,608 / 125,407 / 125,588 /
+  135,129 / 130,487B**；三面全链复算 canonical 全等；整轮白名单外写 **0**、既有文件改写/删除 **0**；
+  跨平台复算包自检 **pass**（独立前缀重建后三面 MATCH）；`unmet_items=["L1","L10","L2"]`。
+  失败现场 `run1`/`run2`/`run3`/`run4`（run4 为 R1 评审输入）/`run5`（前缀收紧后 `global_scope`
+  漏登记兄弟目录）全部保留（驱动缺口与口径退化，非判据变更）。
+- **独立评审**：A（联验正确性）/ B（证据纪律与安全）两位专家 **6 轮**（R1：A 通过、B 有条件通过；R2：A 通过、
+  B 有条件通过；R3：A 有条件通过、B 通过；R4/R5：A 通过、B 通过；**R6（`run8`）：A 通过、B 有条件通过（5 处
+  文档口径）**）。B 的 R6 五项条件（全量回归增量口径、轨迹表轮次、`run1~run8`、§24.3b 标题、注释误引）
+  已逐条更改并复核；按“至多 6 轮”上限**未再开第 7 轮复签**，外部评审一并确认。原文
+  `docs/review/v2_p6/p6_t5_implementation_review{,r1_full}_reviewer{A,B}_20261107.md`，逐条甄别
+  `docs/review/v2_p6/p6_t5_implementation_disposition_20261107.md`（§1~§4f）。
+- **回归口径**：整改期为定向集 **370 passed / 0 failed / 0 skipped**；评审闭环后已执行过全量回归
+  **`5,498 passed / 0 failed / 0 skipped`（2,104.51s / 35:04，252 warnings，较 T4 基线 `5,446` 多 52 例
+  = T5 新增用例数）**。**外部评审完成后将对定稿树再跑一次全量回归**（由用户触发），结果补登计划
+  §24.5 与闭合报告 §5。数字与证据见计划 §24.3 与闭合报告 `docs/reports/p6_t5_closure_20261107.md`；
+  未提交 git。
+
+## [0.209.48] - 2026-11-07
+
+### Performance（全量回归提速：只改测试侧夹具构造，验证目的与断言范围零变更）
+
+基线：`5,446 passed`，**2,288.74s（38:08）**（`--durations=0` 全量实测）。优化后同口径
+全量 **2,067.82s（34:27）**，节省 **220.9s（9.7%）**；用例数、断言与跳过数完全不变。
+
+- **根因**：多个测试面板夹具逐日 `append_features`/`append_labels` 时未走生产提供的
+  `PanelDataStore.defer_manifest_save()`，每次 append 触发 `Manifest.save()` 全量
+  JSON 序列化 + 备份 + tmp 提交 + 三次回读校验（O(n²)）。实测同一 160 日 × 八族 + 六标签
+  构造：逐次落盘 44.7s → 批量落盘 8.5s（5.2x）。
+- **补齐批量落盘通道（断言零变更）**：`tests/test_v2_p3_t5_sleeve_identity.py`
+  （129.1s → 52.9s）、`tests/test_v2_p3_t5_r1_runner_fixes.py`（150.4s → 77.3s）、
+  `tests/test_v2_p4_t2_daily_assembly.py`（53.8s → 25.2s）、
+  `tests/test_v2_store_daily_update.py`（91.2s → 64.1s）。
+  三处均与 `tests/test_v2_train_wf_orchestrator_e2e.py:188` 既有正确写法对齐。
+- **消除重复构造**：`tests/test_v2_p3_t3_recheck1_fixes.py` 的
+  `TestRealStoreContractBoundary` 三个用例改为共享 module 级真实 panel 根（各自新建
+  store 消费，读取态不共享），122.3s → 101.0s。
+- **p5b 生产根快照降本**：`tests/p5b_t3_env.py`、`tests/p5b_t4_env.py`、
+  `tests/p5b_t5_env.py` 的 `production_snapshot()` 由「`data/paper` + `data/runs`
+  逐文件 sha256」改为 `(size, mtime_ns)` 元数据快照（`data/runs` 逾 2,600 个文件，
+  单次 4.40s → 3.96s）。零写入断言只要「有改动即不等」，写入必改 size 或 mtime_ns
+  （含同内容重写），语义等价且更强。
+- **回归口径**：全量 `5,446 passed / 0 failed / 0 skipped`；逐文件定向复跑均 passed，
+  未删除、未跳过、未放宽任何用例或断言；未改动 `src/lazybull/**`。
+- **剩余耗时结构**（优化后 `--durations=0` 聚合）：P5b 试车场 918.9s(44.6%)、
+  P3 系列 405.4s(19.7%)、训练适配 277.0s(13.5%)、其余各类 <8%。其中
+  `test_v2_train_wf_orchestrator_e2e.py`(255.2s) 与 p5b 系列的耗时已下沉到被测系统
+  真实运行（`validate_label_day_readiness_and_collect` 每日重复指纹/快照校验、
+  `store_identity.file_identity` 重复全量 sha256），属生产侧优化范畴，另行立项。
+
+## [0.209.47] - 2026-11-07
+
+### Fixed（Reviewer3 复核 3：3 P2 关联残留，全部接纳）
+
+复核输入：`docs/review/v2_p6/p6_t4_implementation_recheck3_reviewer3_20261107.md`（暂不通过；
+上轮 2 项复现已通过，新增 3 项关联残留）；处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §11。
+- **R3-01-R3（P2）零 run 绕过权威门**：production 根级无条件采集 `state/engine_state.bin`
+  （与 run 数量无关）；`_capture_trend` 在零 fresh 时也计算权威门；投影新增
+  `authority_gate` 参数——权威存在但当前代记录缺失时，零行索引为 `degraded/authority_missing`
+  而非 `empty_valid`，降级清单登记 `authority`，不再出现“空 manifest + 合法空”。
+- **R3-N1-R2（P2）年化失败被区级状态覆盖**：仅当年化函数成功且产出**有限数值**时才启用
+  `value_usable` 并合并 NAV 区级降级；非法初资/缺起始日等失败保留自身
+  `invalid/annualization_input_invalid`，value/unit 均留空。
+- **R3-N1-R3（P2）全降级被误报“全部无值”**：投影汇总新增 `with_value_rows`（含区级降级数值），
+  渲染与汇总同口径：有值即不报“全部为状态行”，区段状态保持 degraded 并说明有值/状态行数；
+  页面事实新增“有值行（含降级）/ 可用行 / 状态行”。
+- **验证**：版本 `0.209.46 → 0.209.47`；T4 定向 **53 passed**、P6 定向 **300 passed**；
+  复杂度双口径新增硬超限 0；`p6_t4_acceptance_run17`（`verdict=pass`）：定向 **318 passed**
+  （验收清单纳入 `boundaries` 后 P6 300 + 棘轮 18）；两档 `load_check`/`metrics_check` 通过；
+  `project_version=0.209.47`；增量 max **2,672.4 / 3,046.9ms**；页面 **135,129 / 130,487B**；
+  打开 **18.8 / 17.9ms**；`inputs 37/37`、`links 7/7`；两档审计 `pass`。
+- **回归口径**：评审整改期间不跑全量回归；待复核通过后一次性执行。未提交 git。
+
+### Closure（2026-11-07）：T4 评审闭环成立
+
+- **Reviewer3 复核 4：通过**（`docs/review/v2_p6/p6_t4_implementation_recheck4_reviewer3_20261107.md`：
+  上轮 3 项 P2 全部关闭、无新增 P1/P2）；A4/B4 第四轮亦判通过。
+- 五轮评审（A/B 各两轮 + Reviewer3 四轮）的阻断/重要/低意见全部关闭；信息级建议已处置/登记；
+  T5 边界显式移交。闭环依据为专家书面结论 + 可复核载荷，不以作者自述替代。
+- 闭合证据：`p6_t4_acceptance_run17`（`verdict=pass`，`project_version=0.209.47`）：
+  定向 318 passed（P6 300 + 棘轮 18）；两档 `load_check`（14 折、1,700/5,000 chain、
+  2,000/10,000 trades）与 `metrics_check`（核心四项 available、TopK 契约不可用）通过；
+  增量 max 2,672.4 / 3,046.9ms；页面 135,129 / 130,487B；打开 18.8 / 17.9ms；
+  `inputs 37/37`、`links 7/7`；两档审计 `pass`；`run1~run17` 全部保留。
+**5,446 passed / 0 failed / 0 skipped（37:44，最终树）**
+- 闭合报告：`docs/reports/p6_t4_closure_20261107.md`；逐条处置：处置文档 §1~§12。
+- 遗留（T5）：真实 Linux 执行与双平台复算、真实 `data/paper`/`data/runs`/P5b campaign smoke、
+  audit 域量化、UNC/`file://host`、多源输入复核、1,200 点端到端、NFC 端到端、`prev/` 副本增强。
+  未提交 git（提交由用户裁决）。
+
+## [0.209.46] - 2026-11-07
+
+### Fixed（Reviewer3 复核 2：2 P2 残留，全部接纳）
+
+复核输入：`docs/review/v2_p6/p6_t4_implementation_recheck2_reviewer3_20261107.md`（暂不通过；
+5 条关闭、2 条关联场景残留）；处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §10。
+- **R3-01-R2（P2）同日另一相位幂等记录被误判**：删除“同日即必须与最新权威头同相位”的判定，
+  历史与同日记录一律按**文件名相位**校验形态（原生宿主 t1 权威 + recovery 补写 t0 合法）；
+  新增“当前权威代记录缺失”门（不允许同日其它相位顶替，整档 `degraded/authority_missing`）。
+  补同日 t0/t1、权威记录缺失两条用例。
+- **R3-N1-R1（P2）中间坏点吞掉后续好点数值**：区级 `degraded` 与“当前点已核对”分离——
+  `annualization_allowed=true` 即计算年化并发布数值（`value_usable`），状态保留区级 degraded；
+  坏点仍 invalid；补“中间坏点 + 后续好点”用例，保留末日两场景。
+- **契约同步**：CLAUDE T4 ⑬/⑭ 明确“只按文件名相位校验、同日其它相位幂等合法、权威记录缺失
+  整档降级、区级 degraded 不吞当前点数值”。
+- **验证**：版本 `0.209.45 → 0.209.46`；T4 定向 **50 passed**、P6 定向 **297 passed**；
+  复杂度双口径新增硬超限 0；`p6_t4_acceptance_run15`（`verdict=pass`）：定向 **297 passed**；
+  两档 `load_check`/`metrics_check` 通过；增量 max **2,738.7 / 3,079.0ms**；
+  页面 **134,916 / 130,268B**；打开 **14.1 / 18.3ms**；`inputs 37/37`、`links 7/7`；
+  两档审计 `pass`；`run1~run15` 全部保留。
+- **回归口径**：按用户指示，评审整改期间不跑全量回归；待复核通过后一次性执行。未提交 git。
+
+## [0.209.45] - 2026-11-07
+
+### Fixed（Reviewer3 复核 1：1 P1 + 6 P2 残留，全部接纳）
+
+复核输入：`docs/review/v2_p6/p6_t4_implementation_recheck1_reviewer3_20261107.md`；
+处置见 `docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §9。
+- **R3-01-R1（P1）当前相位误用于历史**：历史记录按文件名相位校验 `run_kind/engine`；仅当前代
+  （`run_day == paper_generation.trade_date`）额外要求与权威相位一致；合法 t0 历史不再被判冲突。
+- **R3-N1（P2）末日坏 NAV 抹掉历史**：核验前把 `portfolio_values` 与持久 NAV 截断到
+  `≤ run_day`，坏点只使该点 invalid；补“坏末日 + 前两日 available”用例。
+- **R3-03-R1（P2）直接 run 根金额摘要为空集合**：`metric_files` 对空相对路径按 root 前缀收集；
+  补“直接根改 daily ⇒ 值/SHA 同步变化”用例。
+- **R3-04-R1（P2）多折套全批窗口**：新增 `_windows_from_summary`（split→窗口），逐折按本折窗口
+  过滤后汇总；补两折窄窗口用例。
+- **R3-N2（P2）未知日期静默排除**：筛选前校验全量日期，存在不可解析日期即
+  `not_available/missing_precondition`，不再把无法定位金额当成窗内零成交。
+- **R3-05-R1（P2）无 manifest 旧 WF 重叠根**：物理去重签名改为 `(kind, 解析后物理位置)`，
+  不掺内容身份；补旧 WF 父/子根用例。
+- **R3-07-R1（P2）重负载语料折界非法**：语料按“后折首行 = 前折末行同日同 NAV”生成（总行数
+  守恒），成交逐行独立代码满足 §9.4；验收 `load_check` 增 `loader_ok`、新增 `metrics_check`
+  （核心四项 available、TopK 按契约不可用）并参与 `passed`。
+- **验收判定缺口**：`run13` 因 `charts_ok` 误设“一条曲线 = 一个 polyline”而假 fail（缺值断线会
+  产生多段）；改为以 `chart-box` 容器数与 `polyline>=1` 判定，`run14` 验证。
+- **验证**：版本 `0.209.44 → 0.209.45`；T4 定向 **47 passed**（新增 6 条残留用例）、
+  P6 定向 **294 passed**；复杂度双口径新增硬超限 0；`p6_t4_acceptance_run14`（`verdict=pass`）：
+  定向 **297 passed**；两档 `load_check`（1,700/14/2,000 与 5,000/14/10,000、`loader_ok=true`）
+  与 `metrics_check` 全部通过；增量 max **2,677.1 / 2,991.3ms**；页面 **134,916 / 130,268B**、
+  `chart_boxes=5`；打开 **14.8 / 14.5ms**；`inputs 37/37`、`links 7/7`；两档审计 `pass`；
+  `run1~run14` 全部保留（run12 无效计时、run13 判定缺口均保留）。
+- **回归口径**：按用户指示，评审整改期间不跑全量回归；待 Reviewer3 复核通过后一次性执行。
+  未提交 git（待用户裁决）。
+
+## [0.209.44] - 2026-11-07
+
+### Fixed（Reviewer3 独立评审：2 P1 + 6 P2，全部接纳）
+
+评审输入：`docs/review/v2_p6/p6_t4_implementation_review_reviewer3_20261107.md`（用户发起，结论
+“不通过”）；逐条处置见 `docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §8。
+- **R3-01（P1）production 绕过权威内容门**：采集注入 `state/engine_state.bin`；production 年化
+  必须过 T1 权威门（`cockpit.load_authority` + `classify_run_record` + `verify_nav_authority`）：
+  缺权威 ⇒ 索引 `degraded/authority_missing`、五项 `not_available`；`run_kind`/`engine` 与权威
+  相位冲突 ⇒ `invalid/authority_mismatch`；NAV 三原值未核对 ⇒ 不计算年化（不再以公式替代
+  输入真实性门）。
+- **R3-02（P1）readiness/gap 被当交易 run**：`_plan_paper` 只收原生交易提交记录闭集，
+  排除宿主同目录诊断旁路（`readiness_*`/`gap_*`），正常生产日不再产生假 invalid。
+- **R3-03（P2）金额行回落身份 manifest**：金额 `source_ref` 改 run 目录、`source_sha256` 改
+  “逐折实际消费文件 path+sha 排序后 canonical 哈希”、`source_field` 显式；改 daily 金额 ⇒
+  值与源 SHA 同步变化（新增用例）。
+- **R3-04（P2）金额全期求和却标窄窗口**：`_fold_money` 先按闭区间过滤；缺窗口/缺 `trade_date`
+  ⇒ `not_available`（不静默输出全期值）。
+- **R3-05（P2）父/子来源根重复收录**：判重签名改为“来源根 + 相对 run 路径”的**解析后物理
+  位置**，父集合根与直接批次根同址即拒绝（覆盖两个层级重叠根）。
+- **R3-06（P2）previous 不核 report.html**：固定四件全部核 manifest 登记（含 HTML 字节），
+  键集不符/缺件/任一不符即拒绝；补 HTML 缺失与篡改负例。
+- **R3-07（P2）计时新 run 负载不足**：标准/压力新 run 按设计写 14 折、1,700/5,000 chain、
+  2,000/10,000 trades；验收新增 `load_check`（行数/折数/成交条数）并参与 `passed`。
+- **R3-08（P2）Linux 重建语料换行漂移**：语料 JSON/YAML/CSV 统一 LF + 显式 UTF-8，
+  Windows/Linux 重建保持同一身份；补“语料无 `\r`”断言。
+- **验证**：版本 `0.209.43 → 0.209.44`；T4 定向 **41 passed**（新增 9 条边界用例）、P6 定向
+  **288 passed**；复杂度双口径新增硬超限 0；新证据 `p6_t4_acceptance_run12`（`verdict=pass`）：
+  定向 **297 passed**；两档 `load_check` 1,700/14/2,000 与 5,000/14/10,000 全部吻合；
+  增量 max **2,538.3 / 2,829.6ms**；页面 **134,602 / 130,361** 字节；打开 **17.9 / 17.8ms**；
+  `render_evidence{polyline:5,chart_empty:0}`、`inputs 37/37`、`links 7/7`、
+  `landed.matches_declared=true`；两档审计 `pass`；`run1~run12` 全部保留。
+- **边界**：production 权威门覆盖年化 NAV 与记录形态；历史日成交权威核对仍按 T1 既有范围；
+  真实 Linux 执行与双平台复算归 T5；未提交 git（待用户裁决）。
+
+## [0.209.43] - 2026-11-07
+
+### Review-closed（P6 T4 独立评审第四轮：A4/B4 均判通过，闭环成立）
+
+评审输入：`docs/review/v2_p6/p6_t4_implementation_review_reviewerA_round3_20261107.md` 与
+`..._reviewerB_round3_20261107.md` 的第四轮复核（A4/B4，只读、互不读取），处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §7。
+- **A4 通过**：A-07 关闭（计划 §23.9 两类证据并列 + 载荷 `render_evidence` 参与 `passed`）、
+  R3A-01/02/03 关闭；仅 2 条信息级。
+- **B4 通过**：R3B-01/02/03、N-04 关闭；快速回归全绿；仅 1 条信息 + 1 条建议。
+- **R4 信息级处置（仅文档/注释，无行为变更）**：§23.9 表头改 run11、open 值改 13.9/13.8ms；
+  `_root_token` docstring 改条件句；§23.10 补“定向回归口径 15”说明；N-04 作用域改为
+  “计时轮内部同 report_id、与发布轮同内容哈希”；UNC/`file://host` 检测面登记为 T5。
+- **闭环判定**：四轮结论依次为「不通过 / 有条件通过」→「有条件通过 / 有条件通过」→
+  「有条件通过（仅 A-07）/ 通过」→「**通过 / 通过**」；全部阻断/重要/低意见关闭、无 P1 残留；
+  信息级建议已登记/整改、T5 项显式移交。**P6 T4 评审闭环成立**。
+- **最终收口证据**：`p6_t4_acceptance_run11`（`verdict=pass`）：定向 **297 passed**；
+  `payload_paths.leaks=0`；两档 `render_evidence{polyline:5,chart_empty:0,state_cell:20,
+  charts_ok:true}`；`inputs 10/10`、`links 7/7`、`landed.matches_declared=true`、
+  `root_map` 路径派生、`inherited_roots` 各 2；标准 max **2,396.8ms**/页面 **134,580B**、
+  压力 max **2,679.3ms**/页面 **130,070B**；打开 max **13.9/13.8ms**；两档审计 `pass`、
+  `uncovered=[]`；Linux 包两档 4 文件自封存一致；`run1~run11` 全部保留、无覆盖。
+- **回归**：T4 定向 **32 passed**、P6 定向 **279 passed**；最终树全量回归
+  **5,425 passed / 0 failed / 0 skipped（39:22）**。
+- **边界**：真实 Linux 执行与双平台复算、audit 域量化、UNC/`file://host` 检测、多源 manifest
+  输入复核、真实 `data/paper`/`data/runs`/P5b campaign smoke、NFC 名称端到端、`prev/` 副本
+  增强均显式移交 T5；本轮未提交 git（提交由用户裁决）。
+
+## [0.209.42] - 2026-11-07
+
+### Fixed（P6 T4 第三轮复核整改：A-07 关闭件 + 巡检判别力 + 3 低/信息）
+
+第三轮输入：`docs/review/v2_p6/p6_t4_implementation_review_reviewerA_round3_20261107.md`
+（A3：有条件通过，A-07 未关闭）、
+`docs/review/v2_p6/p6_t4_implementation_review_reviewerB_round3_20261107.md`
+（B3：通过；B-03 部分关闭留 T5、N-04 未登记）。逐条处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §6。
+- **R3-01（A-07 必须项）证据分类缺失**：计划 §23.9 新增“CSV 守恒证据 vs 页面渲染证据”并列
+  登记表（判据 → 用例/入口 → run 实测），并把渲染证据写入验收载荷：
+  `csv_conservation.render_evidence{polyline,chart_empty,state_cell,charts_ok}`，
+  要求 `polyline+chart_empty=5` 且 `polyline>=1` 参与 `passed`（不再只以页面字节数代证）。
+- **R3-02（R3B-01 低）`payload_paths` 对 `kind:D:\…` 漏检**：`re.match(r"^[A-Za-z]:[\\/]")`
+  锚定串首 ⇒ `runs:D:\…` 与句中盘符漏检。改为无锚 `re.search`（`X:` 后接斜杠，排除 `12:30`），
+  补单测覆盖 `runs:D:\…`、`见 C:\…`、`file:///`、`12:30` 与 `environment` 豁免。
+- **R3-03（R3A-01 低）root_id 碰撞门无用例**：补
+  `test_p6_t4_history_root_id_collision_rejected`（monkeypatch 令两来源根同 token ⇒ 拒绝）。
+- **R3-04（R3A-02 信息）旧口径文案**：`trend_sources.SourceSpec` 与“同一物理 run 多来源根”
+  错误文案、`trend_projection.assert_no_identity_conflict` docstring/文案统一为
+  “root_id 由来源根路径派生（与顺序无关）”，删去“来源根顺序参与身份”。
+- **R3-05（R3A-03 信息）`_previous_run_dir` 按 report_id 拼路径**：改为“`--previous` 目录含
+  `report_manifest.json` 即视为 run 目录直接使用（支持复制/改名快照），否则追加
+  `<evidence>/trend/<report_id>`”，不再按目录名猜。
+- **R3-06（R3A-04/R3B-03 信息）命令记录分隔符/cwd**：`command`/`command_args` 归一为正斜杠；
+  载荷新增 `command_cwd="<repo_root>"` 与 `path_style` 说明；执行仍用原列表。
+- **R3-07（R3B-02 低）open 测量产物含绝对 URL**：`open_gate` 增加 note 明示
+  `performance.json`/profile 的 `file://` 与绝对 `profile_dir` 属测量证据、不进 canonical 报告、
+  不参与异机复算。
+- **R3-08（B3 N-04 无影响）**：处置文档 §6 登记 `reports_timed_*` 为“计时轮落盘旁证副本”
+  （与计时轮同 report_id，独立根，不污染上一快照唯一）。
+- **R3-09（B-03 部分关闭，留 T5）**：audit 域文件/字节量化登记未加（判定力不受影响），
+  在处置文档 §6 明示为 T5 项。
+- **验证**：版本 `0.209.41 → 0.209.42`；T4 定向 **32 passed**；P6 定向 **279 passed**；
+  全量回归 **5,425 passed / 0 failed / 0 skipped（39:22，最终树）**；新证据 `p6_t4_acceptance_run11`（`verdict=pass`）：
+  定向 **297 passed**、`payload_paths.leaks=0`、`render_evidence` 两档
+  `polyline=5/chart_empty=0/polyline+chart_empty=5`、`inputs 10/10`、`links 7/7`、
+  `landed.matches_declared=true`；页面 134,580/130,070 字节；`run1~run11` 全部保留。
+
+## [0.209.41] - 2026-11-07
+
+### Fixed（P6 T4 独立评审第二轮整改：N-01/A2-01 重要 + 7 低/建议，并补迁移说明）
+
+评审输入（第二轮，两位专家 + 两位第二轮复核人，均独立复算）：
+`docs/review/v2_p6/p6_t4_implementation_review_reviewerA_20261106.md` 续记、
+`..._reviewerB_20261106.md` 续记与处置文档 §4；逐条处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §5。
+A/B 结论均为“有条件通过”：A 侧 A-01~A-06 关闭、A-07 部分关闭；B 侧 B-01~B-06/B-08 关闭、
+B-07 部分关闭；共同指向 1 条重要新增缺陷（root_id 随 cwd 变化）。
+- **R2-01（N-01/A2-01 重要）root_id 随 cwd 变化**：`_root_token` 的 `relative_to` 锚点由
+  `Path.cwd()` 改为仓库根常量 `PROJECT_ROOT`（仓库外根仍退化为绝对路径哈希，属显式登记的
+  非可移植边界）。补两条用例：① 同一仓库内根在 cwd=仓库根 / `src/` 下 token 相同且等于
+  `sha256("data")[:8]`；② 同一绝对来源在两个 cwd 下五件字节一致（原 cwd 用例只覆盖
+  “两份不同语料恰好同相对布局”，已替换为“同一绝对来源”）。
+- **R2-02（N-3 建议）root_id 8 hex 碰撞无守卫**：`plan_and_capture` 增加
+  `root_id → 来源根` 唯一性断言，不同来源根映射到同一标识即 `TrendSourceError`
+  （不再静默 `root_map` 覆盖）。
+- **R2-03（B-07/B2-01 低）载荷仍有绝对 `--source`**：驱动构造 `--source/--previous/
+  --reports-root` 时直接用仓库相对路径；`_relativize` 支持 `kind:path` 复合形态；
+  新增 `payload_paths` 巡检（除 `environment` 外出现盘符/`file:///`/仓库绝对前缀即 fail）；
+  载荷新增 `command_args`（逐字参数）与 `interpreter`（basename+版本），
+  解决“`command` 改写后不再是执行原文”的保真问题。
+- **R2-04（A2-02 低）上一快照位置未登记**：`projection.inherited_source.previous` 登记
+  `run_dir`（仓库相对 POSIX）/`run_dir_present`/`inside_repo`；仓库外（临时/外部根）只登记
+  存在性而不写绝对路径；`manifest` 仍是唯一自封存件，包内追溯由
+  `previous` + `inheritance.previous_manifest_bytes_sha256` 共同承担。
+- **R2-05（A2-03 低）未登记 root_id 门无用例**：补
+  `test_p6_t4_history_unregistered_root_id_rejected`。
+- **R2-06（A2-04 信息）状态行 value 措辞**：最近点表对 `not_available` 行显示
+  “不可用（见状态列）”，与索引表的字段缺席区分；补渲染断言。
+- **R2-07（B-02 措辞）**：`publish_scope` 改为“两次 worktree 有界子树哈希（输入根若在
+  EXCLUDES 内另由驱动前后 digest 覆盖），不吃 10s 生成门”，不再暗示审计覆盖输入根。
+- **R2-08（N-03 低）豁免数登记**：`with_scripts` 豁免 63→65 为验收驱动新增函数，
+  按 §7.5“阶段专用验收工具”豁免，已登记处置文档 §5；基线未扩。
+- **R2-09（N-2 建议）原因码措辞**：`source_identity_conflict` 并未登记为状态原因码，
+  文档统一改为「拒绝文案“同一来源身份”」，避免与 `status` 闭集混淆。
+- **R2-10（B-05/B2-03 低）TZ 维度在 Windows 无效**：用例 docstring 明示
+  “Windows 无 `time.tzset`，本用例只证明生成与进程环境变量/locale 无关”，TZ 语义留给
+  T5 双平台子进程对照。
+- **R2-11（N-02/B2-04 低）多源输入复核 fail-closed**：`_verify_inputs_on_disk` 在
+  “非 prev 根不唯一”时显式报 `error`（不假 pass），错误文案标注“多源 manifest 归 T5”。
+- **迁移说明（N-4 建议）**：`0.209.39` 发布的趋势快照 root_id 为 `src0/legacy1` 形式，
+  与 `0.209.41` 的路径派生 root_id 不同；旧快照**不能**作为 `--previous`（会在
+  (run_id, identity) 冲突处 fail-closed），升级后需对既有趋势库做一次**全量重建**
+  （单独授权批任务），不得静默复用旧 root_id。
+- **验证**：版本 `0.209.40 → 0.209.41`；T4 定向 **30 passed**；P6 定向 **277 passed**；
+  新证据 `p6_t4_acceptance_run10`（`verdict=pass`）：定向 **295 passed / 0 failed /
+  0 skipped**；`payload_paths.leaks=0`；两档 `root_map` 均为路径派生 id、
+  `inherited_roots` 各 2、`inputs 10/10`、`links 7/7`、`landed.matches_declared=true`；
+  标准 500 run：增量 max 2,410.3ms、页面 134,580B；压力 2,000 run：max 2,602.5ms、
+  页面 130,070B；打开 max 18.1/14.1ms；两档审计 `pass`；`run1~run10` 全部保留；
+  全量回归 **5,423 passed / 0 failed / 0 skipped（39:11）**。
+
+## [0.209.40] - 2026-11-06
+
+### Fixed（P6 T4 独立评审第一轮整改：A-01 阻断 + A-02/B-01/B-02/B-03/B-04 重要 + 6 低/建议）
+
+评审输入（第一轮，两位专家并行独立成文）：
+`docs/review/v2_p6/p6_t4_implementation_review_reviewerA_20261106.md`（不通过：1 阻断 + 1 重要 +
+3 低 + 2 建议）、`docs/review/v2_p6/p6_t4_implementation_review_reviewerB_20261106.md`
+（有条件通过：4 重要 + 3 低 + 1 建议）；逐条处置见
+`docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §2~§4。
+- **R1-01（A-01 阻断）增量页面数值与折线全丢**：CSV 继承行保留原始文本（字节不变），投影层却直接
+  透传给只收数值的图表/表格 ⇒ 6 个已发布 run 全部“500 行全部可用”但 5 张图为空、最近点表值缺席。
+  投影 `_series` 改为**严格可解析文本 → float**（解析失败仍 `None`，不猜测补值）；补
+  “增量投影 → 渲染”端到端断言（`<polyline` ≥4、合法空图恰 1、最近点值为数值）。
+- **R1-02（A-02 重要）继承行 root_id 未登记**：`root_map` 原来只含本次来源，上一快照的
+  `legacy_*` 行在冻结包内无法回溯。改为“本次来源 ∪ 上一快照 root_map ∪ `prev`”，新增
+  `inherited_roots` / `inherited_source`（上一包 report_id + manifest 字节 SHA +
+  `input_manifest_sha256`）；输出行引用未登记 root_id 即生成期 fail-closed。
+- **R1-03（A-03 低）无值行 ref 与复合 SHA 粒度不符**：旧 WF 无 manifest 时 `source_ref` 改为
+  **run 目录**（复合摘要与目录同粒度），并写 `source_field=identity`；不再出现“按单文件 ref
+  取 SHA 必然对不上”。
+- **R1-04（A-04 低）1,200 点上限在真实管线不可达**：页面文案与契约统一为
+  `min(1,200, 可见行)`；真实证据由 R1-01 的渲染断言承担。
+- **R1-05（A-05 低）calibration 回撤显示语义**：显示名/明细改为“B0 冻结源窗口基准 MDD
+  （500 收益样本，log→pp；不是策略回撤读数）”，数值不改。
+- **R1-06（A-06 建议，根治）root_id 由来源顺序派生**：改为**仓库相对路径 SHA-256 前 8 位**，
+  `--source` 顺序不再改变身份；同一物理 run 出现在多个来源根（同 kind+路径+身份）即拒绝；
+  同一身份换 root_id 再现在增量合并处拒绝（拒绝文案「同一来源身份」）；补顺序无关与
+  换代根的回归（`test_v2_p6_t4_history_root_id_is_path_derived_not_order` 等）。
+- **R1-07（B-01 重要）复算输入环自指**：`recompute_chain(inputs=record["inputs"])` 只比对 manifest
+  内部字段，恒真。验收驱动改为按 `manifest.inputs` 的 `root_id:relative` 回到**实际来源目录**
+  逐文件 re-hash（本档 10/10 通过；缺失/不等即 fail），并显式断言 7 环（`links_ok == 7`）。
+- **R1-08（B-02 重要）排除树内输入根零覆盖**：`temp/`、`data/walk_forward`、`data/paper_shadow`
+  在审计 EXCLUDES 内 ⇒ 产品审计对输入侧无哈希证据。驱动在发布前后对输入根做**全树**
+  before/after 哈希（标准 11 文件/3,182,230B、压力 11 文件/7,904,859B，两档 `unchanged=true`）。
+- **R1-09（B-03 重要）10s 门只覆盖 `--no-publish`**：载荷新增 `publish_scope` 与真实发布耗时
+  （标准 59,794.0ms / 压力 57,677.9ms，含两次整树审计），明示“10s 门 = generate，不含
+  publish/审计”；阈值未放宽。
+- **R1-10（B-04 重要）Linux 包复跑命令不可执行**：命令改为可执行链（`--upto` 分步建语料 →
+  上一快照全量发布（显式 `--reports-root`）→ 补齐语料 → 增量发布（`--previous` 指真实相对位置，
+  `--reports-root <out>`））；`expected_hashes.json` 增 `steps[]` 与 `previous{report_id,run_dir,
+  manifest_sha256,files}`；note 改为“逐文件哈希比对（包内不复算生成）”。
+- **R1-11（B-05 低）跨平台证据只到函数返回级**：新增两条端到端字节一致用例——
+  同一相对布局在两个不同工作目录生成同一份字节；TZ=`UTC`/`Asia/Shanghai` 与
+  `LC_ALL=C`/`C.UTF-8` 下逐字节一致（真实 `generate_trend` 产物，非纯函数自证）。
+- **R1-12（B-06 低）5 次增量字节一致缺落盘旁证**：计时轮后额外发布一次到独立 `reports_timed_*`
+  根，父进程回读五件哈希并与第 5 次自报哈希对齐（两档 `matches_declared=true`）；
+  落盘根与上一快照根分离，避免污染“上一快照唯一”。
+- **R1-13（B-07 低）载荷写绝对盘符/用户名**：证据载荷统一**仓库相对 POSIX**（解释器写
+  `python`），机器信息只留 `environment` 段。
+- **R1-14（B-08 建议）字段名误导**：`projection_run_total` → `counts_run_total`，另加
+  `projection_rows`（可见行实为 500）。
+- **R1-15（A-07 建议）**：CLI docstring 更新为“三类均已接入”；计划 §23 区分 CSV 守恒证据与
+  页面渲染证据。
+- **验证**：版本 `0.209.39 → 0.209.40`；T4 定向 **26 passed**；新证据 `p6_t4_acceptance_run8`
+  （`verdict=pass`）：定向 **291 passed / 0 failed / 0 skipped**；复杂度双口径 `exit=0`、
+  新增硬超限 0（src 存量 136 / scripts 88）；标准 500 run / 压力 2,000 run：
+  增量完整进程 max **2,358.8 / 2,558.4ms**（门 10,000ms）、五件字节一致且落盘复核一致；
+  页面 **134,400 / 129,890** 字节；打开 5 冷 + 5 热 max **14.1 / 14.1ms**；
+  两份 CSV **500/2,500** 与 **2,000/10,000** 行、可见 500 行；审计两档 `pass`、
+  `uncovered=[]`；`inputs 10/10`、链 7 环；Linux 包两档各 4 文件自封存一致。
+  历史现场 `run1`/`run2`/`run3`（首轮自验）、`run4`/`run5`（R1 驱动缺口）全部保留。
+- **边界**：真实 Linux 执行、真实 `data/paper`/`data/runs`/P5b campaign smoke 归 T5；
+  本轮未提交 git（提交由用户裁决）。
+- **第二轮独立复核状态（未闭环）**：整改后向第一轮两位专家发起第二轮复核并催办 3 次，
+  另并行派发两位“第二轮复核人”（各自只读自己的第一轮归档，禁止互读）；累计等待约 80 分钟
+  未取得书面结论。按任务硬约束「闭环判据 = 两位专家复核通过」，**不宣称评审闭环**；
+  作者侧逐条复核证据见 `docs/review/v2_p6/p6_t4_implementation_disposition_20261106.md` §4.2，
+  收口状态与待裁决事项见 §4.3。全量回归（当前工作树）**5,419 passed / 0 failed /
+  0 skipped（39:07）**。
+
+## [0.209.39] - 2026-11-06
+
+### Added（P6 报告系统 T4：三类隔离趋势库、完整 run 索引与跨平台准备）
+
+范围与口径见 `docs/plans/v2/p6_report_plan_20261104.md` §3-T4 与设计 §4.3 / §5.5 / §5.7 / §8.1-§8.3。
+
+- **趋势生成入口**：`scripts/p6_report.py generate --kind trend`（`--source runs:<dir>|legacy_wf:<dir>` /
+  `--paper-root` / `--bundle`，`--previous` 增量，`--evidence-class` 必填）。
+  产物固定五件：`report.html` + `projection.json` + `report_manifest.json` + `run_index.csv` + `trend.csv`。
+- **三类物理隔离**：`production` 只收 P4 纸面根、`research` 只收 runs/旧 WF、`calibration_only`
+  只收 P5b sealed bundle；越类输入（含跨类 `--previous`）在生成前 fail-closed（退出码 3）。
+- **身份规则**：有 `manifest.json`（bundle 为 `drawdown_manifest.json`）时
+  `source_identity_sha256` = manifest 字节 SHA；无 manifest 时 = 实际消费白名单文件
+  （chain/summary/trades/可得 attribution）`path+sha256` 排序后 canonical 哈希，
+  `source_manifest_sha256` 为空并在 projection 标 `manifest_absent`；禁止 mtime/空串。
+- **两份完整 CSV**：`run_index.csv` 每个发现 run 恰一行（含 `invalid`），
+  按 `(window_end,run_id,run_key)` 排序、`index_mode=full`；`trend.csv` 行键
+  `(run_key,metric_name)`，每 run 恰五类指标行（缺失留状态行）、不插值不抽样、
+  `source_ref+source_sha256` 可回溯（新增 `source_field` 溯源列）。
+- **五类指标分列**：年化（production 自然日百分数 / research 252 日小数 CAGR）、
+  回撤（research 链式 MaxDD / calibration log-MDD·pp / production
+  `not_available/no_unique_drawdown_series`）、双边成交金额、成本（同窗口求和、缺折不部分求和）、
+  TopK 正日占比（仅旧 WF `KEY_Top20_hit_rate` 改名 + `aggregate_run` 均值；规范化 runs 固定
+  `not_available/no_unique_implementation`）。
+- **可见性与抽样**：页面 `index_mode=visible` 只显示最近 500 行
+  （`visible_rows=min(500,total)`，总数 0 为合法空）；图每序列 ≤1,200 点（首尾/极值必留，
+  复用 `svg.downsample_indices`），抽样不改任何 CSV 行键/值。
+- **增量与历史**：`--previous` 继承上一不可变快照的行（按 `run_key` 原样保留、不重算不删除），
+  只解析新 run；同 `report_id` 再发布拒绝；上一快照 CSV 与 manifest 登记不一致即拒绝继承。
+- **跨平台准备**：`trend_portability` 提供 `root_id:relative_posix`（NFC）口径，拒绝盘符/
+  `Path.as_uri`/`..`；验收产出 canonical Linux 包（`acceptance.sh` + `expected_hashes.json` +
+  自封存 `package_manifest.json` + `README.md`，固定四文件），真实 Linux 执行门归 T5。
+- **共享件与口径单一化**：新增 `csv_core`（CSV 守恒唯一实现，实验/趋势两侧共用）；
+  `status` 增 `no_unique_drawdown_series`；`GENERATOR_FILES`/`SHARED_GENERATOR_FILES` 登记
+  T4 全链与宿主唯一实现（`hosts/paper/{config_adapter,performance}.py`）。
+- **测试**：新增 `tests/p6_t4_env.py` + 8 个 `tests/test_v2_p6_t4_*.py`（20 例，覆盖 §3-T4 最低
+  18 场景与 P6-T4-01~06）；`tests/test_v2_p6_t2_evidence.py::test_p6_t2_32` 随 trend 接入更新
+  （`--kind` 闭集含 trend，未登记类型仍退出码 2）；在用闭包棘轮按实测刷新
+  （全仓 467→477、不在用 193→203，静态闭包 270 / 在用 274 不变）。
+- **验证**：T4 定向 **20 passed**、P6 全定向 **267 passed**；复杂度双口径 `exit=0`、
+  新增硬超限 0；T4 验收 `p6_t4_acceptance_run3`（`verdict=pass`）：
+  定向 **285 passed / 0 failed / 0 skipped**；标准档 500 run（增量完整进程 max **2,389.4ms**，
+  5 次五件字节一致，页面 **103,318** 字节，打开 max **14.0ms**）；压力档 2,000 run
+  （max **2,589.5ms**，页面 **103,062** 字节，打开 max **14.0ms**）；两档 CSV 守恒
+  2,500 / 10,000 行、可见 500 行、`index_mode=full`；两档审计 `verdict=pass`
+  （`uncovered=[]`、`reparse_checked=true`）；两档链复算 7 环一致（4 件产出）。
+  历史现场 `run1`（复杂度聚合判定误判）、`run2`（豁免条目被误判为新增）保留，未覆盖。
+- **边界**：真实 `data/paper`/`data/runs`/P5b campaign smoke 与 Windows+Linux 双平台复算归 T5；
+  本轮未提交 git（提交由用户裁决）。
+
+## [0.209.38] - 2026-11-06
+
+### Fixed（P6 T3 reviewer3 复审 2 残留：1 P2 + 2 P3）
+
+复审输入：`docs/review/v2_p6/p6_t3_implementation_recheck2_reviewer3_20261106.md`；
+处置见 `docs/review/v2_p6/p6_t3_implementation_disposition_20261106.md` §8。
+- **R3-05-R2（P2）生产默认 Top300 输出被当策略差异**：`top{k}_return_(mean|std)` 改为**完整正则**
+  `^top[1-9]\d*_return_(?:mean|std)$`（覆盖生产默认 K=300 与自定义 K），不再依赖固定 K 列表；
+  补 `top300_return_mean/std` 同组回归。
+- **R3-06-R2（P3）聚合后有限值溢出**：成交金额的逐日/逐折/总额聚合结果再做 `np.isfinite` 校验，
+  溢出即 `degraded/missing_precondition`、合计 `None`（成本合计此前已覆盖）。
+- **R3-12-R2（P3）显式缺列 frame 状态行身份**：`missing_precondition` 状态行改用与合法行同一份
+  `{stable_identity,group}` canonical 载荷生成 `group_key/config_json`；补 API 分支哈希回归。
+- **验证**：版本 `0.209.37 → 0.209.38`；reviewer3 回归 **21 passed**、T3 定向 **77 passed**、
+  前序定向 **188 passed**；复杂度双口径 `exit=0`、新增硬超限 0；新证据
+  `p6_t3_acceptance_run13`（`verdict=pass`、定向 **265 passed**）。
+- **评审闭环**：reviewer3 复审 3 判定「通过本轮复核，可闭合全部评审意见」；A/B 与 reviewer3
+  全部关键意见闭合、无 P1 残留；评审闭环后全量回归 **5393 passed / 0 failed / 0 skipped（37:54）**。
+  T3 可收口；git 提交与进入 T4 由用户裁决（本版未提交）。
+
+## [0.209.37] - 2026-11-06
+
+### Fixed（P6 T3 reviewer3 复审 1 残留：5 P2 + 1 P3）
+
+复审输入：`docs/review/v2_p6/p6_t3_implementation_recheck1_reviewer3_20261106.md`；
+处置见 `docs/review/v2_p6/p6_t3_implementation_disposition_20261106.md` §7。
+- **R3-03-R1 坏 UTF-8 数据态逸出**：`UnicodeDecodeError` 显式捕获并归 `invalid/invalid_json`，
+  坏语法/坏编码/非对象根三类负例独立覆盖。
+- **R3-05-R1 宽前缀误排真实参数**：删除整段 `bt_*`/`test_*`/`val_*` 前缀，改为明确列举
+  `bt_metrics` 全键 + `daily_rankic_*`/`top{k}_return_*`/`val_rankic_ir`；`bt_top_n`/
+  `bt_rebalance_freq`/`test_window_months`/`val_ratio` 留在等价类内；补“仅输出变化同组”
+  “TopN 变化必须分区”“加无关 TopN 臂目标得分不变”回归。
+- **R3-06-R1 ±Inf 未被拦截**：成本/成交金额聚合前用 `np.isfinite` 校验（缺失、NaN、±Inf 同等
+  降级），合计写 `None`；补 None/NaN/+Inf/-Inf 矩阵。
+- **R3-09-R1 生产补零折目录**：`source_paths` 改用捕获计划的**实际目录名**
+  （`folds/split00` 等），不再按整数折号拼接；补补零布局回归。
+- **R3-10-R1 评分常量漏登记**：`SHARED_GENERATOR_FILES` 增 `scripts/compare/constants.py`、
+  `runs_schema.py`、`fingerprint_keys.py`。
+- **R3-12-R1 全无效空状态行键不一致**：空输入状态行也写 `{stable_identity,group}` 全量
+  canonical JSON，`hash(config_json)==group_key`；补全无效臂回归。
+- **验证**：版本 `0.209.36 → 0.209.37`；T3 定向 **74 passed**、前序定向 **188 passed**；
+  复杂度双口径 `exit=0`、新增硬超限 0；新证据 `p6_t3_acceptance_run11`（`verdict=pass`，
+  定向 **262 passed**，reviewer3 回归已纳入验收定向集；见计划 §22.9）。
+
+## [0.209.36] - 2026-11-06
+
+### Fixed（P6 T3 reviewer3 评审整改：2 P1 + 9 P2 + 1 P3）
+
+评审输入：`docs/review/v2_p6/p6_t3_implementation_review_reviewer3_20261106.md`（用户发起）；
+逐条处置见 `docs/review/v2_p6/p6_t3_implementation_disposition_20261106.md` §6。
+- **R3-01（P1）未知数据态被当同态**：`comparability_reasons` 要求两侧数据态**均可确认**再比较
+  相等性；`None/空白` 一律 `not_comparable`、`summary={}`、Δ 留空。
+- **R3-02（P1）无效基线仍算子集绩效**：`compare_baseline` 在调用旧实现前拒绝 invalid 基线
+  （保留原原因码，子集数值为空），坏链禁算同时覆盖全周期与子集路径。
+- **R3-03（P2）旧 WF 数据态多候选/坏 JSON**：数据态候选在旧 loader 之前校验：多候选
+  `multiple_source_files`、坏 JSON/根类型错误 `invalid_json`、缺失保持未知；所有读侧消费同一份
+  已校验身份。
+- **R3-04（P2）同窗口重跑被计两期**：稳定性期间标签不再用 `batch_id` 填补；空标签交唯一实现按
+  `wf_start~wf_end` 回退并去重；显式状态行的 `period_count` 也按唯一期间标签计数。
+- **R3-05（P2）统计输出进入策略身份**：分类前缀补 `bt_*`/`test_*`/`val_*`（来自生产 summary 的
+  已知评估输出），`train_*` 等策略参数不受影响；仅输出变化仍同组、真实开关变化必须拆组。
+- **R3-06（P2）金额缺失补零**：成本/双边成交金额在聚合前校验；有源行但金额缺失/非有限 ⇒
+  `degraded/missing_precondition`、合计 `None`（真实空成交仍为 0）。
+- **R3-07（P2）默认子集丢其他臂折**：未显式 `--splits` 时 CSV 行集 = **各臂 summary 折键并集**
+  （额外的第 4 折保留，比较列写空）；显式子集仍按声明过滤；投影登记 `csv_splits`。
+- **R3-08（P2）全无效臂稳定性行数门误杀**：空输入状态行显式登记 `expected_row_count=1`。
+- **R3-09（P2）source_ref 语义别名**：`ArmData.source_paths` 携带真实相对路径
+  （`summary.parquet`/`chain_nav.parquet`/`folds/splitK/attribution.parquet` 或旧 WF 实际文件名），
+  四份 CSV 的 `source_ref` 可按 `root_id` 定位真实文件。
+- **R3-10（P2）生成器指纹漏共享实现**：`SHARED_GENERATOR_FILES` 纳入
+  `chain_metrics`/`runs_loader`/`compare/{aggregate,fold_subset,report,scoring}` 的 repo-relative SHA。
+- **R3-11（P2）首扫裸 OSError**：CLI 首次审计扫描与后扫同口径收敛
+  （`exit=3`、`stage=audit_scan`，不逸出 traceback）。
+- **R3-12（P3）config_json 非完整身份**：写入 `{stable_identity, group}` 全量 canonical JSON，
+  `hash(json.loads(config_json)) == group_key` 可独立复算。
+- **验证**：版本 `0.209.35 → 0.209.36`；T3 定向 **68 passed**（新增 12 例 R3 回归）、前序定向
+  **188 passed**；复杂度双口径 `exit=0`、新增硬超限 0；新证据 `p6_t3_acceptance_run9`
+  （`verdict=pass`；`run8` 因语料把同窗口重跑当两期而 fail，已按 R3-04 修正语料期间身份）。
+
+## [0.209.35] - 2026-11-06
+
+### Fixed（P6 T3 第 2 轮复核整改：A 1 重要 + 低项，B 4 低项）
+
+复核输入：`docs/review/v2_p6/p6_t3_implementation_recheck1_reviewer1_20261106.md`（有条件通过：
+A-03 第 2 条未闭合）、`..._recheck1_reviewer2_20261106.md`（通过本轮复核，4 条低项）。
+- **A-03（重要）逐折缺失无专用原因码**：`fold_metrics` 逐折行在 `fold_return/fold_max_drawdown`
+  缺失时给 `degraded/no_source`（不再借用 TopK 原因），新增 `test_p6_t3_29`。
+- **A-R2-01 行数门残余自证**：稳定性期望行数改为**源侧分区计数**（`expected_row_count`，
+  与行列表独立）；验收 `fold_metrics` 期望改取 `arms[*].fold_row_count`（源 summary ∩ splits）；
+  新增 `test_p6_t3_30`（stability 多一条键唯一行必须失败）。
+- **A-R2-03 得分对账域**：`stability.csv` 新增 `partition_arm_count`；设计 §5.3.2-2 与
+  CLAUDE §5 登记“`stability_score` 对账域 = 同分区臂集合”。
+- **A-R2-02/A-10/A-15 文档与断言**：设计 §5.4 归因列集更正为 24 列；成本测试补
+  “合计 = 去重后合计 + 前折重复计入部分”断言；`group_key` 精化写入设计/契约/计划。
+- **B-R2-01 bootstrap 守卫边界**：AST 支持常量字符串拼接（`"bootstrap_" + "delta"`）；
+  扫描域扩展至生产入口 `scripts/p6_report.py` 并在载荷登记 `scope`；哨兵导入失败降级为
+  `not_importable`（静态扫描仍为硬门）。
+- **B-R2-02 输入覆盖度**：`recompute_published` 对未登记 `root_id` 直接判 `input_drift`
+  （不再复用 manifest 自述行），验收断言 `inputs_verified_from_source == len(inputs)` 并登记
+  `input_roots_unverified`；新增部分根负例。
+- **B-R2-04 驱动文档/死代码**：删除未调用的 `_cleanup_work`；`_check_passed` 标量分支改 False
+  并修正 docstring；兜底写盘失败把原因写入 `payload_write_error`。
+- **验证**：版本 `0.209.34 → 0.209.35`；T3 定向 **56 passed**、前序定向 **188 passed**；
+  复杂度双口径 `exit=0`、新增硬超限 0；新证据 `p6_t3_acceptance_run7`（见计划 §22.3）。
+
+## [0.209.34] - 2026-11-06
+
+### Fixed（P6 T3 首轮独立评审整改：2 阻断 + 8 重要 + 多项低项）
+
+评审输入：`docs/review/v2_p6/p6_t3_implementation_review_reviewer1_20261106.md`（A，不建议闭环）、
+`docs/review/v2_p6/p6_t3_implementation_review_reviewer2_20261106.md`（B，有条件闭环）；
+逐条处置见 `docs/review/v2_p6/p6_t3_implementation_disposition_20261106.md`。
+
+- **A-01（阻断）归因 CSV 表头重复 `split_index`**：`EXECUTION_ATTR_COLUMNS` 改为
+  `arm_id + 19 契约列 + source_row_index + 3 报告列`（24 列、列名唯一）；`render_csv` 新增
+  “声明列集自身重名/行键列不在列集内”硬断言，并留重名负例。
+- **A-02（阻断）`--splits` 子集口径错**：基线与对照臂统一走既有 `compare_runs`
+  （基线走空臂路径），子集指标/逐折收益/同向计数全部来自唯一实现；可比性改为“请求子集 ⊆
+  两臂可用折”，子集模式可用；`fold_metrics.csv` 行集 = 声明的折子集。
+- **A-03/A-09（重要/低）基线逐折收益恒空、计数自造**：由 `compare_baseline` 提供
+  `fold_table` 原值与 `折收益同向/折数`，不再由 P6 用 `len(splits)` 自造。
+- **A-04/A-05/A-12（重要）链行门双实现/原因码被改写**：T3 改为复用 T1
+  `sources.verify_chain_rows`（新增 `allow_ordinal_date` 支持旧 WF 折内序号，重复日单列
+  `duplicate_chain_date`）；缺 `date` 列 ⇒ `missing_precondition`；`arm_metrics` 原样保留
+  臂级具体原因码（NaN/Inf/非正/坏日期/重复五类负例对跑 T1/T3 同码）。
+- **A-06（重要）稳定性得分随无关臂漂移**：每个 `stable_identity` 分区**局部重建输入**并
+  在分区内调用 `compute_composite_score`；新增“增删无关臂数值不变”回归。
+- **A-07（重要）CSV 行数守恒未成门**：生成链传入**源侧期望行数**（臂数/源 summary/
+  源链行/源归因行），多一条键唯一的新行也失败；验收新增 `row_count_matches_source` 检查。
+- **A-08/A-10/A-11/A-13/A-14/A-15（低/建议）**：映射键集与 `compare_runs` 真实列集**全等**
+  断言；成本卡写明折界重复日口径与计数；旧 WF `KEY_*` 全空 ⇒ `degraded/no_source`；语料对照臂
+  注入中段回撤使 ΔMaxDD 非零（成品侧符号/数值复核具备判别力）；跨实现 `reconciliation` 接入
+  投影；`group_key` 精化（stable_identity ∧ 有效分组）登记进契约与计划。
+- **B-01（重要）输入环自证式复算**：验收复算按 `root_id` 回到源目录**逐文件重算 SHA**，
+  源字节变化定位为 `input_drift`；语料保留在 `temp/` 供复核；新增篡改源文件回归。
+- **B-02（重要）bootstrap 守卫可绕过**：新增 `experiment_guard`（AST 覆盖别名导入/
+  `getattr`/`import_module`/`__dict__[...]` 常量；报告包零命中缺口即 fail-closed），
+  并在 `generate_experiment` 执行期安装**运行期哨兵**（调用即 `BootstrapForbiddenError`，
+  结束恢复）；端到端生成回归覆盖 CSV/渲染/manifest。
+- **B-03（重要）验收驱动异常网过窄**：兜底改捕 `Exception`（保留 `KeyboardInterrupt/SystemExit`），
+  写入前对非有限浮点做 JSON 安全化，任何失败都落 `t3_acceptance.json`（`verdict=fail`+stage）。
+- **B-04/B-05/B-06/B-07/B-08/B-10/B-12（低）**：审计前后半段同时收敛
+  `ValidationError/PublishError`；清理证据改为“attempt 路径不存在”复核并带 `staging_residual`；
+  五轮计时身份改为**八件**（含 manifest 字节）+ 同 `generated_at` 双发布逐字节比对；验收记录
+  `gate_mode/audit_included/audited_process_ms`；审计判定字段回读进 `audit_evidence`；
+  环境项改为 `perf_gate` 双门带 `passed`；发布固定文件集补正反负例。
+- **B-13/B-14**：CSV 守恒证据落 `evidence/` 子目录（docstring 同步）；计划性能数字按载荷更正。
+- **验证**：版本 `0.209.33 → 0.209.34`；T3 定向 **52 passed**、前序定向 **188 passed**；
+  复杂度双口径 `exit=0`、新增硬超限 0；新证据 `p6_t3_acceptance_run6`（见计划 §22.3）。
+
+## [0.209.33] - 2026-11-06
+
+### Added（P6 T3：实验报告、compare 映射与五份完整 CSV，P6-M3）
+
+- **实验报告（`--kind experiment`）**：显式基线/臂（`--arm id=runs:path`、`--arm id=legacy_wf:path`、
+  `--baseline`），链式 NAV、CAGR/MaxDD/Sharpe、Δ 指标、分折榜、19 列执行归因、成本/双边成交金额、
+  旧 WF TopK 正日占比、制度摘要、四段证据卡与降级清单；`research/experiment/<report_id>/` 原子发布。
+- **五份完整 CSV**（`arm_metrics/fold_metrics/chain_nav/execution_attribution/stability`）：全值、
+  非抽样、固定列序、UTF-8/LF、root-relative `source_ref`；manifest 逐份登记
+  `columns,row_count,key_columns,sha256`；缺行/多行/缺列/重键/NaN/Inf 一律失败。
+- **唯一实现复用（不重写公式）**：链式指标只调 `calculate_chain_metrics`；Δ/分折只调既有
+  `compare_runs`/`fold_table`；旧 WF TopK 跨折均值只调 `aggregate_run`；`stability_group_columns`
+  从 `aggregate.py` 抽出并由原函数与本模块共用（行为不变）。
+- **稳定性完整等价类**（设计 §5.3.2 七条）：`DYNAMIC_EXACT` 单一分类、`stable_identity` 外层键、
+  打分前置硬断言（缺列/n<2 有限值 ⇒ 显式状态行、不产数值 `stability_score`）、旧函数分组投影
+  （`batch_run_id` 不二次拆组）、跨 stock_domain/开关/host/实现/代码态不并组。
+- **制度摘要**：只读显式 P5a JSON 分箱计数；无 bins 固定 `not_available/no_regime_bins`。
+- **生成链拦截**：禁止 `bootstrap_delta/bootstrap_table`（AST 守卫 + 运行期拦截回归）；不产
+  verdict/decision 等裁决字段。
+- **语料与验收**：`scripts/v2_p6/build_t3_corpus.py`（标准/压力双档，确定性双跑一致）与
+  `scripts/v2_p6/run_t3_acceptance.py`（T3 十一组 + T1/T2/T0.5 + 治理面；双档完整进程生成/打开/
+  精确写审计/五 CSV 守恒/包内复算/Δ 与稳定性成品侧复核）。
+- **T3 前遗留 4 项清理**：`sec-positions` 降级态新增表级状态断言；`positions_section` docstring
+  写明可用性前置；审计前后半段 `OSError` 收敛为 `stage=audit_scan`/`audit_write` 的登记退出码；
+  `GENERATOR_FILES` 补 `contracts.py`/`validation.py`/`perf_gate.py` 与 T3 模块/模板。
+- **版本**：`0.209.32 → 0.209.33`（功能未最终验收前只递增小版本号）。
+
+## [0.209.32] - 2026-11-06
+
+### Fixed（P6 T2 reviewer3 复核 2 的 2 条：1 P1 + 1 P2，全部采纳）
+
+复核输入：`docs/review/v2_p6/p6_t2_implementation_recheck2_reviewer3_20261106.md`
+（R3-05-R1 已闭合；R3-01-R1 仍未闭合并新增 R3-N1）。
+
+- **R3-01-R2（P1）成功路径释放两次，第二次删掉新所有者的快照**：上版在成功收尾先
+  `_safe_discard` 再 `_release_staging`（内部又 `_safe_discard`），第一次删除已释放所有权后，
+  同名目录可能已属于新调用。改为**唯一释放点** `_release_staging`：成功与失败路径各只调用一次，
+  返回 `staging_discard_ok`；删除 attempt 后不再访问同名路径（父层回收改用 `rmdir`，只删空目录）。
+  新增交错回归 `test_p6_t2_35`：旧调用首次释放后新调用原子取得并完成采集 → 断言旧调用只释放
+  1 次、新调用 `authority.report_status=available` 且产物落盘。
+- **R3-N1（P2）失败清理会删掉调用前已存在的空报告根**：新增 `StagingOwnership`
+  （`path` / `created_staging` / `created_root`），只回收本调用创建的空层；`created_root`
+  在取所有权前采样，不再复用 `.staging` 的布尔标记。新增回归 `test_p6_t2_36`：预建空
+  `reports_root` + 不存在的 paper_root → 抛错且报告根仍在。
+
+验证（`p6_t2_acceptance_run15`，`verdict=pass`，12 项 checks 全为布尔 true）：定向集
+**188 passed / 0 failed / 0 skipped**（T2 47 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,425 / 138,892 字节；生成门
+**完整进程** max 2260.1 / 2348.8ms（诊断 230.3 / 381.9ms）；打开 max 10.9 / 16.0ms（各 5 冷+5 热）；
+两次审计 pass 且 `audits_intact=true`；两档 `recompute_chain` 5 环一致；隔离矩阵 3 组零产物。
+历轮证据 `run1`(fail)~`run15` 全部保留。
+
+## [0.209.31] - 2026-11-06
+
+### Fixed（P6 T2 reviewer3 复审 2 条残留：1 P1 + 1 P2，全部采纳）
+
+复审输入：`docs/review/v2_p6/p6_t2_implementation_recheck1_reviewer3_20261106.md`
+（7 条中 5 条已闭合、2 条部分闭合；结论「暂不建议通过收口」）。
+
+- **R3-01-R1（P1）同 attempt 并发仍可共用快照并互相删除**：废弃“先查后用 + 异常文本推断所有权”，
+  改为 `generate._claim_staging` 以 `mkdir(exist_ok=False)` **原子取得 attempt 根**——创建成功者
+  独占清理权，`FileExistsError` 者在进入采集前报错退出且不清理。复审指出的白名单事实经复验成立
+  （`compile_whitelist` 的 `/**` 匹配目录自身；`.staging` 属结构性父目录），审计轮生成实测
+  `verdict=pass`（v0.209.30 的首版实现失败原因是**收尾时 rmdir 到白名单外路径**，与本改法无关）。
+  失败路径仅当 `.staging` 由本调用新建时才回收空父层，保持“零产物”。
+  新增双调用回归：持有方在采集期内暂停，冲突方必须被拒；断言持有方 `authority=available`
+  且 staging 收尾清空。
+- **R3-05-R1（P2）正常数据集使新鲜度汇总跳过其他数据集的 invalid**：`_freshness_value` 不再
+  “取到值就返回”，而是**并行**收集可用值与非可用状态，混合场景输出
+  `20260603；另有来源状态：无效（multiple_quality_value）`；新增“健康 + 冲突”混合数据集正反例。
+
+验证（`p6_t2_acceptance_run14`，`verdict=pass`，12 项 checks 全为布尔 true）：定向集
+**186 passed / 0 failed / 0 skipped**（T2 45 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,425 / 138,892 字节；生成门
+**完整进程** max 2389.0 / 2540.7ms（诊断 205.6 / 378.4ms）；打开 max 10.6 / 18.1ms（各 5 冷+5 热）；
+两次审计 pass 且 `audits_intact=true`；两档 `recompute_chain` 5 环一致；隔离矩阵 3 组零产物。
+历轮证据 `run1`(fail)~`run14` 全部保留。
+
+## [0.209.30] - 2026-11-06
+
+### Fixed（P6 T2 第三位专家 reviewer3 首轮意见 7 条：1 P1 + 6 P2，全部采纳）
+
+评审输入：`docs/review/v2_p6/p6_t2_implementation_reviewer3_20261106.md`（用户发起；结论「暂不建议
+通过收口」）。作者逐条用纯合成输入复现后全部采纳。
+
+- **R3-01（P1）拒绝复用 attempt 后仍删掉既有 staging**：`generate_dashboard` 入口新增
+  `_assert_staging_free`（只读检测，已存在即 `PublishError` 且**不清理**）；异常路径新增
+  `_staging_conflict` 判定（T1/publish 的“已存在”异常跳过 `_safe_discard`），崩溃现场与并发
+  对手的目录都不再被误删。**注**：预建目录做原子占用会落在 T1 只读守卫白名单之外（首版实现
+  在审计轮直接失败，已回退）；“先查后用 + 冲突不清理”的残余并发窗口在契约里登记。
+- **R3-02（P2）NAV 抽样跨过核对失败点**：`svg.nav_chart` 的断线集合改为从**完整原序列**求
+  `broken`（此前只对抽样后的 `kept` 求），被抽样跳过的失败点两侧不再连成一条线；补 601 点
+  用例（索引 100 未被抽样保留，断言 ≥2 条 polyline）。
+- **R3-03（P2）`three_ends` 影响 HTML 却未封存**：删除该注入通道（`build_dashboard_view` /
+  `project_three_ends` 去掉 `ends` 参数），`generate_dashboard` 收到 `three_ends` 直接拒绝；
+  三端身份一律取自 projection，封存包内可复算。
+- **R3-04（P2）未实现的 experiment/trend 会“成功发布”驾驶舱**：新增
+  `generate.IMPLEMENTED_KINDS=("dashboard",)`，库入口在采集快照前拒绝、CLI `--kind` choices
+  收窄为 dashboard（argparse 归 2）；补库/CLI 双向负例（零产物）。
+- **R3-05（P2）质量 latest_partition/sync_watermark 的 invalid 被隐藏**：新增
+  `_quality_status_cell`（无值 → 显示该列嵌套状态 + 原因码）与 `_freshness_value`（无值 →
+  带出 `（无效：multiple_quality_value）` 而非“无”），表体与新鲜度事实同时覆盖；补冲突/正常
+  双向断言。
+- **R3-06（P2）合法 CRLF 来源文本使整页生成失败**：`text_safety.normalize_text` 在文本层把
+  `CRLF`/`CR` 归一为 `LF`（不改源文件与 T1 身份比较），保留发布前全页 LF 检查；补 CRLF/CR
+  两条渲染断言。
+- **R3-07（P2）生成性能门用函数内计时**：验收驱动改为**父进程 `subprocess.run` 前后墙钟**入
+  判据（完整进程口径，约 2.1~2.4s），子进程自报 `elapsed_ms` 降为诊断项
+  `in_process_gate`；阈值未改。
+
+验证（`p6_t2_acceptance_run13`，`verdict=pass`，12 项 checks 全为布尔 true）：定向集
+**184 passed / 0 failed / 0 skipped**（T2 43 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,323 / 138,790 字节；生成门
+**完整进程** max 2115.1 / 2351.8ms（in-process 诊断 188.7 / 370.6ms）；打开 max 10.2 / 15.8ms
+（各 5 冷+5 热）；两次审计 pass 且 `audits_intact=true`；两档 `recompute_chain` 5 环一致；
+隔离矩阵 3 组零产物。历轮证据 `run1`(fail)~`run13` 全部保留（含 `run11`/`run12` 两次
+“预建目录触发只读守卫”的失败现场）。
+
+## [0.209.29] - 2026-11-06
+
+### Fixed（P6 T2 第五轮唯一的测试锁缺口；v0.209.28 的业务实现不变）
+
+- **T2-R1-M5**：为 v0.209.27 新接入状态行的两张表补回归锁——`sec-degradations` 断言
+  “本表状态 无效”（删掉 `row=` 即失败）、`sec-positions` 断言“本表状态 可用”；空清单侧断言
+  精确到表格空段片段 `<p class="empty">无降级登记</p>`（此前可能被区级 `detail` 的同名文案
+  满足，表格段落丢失也能通过）。
+- 证据：`p6_t2_acceptance_run10`（`verdict=pass`，12 项 checks 全布尔 true；定向集
+  **179 passed / 0 failed / 0 skipped**；复杂度双口径 exit=0、新增硬超限 0、软超限 227/324；
+  两档体积 52,287 / 138,754 字节、生成 max 202.4 / 365.7ms、打开 max 10.5 / 15.6ms（各 5 冷+5 热）；
+  两次审计 pass 且 `audits_intact=true`；两档链复算 5 环一致）。历轮证据 `run1`~`run10` 全部保留。
+
+## [0.209.28] - 2026-11-06
+
+### Fixed（P6 T2 第五轮复核 4 条「低」项收敛；两位专家本轮均判「可闭环」）
+
+复核输入：`docs/review/v2_p6/p6_t2_implementation_recheck4_reviewer1_20261106.md`（第 4 轮 3 条全
+PASS；新增 M4 低：持仓表“合法空”与本表状态在非可用态下可能互相打脸）、
+`..._recheck4_reviewer2_20261106.md`（第 4 轮 3 条全 PASS；新增 M4/M5/M6 低）。两位专家结论均为
+**可闭环**；下列 4 项按“T3 开工前”登记项一并收敛。
+
+- **T2-R1-M4**：持仓表空表文案加**可用性前置**——仅在账户核对 `available/empty_valid` 时写
+  “合法空：账户投影持仓为空”，否则回落 `empty_note(account_row)`（不可用/降级文案），并补
+  “非可用 + 空持仓不得出现『合法空』”断言。
+- **T2-R2-M4**：`except OSError → 3（stage=file_system）` 补**判据**——新增两种结构性兜底的
+  载荷级断言（`OSError` → `file_system`、`ReadonlyViolationError` → `readonly_guard`，均
+  `exit=3` 且零产物）；CLI docstring 补齐“运行期守卫拦截 / 文件系统失败”两个归 3 分支。
+- **T2-R2-M6（预先存在）**：`ReadonlyViolationError` 纳入 `run_generate` 的 except 链
+  （`stage=readonly_guard`），与 docstring“写域审计失败 → 3”口径一致，不再逃逸为裸 traceback。
+- **T2-R2-M5**：计划 §14.2 的旧字段名 `staging_removed` 加注“v0.209.27 起改名为
+  `staging_discard_ok`”，消除新旧名并存。
+
+验证（`p6_t2_acceptance_run9`，`verdict=pass`，12 项 checks 全为布尔 true）：定向集
+**179 passed / 0 failed / 0 skipped**（T2 38 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,287 / 138,754 字节、生成 max
+197.7 / 366.9ms、打开 max 10.5 / 16.0ms（各 5 冷+5 热）；两次审计 pass 且 `audits_intact=true`；
+两档 `recompute_chain` 5 环一致；隔离矩阵 3 组零产物。历轮证据 `run1`(fail)~`run9` 全部保留。
+
+## [0.209.27] - 2026-11-06
+
+### Fixed（P6 T2 第四轮复核 6 条新意见整改：1 重要 + 5 低）
+
+复核输入：`docs/review/v2_p6/p6_t2_implementation_recheck3_reviewer1_20261106.md`（上轮 3 条全 PASS；
+新增 N7 重要 + N8/N9 建议）、`..._recheck3_reviewer2_20261106.md`（上轮 3 条 + 4 子项全 PASS；
+新增 N7/N8/N9 低级）。
+
+- **T2-R1-N7（重要）降级清单表「有登记」时仍写「无降级登记」**：`degradations_section` 的 note
+  改为 `cap_note(...) or ("无降级登记" if empty else "")`（该文案只属空表分支），并给该表与持仓表
+  补 `row=`（每张表自带状态行）；新增“非空清单不得出现『无降级登记』且须含真实原因码 / 空清单须含
+  该文案”双向断言。
+- **T2-R1-N8 `stale` 空表文案不可达且指向不存在的日期**：改为
+  “保留最近一次已核对值（陈旧）：本表无新行，日期与原因见本节事实与本表状态”，新增
+  `stale` 空表渲染断言（不再出现“原日期”）。
+- **T2-R1-N9 NAV 块状态可见性缺断言**：标签改「NAV 块状态（同区独立块）」，新增
+  `［陈旧 / nav_before_account_date］` 与 `status["word"]=="stale"` 断言（去掉 `row=nav` 会失败）。
+- **T2-R2-N7 `cleanup` 字段语义/失败路径/无断言**：字段改名 `cleanup.staging_discard_ok` 并在
+  docstring 明确“True 仅表示 `discard_attempt` 未抛异常、失败路径以异常为证据”；新增单测
+  （打桩 `discard_attempt` 抛 `OSError` ⇒ `staging_discard_ok is False`；正常路径为 `True`）。
+- **T2-R2-N8 设备名负例强度与结构性兜底**：CLI 负例集改为真设备名
+  `("con","aux","prn","nul","com1","lpt9")`（保留 `LPT1` 并注明它走正则大写分支、无区分力）；
+  `publish` 层负例同步补设备名；`run_generate` 新增 `except OSError → 3（stage=file_system）`
+  结构性兜底，使黑名单只是“更好报错”而非唯一防线。
+- **T2-R2-N9 `audits_intact` 缺源文件时为 `null`**：改为 `bool(source_sha256) and 相等`，
+  保持 12 项 checks 的值域恒为布尔。
+
+验证（`p6_t2_acceptance_run8`，`verdict=pass`，12 项 checks 全 true 且值域恒为布尔）：定向集
+**179 passed / 0 failed / 0 skipped**（T2 38 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,287 / 138,754 字节、生成 max
+192.4 / 352.9ms、打开 max 10.5 / 15.1ms（各 5 冷+5 热）；两次审计 pass 且 `audits_intact=true`；
+两档 `recompute_chain` 5 环一致；隔离矩阵 3 组零产物；恶意语料页已无“无降级登记”矛盾文案。
+历轮证据 `run1`(fail)~`run8` 全部保留。
+
+## [0.209.26] - 2026-11-06
+
+### Fixed（P6 T2 第三轮复核 6 条新意见整改：1 重要 + 5 建议）
+
+复核输入：`docs/review/v2_p6/p6_t2_implementation_recheck2_reviewer1_20261106.md`（上轮未闭合项
+全 PASS；新增 1 重要 M1 + 2 建议）、`..._recheck2_reviewer2_20261106.md`（上轮 9 项全 PASS；
+新增 1 中 M1 + 2 低）。
+
+- **T2-R1-M1（重要）账户区区级状态未聚合 NAV/成交**：`sec-account` 改用
+  `combine_status([account, nav, trades])`（契约③“仅持仓区为例外”因此重新成立），NAV 事实新增
+  “NAV 区状态”并带 `row=nav`；新增“成交 invalid 而账户 available 时区级不得为 available”断言。
+- **T2-R1-M2 指令表未带状态行**：`_instruction_table` 传 `row=`，指令表空表文案随状态词分派；
+  `empty_note` 增 `stale` 专用文案（保留旧值 ≠ 缺来源）；新增指令表两态断言。
+- **T2-R1-M3 CLI 未断言 `stage=stable_snapshot`**：用例改走 `p6_report.run_generate` 并断言
+  `payload["stage"]/["attempt_id"]/["detail"]`。
+- **T2-R2-M1（中）Windows 保留设备名逃逸退出码归类**：`assert_attempt_id` 增加
+  `con|prn|aux|nul|com1..9|lpt1..9` 拦截（归 `2`），新增 `con`/`nul`/`LPT1` 负例。
+- **T2-R2-M2 两处静默默认**：`reparse_checked` 改**类型判定**（`frozenset/set/tuple/list`，
+  `None` 不再算已检查，新增负例）；`_safe_discard` 返回布尔并写进
+  `cleanup.staging_removed`（CLI 载荷同样透出）。
+- **T2-R2-M3 三条证据纪律小项**：验收 `checks` 新增 `audits_intact`（审计件源/副本 SHA 必须
+  相等，从“可发现”升为“会 fail”）；`--attempt-id ""` 不再静默回退（只有 `None` 才自动生成，
+  空串归 `2`）；计划补注“`run1` 无汇总载荷”与“include 根自身 junction 由运行期守卫兜底”。
+
+验证（`p6_t2_acceptance_run7`，`verdict=pass`，**12 项** checks 全 true）：定向集
+**178 passed / 0 failed / 0 skipped**（T2 37 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、
+新增硬超限 0、软超限 227/324；`flake8` 全清；两档体积 52,156 / 138,623 字节、生成 max
+198.8 / 373.1ms、打开 max 10.1 / 16.0ms（各 5 冷+5 热）；两次审计 pass
+（`uncovered=[]`、`reparse_checked=true`、源/副本 SHA 相等）；两档 `recompute_chain` 5 环一致；
+隔离矩阵 3 组零产物。历轮证据 `run1`(fail)~`run7` 全部保留。
+
+## [0.209.25] - 2026-11-06
+
+### Fixed（P6 T2 第二轮复核 12 条意见整改：2 重要 + 10 建议，全部落地）
+
+复核输入：`docs/review/v2_p6/p6_t2_implementation_recheck1_reviewer1_20261106.md`、
+`..._recheck1_reviewer2_20261106.md`（两位专家均判「有条件闭环」；首轮 24 条中 21 条 PASS/闭合、
+3 条 PARTIAL，另新增 12 条）。
+
+- **T2-R2-N1（重要，本轮最重要）`--attempt-id` 未校验即参与 staging 路径拼装**：
+  `generate_dashboard` 入口复用 `publish.assert_attempt_id`（`snapshot.ROOT_ID_PATTERN`
+  **全串匹配**），`_capture` 再断言 `staging_root.resolve().parent == <reports_root>/.staging`；
+  `_capture` 纳入 `try`，失败路径 `_safe_discard` 清理本次 staging（含快照失败留下的父目录）且
+  **不掩盖原始异常**；同步删除死类 `GenerationError`。
+- **T2-R1-N2（重要）降级清单区区级状态恒 `degraded`**：改为取登记项**最严重状态词**并配对同级
+  原因码（条目含 `invalid` 时区级为 `invalid`），新增断言。
+- **T2-R1-06 空表文案与状态词矛盾**：`view_primitives.empty_note` 按状态词分派
+  （`empty_valid` → “已核实为空：本表无行（零值不是缺值）”；不可用/降级 → “来源不可用或已降级：
+  不伪造空表”），并补断言。
+- **T2-R1-11 三项缺口**：新增空表文案断言、**CLI 级** `SnapshotError → 退出码 3`（`--attempt-id`
+  非法 → 2）、T2 生成链**重试装配**（`r1→r2`、`retries=1`、成功后 `.staging/<attempt>` 已清理、
+  漂移耗尽后不留空壳）。
+- **T2-R1-N1 `combine_status` 原因码与状态词不配对**：原因码只从与最终状态词**同级**的首行取
+  （消除 `invalid` + `no_source` 自相矛盾）。
+- **T2-R1-N3 成交表静默截断**：补 `cap_note`（“仅显示前 N 行”），与其余四张表一致。
+- **T2-R1-N4 / R2-N5 自述计数与落点不符**：验收载荷实为 **11 项 checks**（非 12 项），
+  CHANGELOG/计划统一改为 11 项；计划 §11.4 补登控制字符边界一行（R2-10 的落点此前只存在于代码
+  docstring）。
+- **T2-R1-N5 失败路径残留**：见 N1（`_capture` 入 `try` + `_safe_discard`）。
+- **T2-R1-N6 退出码归类**：`--attempt-id` 形态非法归 `2`（SetupError），快照协议失败归 `3`
+  （`stage=stable_snapshot`），CLI docstring 同步写明。
+- **T2-R2-N2 `data/` 根下文件盲区**：`uncovered_paths` 候选集扩到 `data/*` 的**文件**（此后
+  任何 `data/<file>` 未登记即 fail），并补负例。
+- **T2-R2-N3 `reparse_points` 空值歧义**：`scan_scope` 新增 `reparse_checked`；快照未携带
+  `reparse` 集合时以 `runtime_violations`（`reparse_not_checked`）判 fail，新增负例。
+- **T2-R2-N4 审计件副本无哈希绑定**：验收汇总登记每个 `readonly_audit_*.json` 的
+  `source/source_sha256/copy_sha256`（并在处置文档注明“摘要自身不可防篡改”）。
+- **T2-R2-N6 属性位依赖 autoescape 兜底**：`deps.build_environment` 显式写死 `autoescape=True`；
+  判定器新增**属性值层**判据（属性值含 `"`/`'`/`&#` 即违规，冻结 CSP 常量唯一豁免），并补负例。
+- **T2-R2-07② / R2-12③（维持已登记的部分采纳）**：结构性父目录按事件类型放行需改 T1 守卫的
+  事件→路径映射（T2 无权改 T1 判据）；`discard_attempt` 保留 `ignore_errors`（不掩盖原始异常，
+  残留必被 `unexpected_inside` 捕获）。两项残余风险继续在契约/计划中登记。
+
+验证（`p6_t2_acceptance_run6`，`verdict=pass`，11 项 checks 全 true）：定向集 **176 passed /
+0 failed / 0 skipped**（T2 35 + T1 95 + T0.5 13 + 两棘轮）；复杂度双口径 exit=0、新增硬超限 0、
+软超限 227/324；`flake8` 全清；两档体积 51,875 / 138,342 字节、生成 max 198.6 / 347.1ms、打开 max
+10.0 / 17.7ms（各 5 冷+5 热）；两次审计 pass（`scan_scope.uncovered=[]`、`reparse_checked=true`、
+`reparse_points=[]`，副本 `source_sha256 == copy_sha256`）；两档 `recompute_chain` 5 环一致；
+隔离矩阵 3 组零产物。历轮证据 `run1`(fail)~`run6` 全部保留。
+
+## [0.209.24] - 2026-11-06
+
+### Fixed（P6 T2 首轮独立评审 24 条意见整改：1 阻断 + 8 重要 + 15 建议，全部落地）
+
+评审输入：`docs/review/v2_p6/p6_t2_implementation_review_reviewer1_20261106.md`（契约与渲染，12 条）、
+`..._reviewer2_20261106.md`（安全与证据，12 条）；逐条处置见
+`docs/review/v2_p6/p6_t2_implementation_disposition_20261106.md`。
+
+- **T2-R1-01（阻断）权威代恒显示“字段缺席”**：`_generation_text` 误从 record **状态行**取
+  `run_kind`（`classify_run_record` 正常分支不含该键）。改为从 authority 行的 `run_kind/
+  trade_date` 取，正常代显示 `t1@YYYYMMDD`；测试补正例断言。
+- **T2-R1-02 `root_map` 漏 `quality` 根**：`generate._attach_root_map` 把本次实际读取的根
+  （paper + quality）补进 projection 与 manifest，保证 `inputs` 里每个 `root_id:` 前缀可解析。
+- **T2-R1-03 生成侧关闭快照重试 + 快照异常裸抛**：恢复 T1 口径（最多 2 次重试，
+  `.staging/<attempt>/r{1,2,3}` 仍属同一 attempt 前缀）；CLI 捕获 `SnapshotError` 返回登记
+  退出码 3（`stage=stable_snapshot`），不再抛裸 traceback。
+- **T2-R1-04 generator 逐文件 SHA 覆盖不全**：`GENERATOR_FILES` 扩到 21 项（含 projection 链
+  authority/cockpit/config_view/instructions/quality/status/snapshot 与 deps/渲染/manifest/发布 + 模板），
+  新增 `generator.entrypoint`（`scripts/p6_report.py` 的路径 + SHA）。
+- **T2-R1-05 区级状态不上浮**：模型·质量·新鲜度区改为 `combine_status(config/model/quality)`；
+  持仓区明确“状态 = 账户核对状态（唯一来源）”，标题与说明写明。
+- **T2-R1-06 ~ 09**：空表给固定文案（`EMPTY_TABLE_NOTE`，禁止空段落）；布尔事实三值
+  （键缺席不再折叠成“否”）；`annualization` 子键缺席显示“字段缺席”而非“—”；降级清单区级
+  原因码取首条登记的真实原因码（不再借用 `no_source`）。
+- **T2-R1-10 / R2-06 `attempt_id` 校验过弱**：复用 `snapshot.ROOT_ID_PATTERN`（禁 `.`/`..`/
+  大写/超长），`discard_attempt` 再断言目标恰为 `.staging` 直接子目录，防止整树误删。
+- **T2-R1-11 测试缺口**：新增证据域隔离矩阵（4 组合）+ CLI 零产物、权威代正例、降级清单与
+  manifest 同源、production 面“无实盘读数”、`attempt_id` 非法值、发布/审计负例共 11 项。
+- **T2-R1-12 / R2-12 证据自证**：验收驱动对已发布 run 复算 `recompute_chain`（新增 `chain`
+  检查项）；中途异常也写 `t2_acceptance.json`（`stage`/`exception`/`verdict=fail`），fail 现场
+  自解释；`_copy_audits` 改用 `write_json_new` + `.get("verdict")`。
+- **T2-R2-01 属性上下文**：模板去掉 `lang`/`data-end` 的来源插值（`lang` 写字面量、`data-end`
+  删除），SVG `aria-label` 改固定常量；判定器新增**属性闭集** `security.ALLOWED_ATTRIBUTES`
+  （未登记属性/同元素重复属性即 fail），把“来源进属性”变成结构上不可能。
+- **T2-R2-02 判定器三个绕道**：`meta` 先判 `http-equiv`（charset 不再短路 refresh）；同元素
+  重复属性判违规；任意属性值含 `//` 且非 SVG/XHTML 命名空间即违规；CSP 须恰一个且逐字相同。
+- **T2-R2-03 重解析点证据被丢弃**：`scan_audit_roots` 把 `scan_tree.reparse` 挂到
+  `FileTree.reparse`，`audit_generate` 透传 `reparse_paths`（非空即 fail）并登记
+  `scan_scope.reparse_points`。
+- **T2-R2-04 扫描域未入审计载荷 + 排除清单不全**：审计载荷新增
+  `scan_scope: {includes, excludes, uncovered, reparse_points}`；排除清单补全（`.github` 改纳入
+  扫描，新增 `.claude`/`.codebuddy`/`.vscode`/`.pytest_cache`/`data/empty`/三个 `data/paper_*`
+  历史根）；新增 `uncovered_paths()` 盲区判据（顶层 + `data/*` 未登记即 fail）。
+- **T2-R2-05 证据域隔离证据偏薄**：`--input-evidence-classes` 显式空串不再回退（`is None`
+  才回退），空声明按契约抛错；验收驱动改为**三类跨类组合 + 去掉 `--no-publish`**，并断言
+  `reports_root` **零产物**。
+- **T2-R2-07 包装层放宽**：`audit_generate` 的 `output_root`/`repo_root` 改为必填（无默认）。
+- **T2-R2-08 T2 审计组合零负例**：新增 `tests/test_v2_p6_t2_publish.py`（多写文件/改写既存/
+  已存在目录/外来根变化/重解析点/未登记扫描域/attempt_id 七类负例）。
+- **T2-R2-09 性能灵敏度**：验收载荷新增 `headroom`（实测/阈值）与口径说明（打开=页面自报
+  `loadEventEnd`；生成=in-process `generate_dashboard`），与 T0.5 全进程口径区分登记。
+- **T2-R2-10 控制字符边界**：登记为已知边界（`text_safety` docstring + 计划 §11.4），不改写
+  可见文本（保持“可见文本等价、不隐藏来源”取向）。
+- **T2-R2-11 `verify=False` 旁路**：删除 `verify` 形参（发布前自检不可关闭）；补
+  `COMPANION_FILES ⊆ RUN_FILENAMES` 锁定断言。
+
+验证（`p6_t2_acceptance_run5`，`verdict=pass`，12 项 checks 全 true）：T2 定向集 **31 passed**；
+定向合计 **172 passed / 0 failed / 0 skipped**；复杂度双口径 exit=0、新增硬超限 0、软超限 227/324
+与 T1 收口持平；`flake8 --max-line-length=100` 全清；两档体积 **51,899 / 138,366 字节**、
+生成 max **195.9 / 343.5ms**、打开 max **10.2 / 18.8ms**（各 5 冷+5 热），两次
+`readonly_audit.json` 均 pass 且 `scan_scope.uncovered=[]`（includes 12 项），
+已发布 run 的 `recompute_chain` 两档均通过，证据域隔离矩阵 3 组均 `exit_code=3` 且 `artifacts=[]`。
+历轮证据 `run1`(fail)/`run2`/`run3`/`run4`(fail)/`run5`(pass) 全部保留；`run4` 为驱动链复算
+工具缺口（把 manifest 自身计入 outputs 导致 `outputs.keys` 误判），按 §7.6 即时修复后以新 id 重取证。
+
+## [0.209.23] - 2026-11-06
+
+### Added（P6 T2 交付：自包含静态驾驶舱 + 共享渲染面）
+- **渲染层（新 11 模块）**：`src/lazybull/v2/reporting/{render,dashboard_view,dashboard_sections,
+  view_primitives,svg,text_safety,html_check,security,evidence,publish,generate}.py` +
+  `templates/dashboard.html.j2`。六区固定为 账户（含 NAV 曲线/年化/成交）/ 持仓 / 指令 /
+  pending / 调仓 / 模型·质量·新鲜度，另加降级清单区；每区独立状态行，覆盖 正常 /
+  `empty_valid` / 降级（`degraded`/`not_available`/`invalid`）三态。
+- **安全面**：来源文本 NFC + 转义 `< > & U+2028 U+2029` 且只写文本节点；scheme 字面量冒号
+  写成 `&#58;`（可见文本不变，原始字节不再含可被零远程引用扫描命中的串）；CSP 常量唯一来源
+  `security.CSP_CONTENT`；渲染结果**发布前**跑 `html_check.scan_html` 自检（禁止标签/事件属性/
+  style 属性/非常量链接/远程引用/CSP 不一致即抛错不发布）；内联 SVG 经 `p6svg` 过滤器 +
+  DOM 级 `scan_fragment` 校验（不用字符串包含判定，避免把已转义文本误判为可执行片段）。
+- **发布面**：`publish.publish_new_run` 先写 `.staging/<attempt>/package` 并逐文件回验 SHA，
+  再 `os.rename` 到 `<evidence_class>/<kind>/<report_id>`；目标已存在即拒绝，失败清理 staging，
+  不留半成品；`scan_audit_roots` 提供有界子树的 repo 相对快照（含目录集合），
+  `audit_generate` 薄封装 T1 `audit_command`（四键绑定 + `output_root` + 精确 `expected_paths`），
+  `AUDIT_SCAN_INCLUDES/EXCLUDES` 登记扫描域与排除理由。
+- **证据域隔离**：`evidence.assert_input_evidence` 在生成本身 fail-closed
+  （production ⊆ {production}、calibration_only ⊆ {calibration_only}、research ⊆ {production,
+  research}），混合输入抛 `EvidenceIsolationError`、CLI 非零退出，不产生“有效混合报告”。
+- **入口与工具**：`scripts/p6_report.py generate`（`--audit-out` 时启用运行期只读守卫、
+  写 `readonly_audit.json` 到本次新 validation 目录；`--json` 输出单行机器可读载荷）、
+  `scripts/v2_p6/build_t2_corpus.py`（标准/压力合成驾驶舱语料）、
+  `scripts/v2_p6/run_t2_acceptance.py`（T2 六组 + T1 七组 + T0.5 四组 + 两棘轮、复杂度双口径、
+  P6-T2-01/02/03 三份关键证据、双档 5 次生成计时 + 真实发布 + 精确写审计 + 5 冷 5 热打开测量）。
+- **测试**：`tests/p6_t2_env.py` + `tests/test_v2_p6_t2_{render_states,evidence,security,
+  selfcontained,perf,determinism}.py` 共 **20 项**（要求 ≥18），覆盖六区三态、证据横幅与
+  research 三端卡、注入 DOM 快照、CSP 正负例、零外部请求与固定 companion、自包含字节形态、
+  体积/打开协议/生成真实测量、确定性/历史不覆盖/原子失败。
+
+### Changed（治理与登记）
+- `pyproject.toml` 版本 → `0.209.23`；`README.md` 新增「P6 报告系统 T2 生成入口」；
+  `CLAUDE.md` §5 新增「P6 报告系统 T2 契约」（11 条硬口径）；`AGENTS.md` 同步 reporting 目录职责。
+- 在用闭包棘轮显式登记 T2 新增 11 模块：静态闭包 270、在用 274 不变，
+  全仓 449→460、不在用 175→186（`tests/fixtures/inuse_closure_baseline_20261006.json` 同步刷新）。
+- 复杂度双口径 `exit=0`、新增硬超限 0、软超限 227/324 与 T1 收口持平（未新增拆分义务）；
+  `flake8 --max-line-length=100` 全清。
+
+### 边界（明确不在 T2）
+- 实验报告 / compare 映射 / 五份完整 CSV 归 **T3**；趋势库/run 索引与跨平台准备归 **T4**；
+  真实 `data/paper` 根 smoke、真实三族 bundle、Windows+Linux 全源复算归 **T5**。
+- 本版不生成回撤水下图、不接实盘端（P8 未建，固定 `not_available`）、不读实跑模型
+  （当前 v2 代无持久来源，固定 `not_available/no_persisted_actual_model`）。
+- 审计哈希扫描域为**有界子树**（`data/models`/`data/frozen_reference`/`data/walk_forward`/
+  `data/paper_shadow`/`temp` 等数十 GB 级树不参与哈希，其写保护由运行期只读守卫承担）；
+  崩溃残留 staging 按设计 §2.5 保留为失败现场但永不发布/索引。
+
 ## [0.209.22] - 2026-11-06
 
 ### Closed（P6 T1 收口：独立评审与整改链条全部闭合）
