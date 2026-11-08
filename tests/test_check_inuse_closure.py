@@ -126,9 +126,26 @@ import check_inuse_closure as cic  # noqa: E402
 # 仅被 tests/p6_t1_env.py 与 scripts/v2_p6/run_t1_acceptance.py 可达（不属两条主链路
 # 三入口；T2~T4 生成入口接入后才会进闭包）⇒ 静态闭包 270、在用 274 不变，
 # 全仓 438→449、不在用 164→175。底稿同步刷新（沿用既有约定）。
+# v0.209.23（2026-11-06）：P6 T2 交付新增 v2/reporting 11 模块（render/dashboard_view/
+# dashboard_sections/view_primitives/svg/text_safety/html_check/security/evidence/
+# publish/generate），仅被 scripts/p6_report.py 与 tests/p6_t2_env.py 可达——
+# `scripts/p6_report.py` 是生产报告入口，**不在**两条主链路三入口内 ⇒ 静态闭包 270、
+# 在用 274 不变，全仓 449→460、不在用 175→186。底稿同步刷新（沿用既有约定）。
+# v0.209.33（2026-11-06）：P6 T3 交付新增 v2/reporting 6 模块（experiment_csv/metrics/
+# projection/sources/stability/view），同样只经 `scripts/p6_report.py` 与
+# `tests/p6_t3_env.py` 可达（不属两条主链路三入口）⇒ 静态闭包 270、在用 274 不变，
+# 全仓 460→466、不在用 186→192。底稿同步刷新（沿用既有约定）。
+# T3 整改轮（2026-11-06，v0.209.34）：bootstrap 拦截新增 experiment_guard 1 模块，
+# 仅被 generate 与测试可达 ⇒ 全仓 466→467、不在用 192→193（静态闭包与在用数不变）。
+# v0.209.39（2026-11-06）：P6 T4 交付新增 v2/reporting 10 模块（csv_core/trend_contract/
+# trend_csv/trend_metrics/trend_observe/trend_portability/trend_projection/trend_sources/
+# trend_svg/trend_view），同样只经 `scripts/p6_report.py` 与 tests/p6_t4_env.py 可达
+# （不属两条主链路三入口）⇒ 静态闭包 270、在用 274 不变，全仓 467→477、不在用 193→203。
+# 底稿同步刷新（沿用既有约定）。
 INUSE_BASELINE = 274
-NOTIN_BASELINE = 175
+NOTIN_BASELINE = 203
 STATIC_BASELINE = 270
+ALL_MODULES_BASELINE = 477
 
 
 @pytest.fixture()
@@ -203,6 +220,7 @@ def test_real_repo_ratchet_conservation():
     assert report["static_closure_count"] == STATIC_BASELINE
     assert report["inuse_count"] == INUSE_BASELINE
     assert report["notin_count"] == NOTIN_BASELINE
+    assert report["all_modules_count"] == ALL_MODULES_BASELINE
     # 动态加载缺口持续存在（机制必要性锚点）
     assert "src.lazybull.factors.risk.downside_factors" in report["dynamic_extra"]
 
