@@ -136,7 +136,9 @@ def build_environment(*, template_dir: Path | str | None = None) -> Any:
         loader = jinja2.FileSystemLoader(str(directory))
     return jinja2.Environment(
         loader=loader,
-        autoescape=jinja2.select_autoescape(default=True, default_for_string=True),
+        # 显式写死 autoescape（不用 select_autoescape 的 default 兜底）：模板名/字符串模板的
+        # 逃逸都必须恒开，属性位即使被误用也不会退化为原文（T2-R2-N6）
+        autoescape=True,
         undefined=jinja2.StrictUndefined,
         auto_reload=False,
         cache_size=0,

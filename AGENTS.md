@@ -64,8 +64,12 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 │                       # T6：rehearsal/ 历史端到端演练（manifest/sections/sources/injection/hosts/
 │                       # aa/readings/verdict/report/assembly/artifacts/runner，五臂 + 机械 A/A
 │                       # + H6 单条数值 + 运行手册校验；闸门归用户）；
-│                       # 产物只落 data/paper_shadow/p5b_testbed）、reporting/ P6 T0.5 契约/性能门/
-│                       # validation（不实现投影与渲染）、train/ P3 训练适配与 WF 编排、
+│                       # 产物只落 data/paper_shadow/p5b_testbed）、reporting/ P6 报告系统
+│                       #（T0.5 契约/性能门/validation；T1 只读稳定快照与驾驶舱 projection；
+│                       # T2 自包含静态渲染 render/dashboard_view/dashboard_sections/
+│                       # view_primitives/svg/text_safety/html_check/security/evidence/
+│                       # publish/generate + templates/，生成入口 scripts/p6_report.py）、
+│                       # train/ P3 训练适配与 WF 编排、
 │                       # sleeves/ value 袖 spec）
 ├── drv/                # 树莓派 LCD 驱动
 └── live/               # 实盘接口预留（TODO）
