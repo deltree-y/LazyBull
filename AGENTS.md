@@ -219,6 +219,7 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 - **数据态血缘**：walk-forward 每次运行采集 git 版本 + 数据水位（`data_state_{wf_run_id}.json`）；同一对比表混入多数据态必须告警，配置差异只在同一数据态内比较。
 - **文档归档**：`docs/` 顶层禁止散文件（仅 roadmap / BREAKING_CHANGES / terminal_loss_risk_register 三份治理文档）；新文档按类别归入子目录（contracts / data / experiments / guide / glossary / PR / reports；plans / review 为本地区）；**移动文档必须全仓同步引用**（含 CHANGELOG 历史条目、代码注释、CLAUDE.md / copilot-instructions 等本地文件），以终端全量扫描验证。
 - **检视意见文档**统一归档 `docs/review/<阶段/主题>/`（按阶段建子目录、根下禁散文件；文件名须含评审对象 + 评审专家标识，避免重名；**评审专家不得阅读他人评审意见**、须独立成文；**作者须逐条甄别**、不接纳的意见须写明详细原因；**独立评审一律由用户发起（2026-10-20 裁决），AI 禁止自行发起或召集评审**——实现方自验后仅报告「可评审状态」；append-only，**仅迁移路径字符同步修订为例外**）；复杂度 hook = `scripts/check/check_complexity.py`（棘轮基线只缩不扩）。
+- **v2 F24（2026-11-08 生效，`CLAUDE.md` §5）**：M3 开发前置**已解除**（原 F23「不授权启动 P6.5/P7」删除）；M1 出口的全部日历判据（连续 10 交易日 SLA、≥4 自然周观察期）与事件类袖子前向影子 ≥12 个月**均已删除**，改历史等效证据 / 历史证据包（证据等级 H）。**禁称「真实日历验证通过」「前向验证通过」**；实盘启动前纸面门槛 = 连续 3 个月（允许人工在环）。**下一步 = P6.5 合并器对账（虚拟子袖 + 三恒等式进 CI + 三件套）→ P7**。
 - **不要**：破坏 cs_train 与 cs_infer 的 schema 一致性；绕过 T0/T1 指令链路；用局部重建覆盖生产 cs_train 分区；把 changelog 写进 README。
 
 ## 9. 安全注意事项

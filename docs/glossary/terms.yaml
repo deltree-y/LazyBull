@@ -6,7 +6,7 @@
 # 引用统计：scripts/check/glossary_refs.py；HTML 生成器按"近 90 天被引用次数"排序（P6 落地）。
 
 version: 1
-updated: "2026-10-25"
+updated: "2026-11-08"
 
 terms:
   # ========== 架构核心 ==========
@@ -239,6 +239,7 @@ terms:
     source: hypothesis_ledger_schema.md §5；R1-2
     related: [影子账本, α 预算, 假设台账]
     introduced: "2026-10-01"
+    revised: "2026-11-08：F24-A3 删除事件类袖子前向影子 ≥12 个月（hypothesis_ledger_schema F6 同步）；顺序检验规格仅在用户显式恢复前向影子时启用"
 
   - term: 影子账本
     aliases: [shadow ledger, 前向影子]
@@ -248,6 +249,7 @@ terms:
     source: v2 方案 §3.5（不对称规则 v1.6）
     related: [顺序检验, 假设台账, 软生产]
     introduced: "2026-09-30"
+    revised: "2026-11-08：F24-A3 起事件类袖子准入改「历史虚拟时钟并行」+ 历史证据包；影子账本规格仅在用户显式恢复前向影子时启用，不再作为准入前置"
 
   - term: 入场点敏感度
     aliases: [entry-point sensitivity]
@@ -1026,3 +1028,21 @@ terms:
     source: runs 产物契约 F3 host_mode；P4 实施规划 v22 §24.10；v2/hosts/paper/shadow.py
     related: [PaperHost, 完整代发布标记, 指令投影]
     introduced: "2026-10-30"
+
+  - term: 历史虚拟时钟并行
+    aliases: [historical virtual clock parallel, 历史多臂运行]
+    one_liner: 用历史数据 + 虚拟时钟把多臂（含自拆虚拟子袖）并行跑完的验证载体；F24-A3 起取代事件类袖子的前向影子准入
+    layman: 拿过去的行情把几条"模拟跑道"一次跑完，不等真实日历；跑得快，但只能用来说"历史上不行"，不能保证"未来一定行"
+    example: P5b 试车场 40 日 2 臂整批 41.8s；B 袖准入 = ≥3 个完整披露季 + ≥2 个独立崩盘事件 + 配对制度重排
+    source: 架构 F24-A3 + F22（P5b 历史试车场）；裁决包 `docs/plans/v2/f24_adjudication_package_20261108.md` §4 E1~E4
+    related: [影子账本, 证据等级 H, 顺序检验, 配对制度重排]
+    introduced: "2026-11-08"
+
+  - term: 证据等级 H
+    aliases: [evidence class H, 历史证据]
+    one_liner: 证据来源分级——H = 历史回放 + 配对制度重排（可复跑、无日历等待）；F = 真实前向运行（当前阶段不产生）
+    layman: 给结论贴"来路标签"：H 是拿旧账本复盘出来的，F 是真金白银往前跑出来的；两者不能混称
+    example: 事件类袖子准入只接受 H 级；报告禁止写"前向验证通过"或"影子期通过"
+    source: 架构 F24-A7；裁决包 §3-A7
+    related: [历史虚拟时钟并行, 影子账本, 配对制度重排]
+    introduced: "2026-11-08"
