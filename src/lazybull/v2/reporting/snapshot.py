@@ -265,13 +265,38 @@ class StableSnapshot:
         return {str(rel): self.capture(root_id, str(rel)) for rel in relatives}
 
     def list_dir(self, root_id: str, relative: str, *, suffix: str = "") -> list[str]:
-        """枚举目录（文件名升序）；结果登记后参与二次身份核验。"""
+        """枚举目录（文件名升序）；结果登记后参与二次身份核验。
+
+        ``relative`` 允许为空串表示**根本身**（旧 WF 运行目录的候选文件就在根下）；
+        空串只用于枚举，``capture`` 仍要求非空 POSIX 相对路径。
+        """
         if root_id not in self.roots:
             raise SnapshotError(f"未声明的根：{root_id!r}")
-        rel = _validate_relative(relative)
+        rel = "" if not str(relative).strip() else _validate_relative(relative)
         names = _list_live(Path(self.roots[root_id]), rel, suffix=suffix)
         self.listings[f"{root_id}:{rel}"] = (suffix, tuple(names))
         return list(names)
+
+    def list_dirs(self, root_id: str, relative: str) -> list[str]:
+        """枚举**子目录**名（升序）；同样登记进 listings 参与二次身份核验。
+
+        runs 契约产物按 ``folds/split<N>/`` 分目录存放，而 :meth:`list_dir` 只列文件；
+        为保持“每个输入只读一次 + 身份可核验”的同一协议，这里只枚举目录名（不穿透、
+        不跟随重解析点），随后由调用方对每个目录内的固定文件名逐个 ``capture``。
+        """
+        if root_id not in self.roots:
+            raise SnapshotError(f"未声明的根：{root_id!r}")
+        rel = "" if not str(relative).strip() else _validate_relative(relative)
+        directory = Path(self.roots[root_id]) / rel
+        if not directory.is_dir():
+            self.listings[f"{root_id}:{rel}"] = ("dirs", ())
+            return []
+        assert_trusted_dir(directory, root=self.roots[root_id])
+        names = sorted(
+            entry.name for entry in directory.iterdir() if entry.is_dir() and not _reparse_point(entry)
+        )
+        self.listings[f"{root_id}:{rel}"] = ("dirs", tuple(names))
+        return names
 
     def read_bytes(self, root_id: str, relative: str) -> bytes | None:
         """读副本字节（不触碰原根）；未捕获或缺失返回 None。
@@ -335,7 +360,19 @@ class StableSnapshot:
                 drift.append(f"{key}: 读取期间由缺失变为存在")
         for key, (suffix, names) in sorted(self.listings.items()):
             root_id, relative = key.split(":", 1)
-            live = _list_live(Path(self.roots[root_id]), relative, suffix=suffix)
+            if suffix == "dirs":
+                directory = Path(self.roots[root_id]) / relative
+                live = (
+                    sorted(
+                        entry.name
+                        for entry in directory.iterdir()
+                        if entry.is_dir() and not _reparse_point(entry)
+                    )
+                    if directory.is_dir()
+                    else []
+                )
+            else:
+                live = _list_live(Path(self.roots[root_id]), relative, suffix=suffix)
             if tuple(live) != names:
                 drift.append(f"{key}: 目录内容变化 {len(names)}→{len(live)} 项")
         return drift

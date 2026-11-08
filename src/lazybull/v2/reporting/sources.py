@@ -43,9 +43,17 @@ _METRIC_KEYS = ("total_return", "cagr", "max_drawdown", "volatility", "sharpe")
 
 
 def verify_chain_rows(
-    chain_df: pd.DataFrame | None, *, expected_splits: int | None = None
+    chain_df: pd.DataFrame | None,
+    *,
+    expected_splits: int | None = None,
+    allow_ordinal_date: bool = False,
 ) -> dict[str, Any]:
-    """链式净值全行有效性门 + 唯一实现指标计算（坏行整臂拒绝）。"""
+    """链式净值全行有效性门 + 唯一实现指标计算（坏行整臂拒绝）。
+
+    ``allow_ordinal_date=True`` 用于旧 WF 产物：其 ``chain_nav_*.csv`` 的 ``date`` 是
+    **折内序号**（整数）而非自然日，此时按“序数单调 + 折内唯一”校验；真实日期仍走
+    ``normalize_date`` 优先解析。T1 驾驶舱不传该开关（保持严格日期口径）。
+    """
     if chain_df is None:
         return status.make_status(
             "not_available", reason_code="chain_source_missing", detail="缺 chain_nav 来源"
@@ -60,7 +68,7 @@ def verify_chain_rows(
             "not_available", reason_code="chain_rows_empty", detail="chain_nav 无数据行"
         )
     rows = chain_df.to_dict("records")
-    parsed, failure = _parse_chain_rows(rows)
+    parsed, failure = _parse_chain_rows(rows, allow_ordinal_date=allow_ordinal_date)
     if failure is not None:
         return failure
     days, navs, splits = parsed
@@ -86,6 +94,8 @@ def verify_chain_rows(
 
 def _parse_chain_rows(
     rows: Sequence[Mapping[str, Any]],
+    *,
+    allow_ordinal_date: bool = False,
 ) -> tuple[tuple[list[str], list[float], list[int]], dict[str, Any] | None]:
     """逐行校验并解析为 ``(days, navs, splits)``；任一坏行返回 ``(空, 失败状态行)``。"""
     days: list[str] = []
@@ -93,12 +103,15 @@ def _parse_chain_rows(
     splits: list[int] = []
     last_by_split: dict[int, str] = {}
     for index, row in enumerate(rows):
-        day = normalize_date(row.get("date"))
+        raw_date = row.get("date")
+        day = normalize_date(raw_date)
+        if day is None and allow_ordinal_date:
+            day = _ordinal_date(raw_date)
         if day is None:
             return ([], [], []), status.make_status(
                 "invalid",
                 reason_code="chain_rows_unparsable",
-                detail=f"第 {index} 行 date={row.get('date')!r} 不可解析",
+                detail=f"第 {index} 行 date={raw_date!r} 不可解析",
             )
         try:
             nav = float(row.get("nav"))
@@ -116,7 +129,13 @@ def _parse_chain_rows(
             )
         split = _split_index(row, default=1)
         previous = last_by_split.get(split)
-        if previous is not None and day <= previous:
+        if previous is not None and day == previous:
+            return ([], [], []), status.make_status(
+                "invalid",
+                reason_code="duplicate_chain_date",
+                detail=f"折 {split} 内同日重复行：{previous}",
+            )
+        if previous is not None and day < previous:
             return ([], [], []), status.make_status(
                 "invalid",
                 reason_code="date_regression",
@@ -127,6 +146,19 @@ def _parse_chain_rows(
         navs.append(nav)
         splits.append(split)
     return (days, navs, splits), None
+
+
+def _ordinal_date(value: Any) -> str | None:
+    """折内序号 → 可比较的定长字符串（旧 WF ``date`` 为整数序号时使用）。"""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return f"#{number:09d}"
 
 
 def _judge_chain_metrics(
