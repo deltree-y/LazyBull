@@ -3,7 +3,7 @@
 > **单文件制（F6 起生效，2026-10-01）**：原「plans/ 草案 + contracts/ 契约」双轨合并，本文件为**唯一载体**；
 > 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
 > （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
-> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F12（2026-10-28 用户批准生效，P4 T2 评审处置：`PaperHost.run_t1` fills 语义勘误 + 签名改 `Optional[Sequence[Fill]] = None`；引擎真实行情记账为权威，fills 仅作提交前核对）**。代码实现以本文档为唯一接口依据。
+> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F13（2026-11-09 P6.5 T0.5 闭合：`net_across_sleeves` 多袖上下文与物理全量目标、多袖目标/配额校验、三恒等式口径；F12 的 `PaperHost.run_t1` 语义继续有效）**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
 |---|---|---|---|---|
@@ -18,14 +18,15 @@
 | F9（= v0.9） | 2026-10-16 | 本文件单文件制修订（P2b 单袖直通过渡口径） | **生效**（2026-10-16：两位专家评审通过（reviewer1/reviewer2）+ 用户确认同提交落档；随方案 F12 同批） | §3.4 `PortfolioMerger.merge` 的「Σ袖子目标权重 = 1.0（合并前各自归一）」明确为**上游前置条件**：P2b 单袖直通不重复运行时校验、不新增判定分支，亦不授权新输入生产者绕过归一化；多袖期是否运行时校验、容差与失败模式随 P6.5 另行预登记，不在本版预判。`net_across_sleeves` 同期仅支持 S6 单袖指令原样透传，混合 `source_sleeve` fail-fast；反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。`TargetPortfolio.target_weights` 注释同步指向上游不变量；`src/lazybull/v2/common/{protocols/core.py,types.py}` 同批同步，**公开签名不变** |
 | F10（= v0.10） | 2026-10-20 | 本文件单文件制修订（P3 T0.5a 契约修订包，随方案 F14 同批；Q8-①③ 2026-10-20 用户批准） | **生效**（2026-10-20 用户确认；开工硬门 #6 两轮评审处置闭合，随方案 F14 同批） | ① §2.2 训练协议：`ModelConfig` 增可选字段 `label_spec` / `feature_recipe` / `split_spec` / `domain`（版本号 + 规范化序列化 + 入模型 metadata 与配置指纹；默认 None/空映射、frozen、canonical JSON、映射不可变）；**`model_family` 语义不变 = 家族目录名（选股 = `stock_selection`），算法名由 `hyperparams.algorithm` 承载**；`val_window_months` 改可选（比例模式置 None）；`train_fold` 注记显式四日期由编排器按现役规则换算、train 侧不得二次比例切分；训练统计（train_samples/best_iteration/val_*）从注册表 metadata 读取、`train_fold` 返回签名不变；`WalkForwardOrchestrator.run` 增编排参数（`test_window_months` / `selected_split_indices` / `skip_training` / `start_model_version` / `skip_training_eval` / `deploy_train`）；② 产物边界注记（Q3-C）：WF 编排产物保持现格式与路径、回测批次落 runs/，经 wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 四键关联，验收含「从 wf_run_id 定位完整批次证据」；③ §7 依赖表注记：train 依赖不含 sleeves / universe（规格与域解析由薄入口/宿主注入） |
 | F11（= v0.11） | 2026-10-22 | 本文件单文件制修订（P3 T4 评审处置包：reviewer2 R2-T4-01 P1 + reviewer1 P3-9；实施规划 §18.11） | **生效**（2026-10-23 用户批准；reviewer1 复核一通过 + reviewer2 复核一确认草案内容可接受；随 P3 T5 收口提交落档） | §6 补过渡注记：P3 期 `v2/sleeves/_registry.py` 为 **SleeveSpec 注册表**（`get_sleeve_spec` / `list_sleeve_ids`，注册条目 = 规格对象而非信号类），**不是** §6 `SleeveRegistry` 协议的代码化；差异理由 = 信号实现 P3 期维持 `v2/core/signal/` 单处（P3 实施规划 §1.1-4）且 sleeves → core import 违反 §7 依赖方向，现行 `register/get/list_all` + `signal_class: type[Signal]` 签名本期无可实现形态（MLSignal 未实现协议 Signal）；`SleeveRegistry` 协议代码化兑现节点 = 信号实现迁入 sleeves 的阶段（**P4/P5 袖子信号迁移评审**，到期表登记随方案 F15 同批）；过渡期 spec 注册表为**唯一袖子入口**，hosts/薄入口经规格对象 + `signal_impl` 限定名字符串解析装配信号；**禁止以接口别名将 spec 与 signal_class 两种返回语义视为等价** |
+| F13（= v0.13） | 2026-11-09 | P6.5 T0.5 用户 Q1~Q25 裁决 + 契约评审 C65-01/02 处置及复核 1 通过；设计 `docs/plans/v2/p65_merger_reconciliation_design_20261108.md` §17/§18 | **生效**（2026-11-09 用户确认 T0.5 闭合） | ① `net_across_sleeves` 增加可选 `virtual_accounts`；多袖物理输出按全账户虚拟持仓基数恢复 `物理目标=Σ当前虚拟+Σ增量`，多袖缺上下文不得走S6；② 配额与每袖目标权重运行时校验：有限/非负/ID一致/`math.fsum` 容差 `n×2^-52`，不重归一化；③ `Ledger` 三恒等式补充 P6.5 容差与来源 lot/直接 NAV；④ 零物理成交内部结算由具体虚拟账本实现；⑤ 订单级全链为 P6.5 证据义务 |
 | F12（= v0.12） | 2026-10-28 | P4 T2 评审处置 + 用户裁决（实施规划 §18.10/§18.11） | **生效**（2026-10-28 用户批准；登记即生效，沿 F7 勘误先例） | §3.2/§4 `PaperHost.run_t1` 语义勘误：纸面由引擎按真实行情记账为权威，`fills` 非空仅作提交前核对（不一致零副作用拒绝，可修正重试），人工回填直接驱动入账归 live 阶段；代码协议签名同步为 `fills: Optional[Sequence[Fill]] = None` |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义）
 
-> 版本：v0.12（2026-10-28 用户批准生效；P4 T2 评审处置）
-> 状态：**已生效**（F12：`PaperHost.run_t1` fills 语义勘误 + Optional 签名；用户裁决引擎真实行情记账为权威，登记即生效）
+> 版本：v0.13（2026-11-09 P6.5 T0.5 闭合）
+> 状态：**已生效**（F13：多袖净额上下文、物理全量目标、目标/配额校验、三恒等式口径；F12 fills 语义继续有效）
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
 > **设计方法论（R4 教训）**：先枚举现实引擎语义（R1 侦察事实），再让类型覆盖它——禁止先定义理想类型再让引擎适应类型
@@ -48,6 +49,7 @@
 | v0.8 | 2026-10-06 | P2a T0 勘误包：止盈无在用对照物改退役机制描述 / 估值回退 4→5 处 / 每日钩子括注按代码实测；Kelly 包装合并兑现节点与 §11 快速复核登记 | 兼容（勘误与注记；无签名破坏） |
 | v0.9 | 2026-10-16 | P2b 单袖直通：Σ=1 明确为上游前置条件且直通期不重复运行时校验；S6 单袖透传，混合袖 fail-fast；多袖校验与净额化仍归 P6.5 | 兼容（过渡语义澄清；公开签名不变） |
 | v0.12 | 2026-10-28 | P4 T2：`PaperHost.run_t1` fills 语义勘误为引擎行情记账权威 + 提交前核对；签名改 `Optional[Sequence[Fill]] = None` | 兼容（既有调用可省略 fills；语义按用户裁决澄清） |
+| v0.13 | 2026-11-09 | P6.5 T0.5：`net_across_sleeves` 增加可选 `virtual_accounts` 并恢复物理全量目标；多袖目标/配额运行时校验；P6.5 三恒等式口径；订单级全链义务 | 破坏性接口能力扩展（增加可选参数；未传时仅真正单袖保持旧调用，多袖必须传入） |
 
 ---
 
@@ -60,7 +62,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Protocol, Sequence, Mapping, Any
+from typing import Protocol, Sequence, Mapping, Any, Optional
 import pandas as pd
 
 # ========== 基础值对象 ==========
@@ -689,8 +691,12 @@ class Ledger(Protocol):
     def apply_fills(self, fills: Sequence[Fill]) -> None:
         """应用成交到物理 + 虚拟账本（分摊规则由本层注册的确定性算法决定）
 
-        副作用：更新账本状态
-        校验：三恒等式（Σ袖子虚拟{现金, 持仓股数, NAV} ≡ 物理账本），破则 RuntimeError
+        副作用：更新账本状态。
+        校验（F13 草案）：I1 现金容差 ≤1e-6 且无借用时逐袖 borrowed_credit==0；
+        I2 按 `(ts_code, 物理来源 lot_id)` 汇总整数股数精确为零差；
+        I3 直接贡献 NAV 容差 ≤1e-6（分母统一为物理初始资金）；任一破缺 RuntimeError。
+        零物理成交的内部转账：P6.5 暂由具体虚拟账本提供内部结算入口，公开 Ledger
+        不扩口；该协议缺口登记至 P7 接线前清偿（Q16=B / Q21=A 到期表）。
         """
         ...
 
@@ -760,6 +766,13 @@ class PortfolioMerger(Protocol):
     """组合合并器（多袖目标 → 单一目标表）
 
     单袖退化 = 直通（MVP 形态；P2b 默认关接入，P6.5 虚拟子袖对账验收）。
+    F13 草案（Q15=A / C65-02）：多袖实现的组合配额由构造期不可变配置注入。
+    配额单位为 [0,1] 无量纲比例，键集必须与配置袖 ID 完全一致、有限且非负；
+    用 math.fsum 求和后按 `n × 2^-52`（n=袖数，float64 单位舍入的保守上界）
+    校验总和为 1。配额仅约束目标合成，不得作为费用分摊比例传到账本。
+    多袖 merge 对每个 TargetPortfolio.target_weights 做同样校验（有限、非负、
+    math.fsum 接近 1），通过后保持权重对象、顺序和位模式不变，禁止再次归一化。
+    违反者抛 ValueError 且零副作用。旧单袖直通/冻结回归边不反向增加检查。
     """
 
     def merge(
@@ -779,20 +792,47 @@ class PortfolioMerger(Protocol):
 
         F9 过渡说明：P2b 单袖直通依据该前置条件，不重复执行运行时求和校验、
         不重归一、不排序或新增权重判定分支（对齐净额化冻结 A1）；例外不授权
-        新输入生产者绕过归一化。多袖期是否运行时校验、容差与失败模式随 P6.5
-        另行预登记，不在本版预判。
+        新输入生产者绕过归一化。
+        F13 多袖规则（C65-02）：targets 的键集必须与构造期配置袖 ID 完全一致；
+        每个袖目标权重必须有限、非负，用 math.fsum 求和后以 `n × 2^-52` 容差
+        校验为 1；通过后不得重归一化或改写顺序/位模式。多袖实现同时校验
+        构造期配额（单位 [0,1]、有限非负、ID 集一致、总和同容差）。
+        非法输入抛 ValueError 且零副作用；旧单袖直通/冻结回归边不执行新增校验。
         """
         ...
 
     def net_across_sleeves(
         self,
         orders: Sequence[Order],
+        virtual_accounts: Optional[Mapping[str, VirtualAccount]] = None,
     ) -> Sequence[Order]:
-        """跨袖净额化（同股买卖抵消）
+        """跨袖净额化（同股买卖抵消；F13 草案 / Q11=A）
 
-        F9 过渡范围：P2b 仅支持状态机 S6——空指令序列或全部指令属于同一
-        source_sleeve 时原样透传；混合 source_sleeve 必须 fail-fast。
-        反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。
+        参数：
+        - orders：各袖目标指令；`Order.target_shares` 是目标持仓，不是增量。
+        - virtual_accounts：袖 ID → 当前虚拟账户，必须覆盖构造期配置的全部袖。
+          多袖实现必须提供；用 `target_shares − 当前虚拟持仓` 解析各袖增量。
+          不提供时仅**构造期已确认只有一个袖**的旧实现可按 S6 直通；多袖实现
+          缺上下文即使本批只有一袖发单也必须拒绝，不能静默套 S6。
+
+        物理输出语义（C65-01）：
+        - 返回的 Order.target_shares 是**物理账户全量目标**，不是单袖目标。
+        - 对每只股票：物理目标 = Σ_所有配置袖当前虚拟持仓 + Σ_本批各袖增量。
+          本批未发单的袖仍以当前虚拟持仓计入基数。
+        - 不得把发单袖的 target_shares 原样作为物理目标；例如 A 持 400 不发单、
+          B 持 100 且目标 300 ⇒ 物理目标 700，不是 300 或 500。
+        - 若全账户物理目标等于当前物理持仓且净增量为 0，则只做虚拟内部转账，
+          不产生市场订单。
+        - 输出订单的袖归属/分摊事实由内部结算批次携带，不能仅靠聚合后的
+          `source_sleeve` 反推。
+        - 多袖实现中，ID 缺失/多余、重复袖股票订单、非有限目标、缺少上下文均抛
+          ValueError，且零副作用/零执行；真正单袖的旧调用仍按上述 S6 例外执行。
+
+        多袖范围（P6.5）：S1 等量反向、S4 同向买入；S6 仅限真正单袖账户。
+        S2/S3/S5/S7 未支持组合显式拒绝。零换手走内部转账，同向费用由账本按
+        F25 公式分摊，禁止调用点传入比例。
+        订单级真实接线（Q21=A）：合成宿主必须由净额结果继续驱动执行、物理入账
+        与虚拟投影，不以成交后证据投影替代。
 
         构造性对账三件套：
         ① A 卖 X + B 买 X ⇒ 净额零换手
