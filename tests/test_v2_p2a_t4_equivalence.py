@@ -81,10 +81,10 @@ _P4_T1_ADDED_ATTRS = [
 def synthetic_cost_settings(monkeypatch):
     """合成成本配置（R2-T4-01 处置，范式同 T1 ``synthetic_cost_settings``）。
 
-    新旧 ``CostModel`` 构造器即使四参全显式传入，也会**无条件**调用
-    ``get_cost_settings()`` 读取共享配置单例——显式传参不等于隔离配置访问。
-    本 fixture 把新旧两侧成本模块各自绑定的 ``get_cost_settings`` 打为同一
-    合成读取函数，pytest 结束自动恢复；返回读取计数供反例断言。"""
+    P6.5 T5 起，四项费率全显式时新旧 ``CostModel`` **不再读取**默认配置；
+    任一缺省仍沿用原语义读取共享配置单例。本 fixture 把两侧
+    ``get_cost_settings`` 打为同一合成读取函数，既保证缺省分支不触真实配置，
+    也返回读取计数供断言：全显式构造必须为 0 次。"""
     settings = {
         "commission_rate": 0.0003,
         "min_commission": 5.0,
@@ -818,8 +818,8 @@ def _assert_engine_state_equal(old_engine, new_engine) -> None:
 def test_init_engine_state_default_equivalence(synthetic_cost_settings):
     """默认参数：属性集（减 exposure 摘除集）与逐值一致。"""
     _assert_engine_state_equal(_make_old_engine(), _make_new_engine())
-    # 锚定（R2-T4-01）：成本构造确实经由合成 stub（无条件默认读取被替换）
-    assert len(synthetic_cost_settings["reads"]) >= 2
+    # 锚定（P6.5 T5-Codex-C5）：四项费率全显式 ⇒ 新旧两侧均不得读取默认配置
+    assert synthetic_cost_settings["reads"] == []
 
 
 def test_init_engine_state_non_default_equivalence(synthetic_cost_settings):
