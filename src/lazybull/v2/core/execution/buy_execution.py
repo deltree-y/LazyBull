@@ -47,6 +47,7 @@ from src.lazybull.v2.core.decision.buy_plan import (
 from src.lazybull.v2.core.decision.sizing import (
     compute_lot_shares,
     compute_min_buy_value_threshold,
+    size_add_shares,
 )
 from src.lazybull.v2.core.execution.completion import (  # noqa: F401 - 兼容旧导入
     _build_completion_stocks_to_try,
@@ -54,6 +55,7 @@ from src.lazybull.v2.core.execution.completion import (  # noqa: F401 - 兼容�
     _completion_buy_loop,
     _record_completion_skip_for_slot,
 )
+from src.lazybull.v2.core.execution.fill_observer import apply_booking_entries
 
 
 def _pop_pending_signal(
@@ -133,8 +135,14 @@ def _parse_pending_signal_data(engine, signal_data: Dict) -> Dict:
         "instruction_shares": {
             str(code): int(shares) for code, shares in instruction_shares.items()
         },
-        "instruction_reason": signal_data.get("instruction_reason") if isinstance(signal_data, dict) else None,
-        "completion_meta": signal_data.get("completion_meta") or {} if isinstance(signal_data, dict) else {},
+        "instruction_reason": (
+            signal_data.get("instruction_reason") if isinstance(signal_data, dict) else None
+        ),
+        "completion_meta": (
+            (signal_data.get("completion_meta") or {})
+            if isinstance(signal_data, dict)
+            else {}
+        ),
         "tranche_tag": tranche_tag,
     }
 
@@ -1010,7 +1018,7 @@ class BacktestBuyExecutionMixin:
             "price": trade_price,  # 成交价格
             "shares": shares, "amount": amount, "cost": cost,
         }
-        self.ledger.apply_fills(
+        apply_booking_entries(
             self,
             [
                 BookingEntry(
@@ -1061,22 +1069,15 @@ class BacktestBuyExecutionMixin:
         if trade_price is None:
             return 0.0
 
-        shares = compute_lot_shares(target_value, trade_price)
-        if shares == 0:
+        sized = size_add_shares(
+            target_value=target_value,
+            trade_price=trade_price,
+            capital=self.current_capital,
+            cost_model=self.cost_model,
+        )
+        if sized is None:
             return 0.0
-
-        amount = shares * trade_price
-        cost = self.cost_model.calculate_buy_cost(amount)
-        total_cost_cash = amount + cost
-        if total_cost_cash > self.current_capital:
-            if self.current_capital <= cost:
-                return 0.0
-            shares = compute_lot_shares(self.current_capital - cost, trade_price)
-            if shares == 0:
-                return 0.0
-            amount = shares * trade_price
-            cost = self.cost_model.calculate_buy_cost(amount)
-            total_cost_cash = amount + cost
+        shares, amount, cost, total_cost_cash = sized
 
         position = self.positions[stock]
         # P4-T1（D2）：入账唯一入口 = Ledger.apply_fills——加仓股数/成本增量
@@ -1087,7 +1088,7 @@ class BacktestBuyExecutionMixin:
             "buy_type": buy_type, "buy_reason": buy_reason,
             "buy_date": position.get("buy_date"),
         }
-        self.ledger.apply_fills(
+        apply_booking_entries(
             self,
             [
                 BookingEntry(

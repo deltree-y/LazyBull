@@ -13,9 +13,13 @@ D8 提取式拆分（T3 落位时执行）：旧 ``compute_kelly_weights`` 圈�
 1σ² 构建 / 半 Kelly 混合 / 杠杆上限迭代），公开签名、数值操作顺序、
 默认值逐字保留；等价性由 ``tests/test_v2_p2a_t3_equivalence.py``
 新旧逐值断言锁定（Kelly 数值 fixture）。
+
+T3 追加（P6.5）：``size_add_shares`` —— 既有持仓加仓的定仓/缩量/费用实现，
+由 ``buy_execution._add_to_position`` 与订单级全链预演共用；旧模块无对应函数，
+故不影响既有等价断言（新增函数不改动任何既有函数的行为与签名）。
 """
 
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -32,6 +36,41 @@ def compute_lot_shares(
     if budget <= 0 or price <= 0 or lot_size <= 0:
         return 0
     return int(budget / price / lot_size) * lot_size
+
+
+def size_add_shares(
+    *,
+    target_value: float,
+    trade_price: float,
+    capital: float,
+    cost_model: Any,
+) -> Optional[Tuple[int, float, float, float]]:
+    """既有持仓加仓的整手股数与费用（回测/纸面加仓共用；**仅 v2 追加**）。
+
+    与 ``compute_lot_shares`` 的差异只有资金缩量顺序：先按目标金额取整手，若
+    含费支出超过可用现金则按 ``可用现金 − 费用`` 再取整手并重算费用；顺序与
+    ``buy_execution._add_to_position`` 原内联实现逐字一致（T3 订单级全链在执行
+    前用同一实现预演成交，禁止在宿主侧另写一套定仓规则）。
+
+    Returns:
+        ``(shares, amount, cost, total_cost_cash)``；不足一手或资金不足返回 None。
+    """
+    shares = compute_lot_shares(target_value, trade_price)
+    if shares == 0:
+        return None
+    amount = shares * trade_price
+    cost = cost_model.calculate_buy_cost(amount)
+    total_cost_cash = amount + cost
+    if total_cost_cash > capital:
+        if capital <= cost:
+            return None
+        shares = compute_lot_shares(capital - cost, trade_price)
+        if shares == 0:
+            return None
+        amount = shares * trade_price
+        cost = cost_model.calculate_buy_cost(amount)
+        total_cost_cash = amount + cost
+    return shares, amount, cost, total_cost_cash
 
 
 def estimate_variance_from_prices(prices: np.ndarray) -> Optional[float]:
