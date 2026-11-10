@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.56] - 2026-11-10
+
+### Changed（P6.5 阶段出口收口登记，零代码改动）
+
+P6.5 合并器对账（虚拟子袖 + 三恒等式 + 三件套）出口经用户裁决**通过**（2026-11-10），
+本版本只做治理登记：新增出口报告 `docs/reports/p65_exit_20261110.md`，并把
+`CLAUDE.md` / `AGENTS.md` 的 P6.5 状态从"出口未验收"改为"出口已通过"，同时登记
+下一步 = P7（启动需另行设计评审与预算核定）。
+
+- 六件单元（T0.5 + T1~T5）全部闭合；T5 评审链 = 内部双专家 4 轮双 PASS + 外部专家 Codex
+  首轮 / 复审 1 / 复核 2 三轮整改后**复核 3 通过**，无遗留 P1/P2。
+- 终审代码面收口验证：定向 537 passed → **全量 5947 passed / 0 failed**（36:45）；
+  复杂度双口径 exit=0、新增硬超限 0；flake8 exit=0；正式证据根
+  `data/frozen_reference/v2_p65/v2p65_t5_20261110_7d3ce51f/`（53 文件，
+  `evidence_complete=true`、`pytest_full=RUN`）。
+- **边界不变**：不宣称 B 区转正、生产多袖能力或前向/日历验证通过；S5 卖出仍归 P7；
+  生产默认链路（回测 runtime / `PaperHost` / 纸面入口）零改动。
+
 ## [0.209.55] - 2026-11-10
 
 ### Added（P6.5 T5 独立同代状态信封与恢复语义）
