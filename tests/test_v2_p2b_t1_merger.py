@@ -33,9 +33,8 @@ import ast
 import inspect
 import math
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, get_type_hints
+from typing import Dict, Mapping, Optional, get_type_hints
 
-import pandas as pd
 import pytest
 
 from src.lazybull.v2.common.protocols.core import PortfolioMerger
@@ -50,6 +49,7 @@ from src.lazybull.v2.common.types import (
     TargetPortfolio,
     TradeDate,
     TSCode,
+    VirtualAccount,
     Weight,
 )
 from src.lazybull.v2.core.decision import portfolio_merger as merger_mod
@@ -309,6 +309,44 @@ def test_net_single_sleeve_multi_orders_identity():
 def test_net_mixed_sleeves_rejected():
     """S6 边界：混合 source_sleeve（反向/同向/自拆）均 fail-fast。"""
     _assert_mixed_sleeves_rejected(SingleSleevePortfolioMerger())
+
+
+def _vaccount(sleeve_id: str) -> VirtualAccount:
+    """合成虚拟账户（只需 sleeve_id 参与 S6 上下文校验）。"""
+    return VirtualAccount(
+        sleeve_id=sleeve_id,
+        cash=Money(0.0),
+        positions={},
+        total_value=Money(0.0),
+    )
+
+
+def test_net_single_sleeve_accepts_matching_virtual_context():
+    """F13：真正单袖账户带同键上下文时仍按 S6 原样透传（对象身份不变）。"""
+    merger = SingleSleevePortfolioMerger()
+    orders = [_order("600000.SH", OrderSide.BUY, "value")]
+    assert merger.net_across_sleeves(orders, {"value": _vaccount("value")}) is orders
+    assert merger.net_call_count == 1
+
+
+def test_net_rejects_multi_sleeve_virtual_context():
+    """F13：单袖实现收到多袖上下文必须 fail-fast，禁止静默套 S6。"""
+    merger = SingleSleevePortfolioMerger()
+    orders = [_order("600000.SH", OrderSide.BUY, "value")]
+    with pytest.raises(ValueError, match="多袖虚拟账户"):
+        merger.net_across_sleeves(
+            orders, {"value": _vaccount("value"), "growth": _vaccount("growth")}
+        )
+    assert merger.net_call_count == 0
+
+
+def test_net_rejects_context_sleeve_mismatch():
+    """F13：上下文袖与指令 source_sleeve 不一致必须 fail-fast。"""
+    merger = SingleSleevePortfolioMerger()
+    orders = [_order("600000.SH", OrderSide.BUY, "value")]
+    with pytest.raises(ValueError, match="袖不一致"):
+        merger.net_across_sleeves(orders, {"growth": _vaccount("growth")})
+    assert merger.net_call_count == 0
 
 
 # ══════════════════ D. 协议结构兼容与过渡端口锁定 ══════════════════

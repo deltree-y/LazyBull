@@ -30,9 +30,9 @@ P4-T3：旧 ``LegacyTargetMergePort``、dict 适配器、merge_port 与 bypass �
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
-from src.lazybull.v2.common.types import Account, Order, TargetPortfolio
+from src.lazybull.v2.common.types import Account, Order, TargetPortfolio, VirtualAccount
 
 # 阶段信息（fail-fast 错误消息统一携带）：P2b 单袖直通过渡期
 _STAGE = "P2b"
@@ -83,18 +83,47 @@ class SingleSleevePortfolioMerger:
     def net_across_sleeves(
         self,
         orders: Sequence[Order],
+        virtual_accounts: Optional[Mapping[str, VirtualAccount]] = None,
     ) -> Sequence[Order]:
-        """跨袖净额化的 S6 单袖子集（本期唯一覆盖状态）。
+        """跨袖净额化的 S6 单袖子集（本实现唯一覆盖状态）。
 
         空指令序列或全部指令属于同一 ``source_sleeve`` 时，返回原序列及原指令
         对象；混合 ``source_sleeve``（反向/同向/自拆）显式 fail-fast。
+
+        ``virtual_accounts``（F13 / Q11=A）在本实现中**不参与净额计算**：本类按
+        构造即单袖（只接受单目标直通），没有袖配置可校验；但一旦收到多袖上下文，
+        说明调用方把多袖账户交给了错误的实现，必须 fail-fast，禁止静默旧语义。
+        多袖净额（S1/S4）由 P6.5 ``virtual_merger.MultiSleevePortfolioMerger`` 承担。
+
+        口径登记（B-R4-03）：F13 明文豁免"旧单袖直通/冻结回归边不反向增加新校验"，
+        因此本类**不校验上下文值的类型**（只校验键集与袖名一致）；多袖实现则要求
+        值为 ``sleeve_id`` 一致的 ``VirtualAccount``。两者差异属已登记的契约豁免，
+        不是实现漂移。
         """
         sleeves = {order.source_sleeve for order in orders}
         if len(sleeves) > 1:
             raise ValueError(
                 f"单袖直通合并器拒绝混合袖指令（阶段={_STAGE}）：net_across_sleeves "
                 f"收到 source_sleeve 集合={sorted(sleeves)}；跨袖净额化 S1~S5/S7 "
-                "（反向抵消/同向分摊/自拆）归 P6.5"
+                "（反向抵消/同向分摊/自拆）归 P6.5 多袖实现"
             )
+        if virtual_accounts is not None:
+            if not isinstance(virtual_accounts, Mapping) or len(virtual_accounts) != 1:
+                keys = (
+                    sorted(virtual_accounts)
+                    if isinstance(virtual_accounts, Mapping)
+                    else type(virtual_accounts).__name__
+                )
+                raise ValueError(
+                    f"单袖直通合并器拒绝多袖虚拟账户上下文（阶段={_STAGE}）："
+                    f"virtual_accounts={keys}，指令袖集合={sorted(sleeves)}；"
+                    "S6 只允许真正单袖账户，多袖账户必须走 P6.5 多袖净额实现"
+                )
+            (context_sleeve,) = tuple(virtual_accounts)
+            if sleeves and sleeves != {context_sleeve}:
+                raise ValueError(
+                    f"单袖直通合并器拒绝袖不一致上下文（阶段={_STAGE}）：虚拟账户袖="
+                    f"{context_sleeve!r}，指令 source_sleeve 集合={sorted(sleeves)}"
+                )
         self.net_call_count += 1
         return orders

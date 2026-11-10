@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 import pandas as pd
 
@@ -217,22 +217,43 @@ class PortfolioMerger(Protocol):
         幂等：是
         上游前置条件：Σ袖子目标权重 = 1.0（合并前各自归一）。
 
-        F9 过渡说明：P2b 单袖直通依据该前置条件，不重复执行运行时求和校验、
-        不重归一、不排序或新增权重判定分支（对齐净额化冻结 A1）；例外不授权
-        新输入生产者绕过归一化。多袖期是否运行时校验、容差与失败模式随 P6.5
-        另行预登记，不在本版预判。
+        F9 过渡说明（旧单袖直通）：P2b 单袖直通依据该前置条件，不重复执行运行时
+        求和校验、不重归一、不排序或新增权重判定分支（对齐净额化冻结 A1）；
+        例外不授权新输入生产者绕过归一化。
+
+        F13 多袖条款（2026-11-09 生效，C65-02；本实现按此校验）：
+        - 构造期配额单位为 ``[0,1]`` 无量纲比例，键集必须与配置袖 ID 完全一致、
+          有限且非负，用 ``math.fsum`` 求和后按 ``n×2^-52``（n=袖数）校验为 1；
+        - 每袖 ``TargetPortfolio.target_weights`` 同样要求有限、非负，``fsum``
+          以同一容差为 1；通过后各袖原权重对象/顺序/位模式不变，**禁止再次归一化**；
+        - 配额参与目标合成（``w_merged(x)=Σ_i quota_i×w_i(x)``），但**不得**作为
+          费用分摊比例传给账本；合并结果仍须满足 ``TargetPortfolio`` 的 Σ=1；
+        - 空映射、非有限值、负值、ID 缺失/多余、总和越界一律 ``ValueError`` 且
+          零副作用；旧单袖直通/冻结回归边不反向增加这些检查。
         """
         ...
 
     def net_across_sleeves(
         self,
         orders: Sequence[Order],
+        virtual_accounts: Optional[Mapping[str, VirtualAccount]] = None,
     ) -> Sequence[Order]:
-        """跨袖净额化（同股买卖抵消）。
+        """跨袖净额化（同股买卖抵消；F13 / Q11=A 多袖上下文）。
 
-        F9 过渡范围：P2b 仅支持状态机 S6——空指令序列或全部指令属于同一
-        source_sleeve 时原样透传；混合 source_sleeve 必须 fail-fast。
-        反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。
+        参数：
+        - orders：各袖目标指令；``Order.target_shares`` 是目标持仓，不是增量。
+        - virtual_accounts：袖 ID → 当前虚拟账户，必须覆盖构造期配置的全部袖。
+          多袖实现必须提供（缺上下文即使本批只有一袖发单也拒绝，不得静默套 S6）；
+          真正单袖的旧实现可按 S6 直通。
+
+        物理输出语义（C65-01）：返回的 ``target_shares`` 是**物理账户全量目标**
+        ——``Σ_所有袖当前虚拟持仓 + Σ_本批各袖增量``；本批未发单的袖仍以当前
+        虚拟持仓计入基数。净增量为 0 时只做虚拟内部转账、不产生市场指令。
+        分摊事实由内部结算批次携带，不得从聚合后的 ``source_sleeve`` 反推。
+
+        F9 过渡范围：P2b 单袖实现仅支持 S6（空序列/同袖指令原样透传，混合袖
+        fail-fast）；P6.5 T2 多袖实现覆盖 S1 等量反向与 S4 同向买入，S2/S3/S5/S7
+        显式拒绝。三恒等式与订单级真实接线分属 T1/T3。
 
         构造性对账三件套：
         ① A 卖 X + B 买 X ⇒ 净额零换手

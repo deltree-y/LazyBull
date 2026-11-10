@@ -307,6 +307,12 @@ class TestFullSignatureLock:
             (
                 _SELF,
                 ("orders", _POK, _EMPTY, Sequence[Order]),
+                (
+                    "virtual_accounts",
+                    _POK,
+                    None,
+                    Optional[Mapping[str, VirtualAccount]],
+                ),
             ),
             Sequence[Order],
         )
@@ -478,7 +484,11 @@ class _StubMerger:
     ) -> TargetPortfolio:
         raise NotImplementedError
 
-    def net_across_sleeves(self, orders: Sequence[Order]) -> Sequence[Order]:
+    def net_across_sleeves(
+        self,
+        orders: Sequence[Order],
+        virtual_accounts: Optional[Mapping[str, VirtualAccount]] = None,
+    ) -> Sequence[Order]:
         return []
 
 
