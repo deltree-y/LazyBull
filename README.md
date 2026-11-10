@@ -987,6 +987,22 @@ preflight 后使用；它只是向比对器显式声明门 1 已完成，**不�
 **边界：仍未切换生产链路**——多袖净额化、虚拟账本、三恒等式与订单级真实多袖接线
 归 P6.5；P4 只交付单袖原生边界，不宣称收益改善。
 
+**v2 合成多袖状态信封与同代恢复（P6.5 T5）：** `v2/core/accounting/state_envelope.py`
+提供**独立同代状态信封**（五项所有权：P4 基础 blob / 物理 lot 伴随视图 / 虚拟账 /
+结算与估值身份 / schema 与同代标记），`state_owners.py` 负责五项投影与还原，
+`envelope_store.py` 负责原子落盘与同代链（临时名 + 原子替换、禁止覆盖、崩溃现场隔离到
+`crashed/`）；`v2/hosts/recovery_runtime.py` 与 `recovery_cases.py` 提供可恢复运行时与
+五类恢复场景（多来源 lot / 中途提交点 / 恢复后再次内部转账 / 成交后水位 / 半提交代崩溃 /
+恒等式破缺终态），比较口径为 float64 位模式 + 整数股 + 键序（零容差）。信封**不改** P4
+`EngineState` 键集，且不进入生产默认路径：
+
+```bash
+# 恢复矩阵 + G5~G7 证据包（全量 pytest 未跑时包内标记为"复审态"，收口须传真实日志）
+python scripts/v2_p65/run_t5_acceptance.py \
+  --pytest-targeted logs/p65_t5_targeted.log \
+  --complexity logs/p65_t5_complexity_src_scripts.log
+```
+
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
 未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用

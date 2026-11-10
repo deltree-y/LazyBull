@@ -32,15 +32,22 @@ class CostModel:
             stamp_tax: 印花税（仅卖出）
             slippage: 滑点比率
         """
-        defaults = get_cost_settings()
+        explicit = (commission_rate, min_commission, stamp_tax, slippage)
+        # 四项全部显式给定 ⇒ **不触碰默认配置**（不建全局 Config、不读 configs/base.yaml）。
+        # 合成/验收路径据此可证明"零真实配置读取"（P6.5 T5-Codex-C5）；任一缺省时仍按
+        # 原语义从默认配置补齐，生产行为不变（与旧模块 ``common/cost.py`` 同源同义）。
+        if all(value is not None for value in explicit):
+            fallback: dict = {}
+        else:
+            fallback = get_cost_settings()
         self.commission_rate = (
-            commission_rate if commission_rate is not None else defaults["commission_rate"]
+            commission_rate if commission_rate is not None else fallback["commission_rate"]
         )
         self.min_commission = (
-            min_commission if min_commission is not None else defaults["min_commission"]
+            min_commission if min_commission is not None else fallback["min_commission"]
         )
-        self.stamp_tax = stamp_tax if stamp_tax is not None else defaults["stamp_tax"]
-        self.slippage = slippage if slippage is not None else defaults["slippage"]
+        self.stamp_tax = stamp_tax if stamp_tax is not None else fallback["stamp_tax"]
+        self.slippage = slippage if slippage is not None else fallback["slippage"]
 
     def calculate_commission(self, amount: float) -> float:
         """计算佣金

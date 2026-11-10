@@ -7,10 +7,10 @@ from .config import get_cost_settings
 
 class CostModel:
     """交易成本模型
-    
+
     包含佣金、印花税、滑点等成本计算
     """
-    
+
     def __init__(
         self,
         commission_rate: Optional[float] = None,
@@ -19,76 +19,83 @@ class CostModel:
         slippage: Optional[float] = None,
     ):
         """初始化成本模型
-        
+
         Args:
             commission_rate: 佣金费率（买卖双向）
             min_commission: 最小佣金（元）
             stamp_tax: 印花税（仅卖出）
             slippage: 滑点比率
         """
-        defaults = get_cost_settings()
+        explicit = (commission_rate, min_commission, stamp_tax, slippage)
+        # 四项全部显式给定 ⇒ **不触碰默认配置**（不建全局 Config、不读 configs/base.yaml）。
+        # 合成/验收路径据此可证明"零真实配置读取"（P6.5 T5-Codex-C5）；任一缺省时仍按
+        # 原语义从默认配置补齐，生产行为不变。
+        if all(value is not None for value in explicit):
+            fallback: dict = {}
+        else:
+            fallback = get_cost_settings()
         self.commission_rate = (
-            commission_rate if commission_rate is not None else defaults["commission_rate"]
+            commission_rate if commission_rate is not None else fallback["commission_rate"]
         )
         self.min_commission = (
-            min_commission if min_commission is not None else defaults["min_commission"]
+            min_commission if min_commission is not None else fallback["min_commission"]
         )
-        self.stamp_tax = stamp_tax if stamp_tax is not None else defaults["stamp_tax"]
-        self.slippage = slippage if slippage is not None else defaults["slippage"]
-    
+        self.stamp_tax = stamp_tax if stamp_tax is not None else fallback["stamp_tax"]
+        self.slippage = slippage if slippage is not None else fallback["slippage"]
+
     def calculate_commission(self, amount: float) -> float:
         """计算佣金
-        
+
         Args:
             amount: 交易金额
-            
+
         Returns:
             佣金金额
         """
         commission = amount * self.commission_rate
         return max(commission, self.min_commission)
-    
+
     def calculate_stamp_tax(self, amount: float) -> float:
         """计算印花税（仅卖出）
-        
+
         Args:
             amount: 交易金额
-            
+
         Returns:
             印花税金额
         """
         return amount * self.stamp_tax
-    
+
     def calculate_slippage(self, amount: float) -> float:
         """计算滑点成本
-        
+
         Args:
             amount: 交易金额
-            
+
         Returns:
             滑点成本
         """
         return amount * self.slippage
-    
+
     def calculate_buy_cost(self, amount: float) -> float:
         """计算买入总成本
-        
+
         Args:
             amount: 买入金额
-            
+
         Returns:
             总成本（佣金 + 滑点）
         """
         commission = self.calculate_commission(amount)
         slippage = self.calculate_slippage(amount)
         return commission + slippage
-    
+
     def calculate_sell_cost(self, amount: float) -> float:
         """计算卖出总成本
-        
+
         Args:
             amount: 卖出金额
-            
+
         Returns:
             总成本（佣金 + 印花税 + 滑点）
         """
@@ -96,14 +103,14 @@ class CostModel:
         stamp_tax = self.calculate_stamp_tax(amount)
         slippage = self.calculate_slippage(amount)
         return commission + stamp_tax + slippage
-    
+
     def calculate_total_cost(self, buy_amount: float, sell_amount: float) -> float:
         """计算买卖双向总成本
-        
+
         Args:
             buy_amount: 买入金额
             sell_amount: 卖出金额
-            
+
         Returns:
             总成本
         """

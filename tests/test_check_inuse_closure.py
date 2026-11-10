@@ -90,10 +90,10 @@ import check_inuse_closure as cic  # noqa: E402
 # 当日数据组装 + D4 量化就绪门、state_store 状态存储），均不在两条主链路
 # 闭包内 ⇒ 不在用 151→153、全仓 357→359；静态闭包与在用数不变
 # P4-T2 宿主核心（2026-10-27）新增 v2/hosts/paper 交付件 3 模块
-#（config_adapter 配置适配 / host 宿主核心 / factory 装配工厂），均不在两条
+# （config_adapter 配置适配 / host 宿主核心 / factory 装配工厂），均不在两条
 # 主链路闭包内 ⇒ 不在用 153→156、全仓 359→362；静态闭包与在用数不变
 # P4-T2 评审处置（2026-10-28）新增 v2/hosts/paper 交付件 2 模块
-#（instruction_projection 指令投影纯函数族 / recovery 半提交恢复 mixin——
+# （instruction_projection 指令投影纯函数族 / recovery 半提交恢复 mixin——
 # 复杂度门 1200 行硬上限拆分，行为不变），均不在两条主链路闭包内 ⇒
 # 不在用 156→158、全仓 362→364；静态闭包与在用数不变
 # P4-T2 复审处置（2026-10-28）新增 write_lock 写锁 mixin 1 模块（复杂度拆分），
@@ -118,7 +118,7 @@ import check_inuse_closure as cic  # noqa: E402
 # 底稿 tests/fixtures/inuse_closure_baseline_20261006.json 同步刷新（沿用既有约定）。
 # v0.209.10 补登（2026-11-05）：P6 T0.5 交付新增 v2/reporting 5 模块（包 __init__ +
 # contracts/deps/perf_gate/validation），仅被 scripts/v2_p6/* 验收入口与测试可达
-#（不属两条主链路三入口）⇒ 静态闭包与在用数不变、全仓 433→438、不在用 159→164。
+# （不属两条主链路三入口）⇒ 静态闭包与在用数不变、全仓 433→438、不在用 159→164。
 # 该棘轮在 T0.5 交付时漏登记（全量回归 2 failed 暴露），本次按实测补登；
 # 底稿同步刷新（沿用既有约定）。
 # v0.209.14（2026-11-05）：P6 T1 交付新增 v2/reporting 11 模块（status/snapshot/authority/
@@ -142,10 +142,39 @@ import check_inuse_closure as cic  # noqa: E402
 # trend_svg/trend_view），同样只经 `scripts/p6_report.py` 与 tests/p6_t4_env.py 可达
 # （不属两条主链路三入口）⇒ 静态闭包 270、在用 274 不变，全仓 467→477、不在用 193→203。
 # 底稿同步刷新（沿用既有约定）。
-INUSE_BASELINE = 274
-NOTIN_BASELINE = 203
-STATIC_BASELINE = 270
-ALL_MODULES_BASELINE = 477
+# v0.209.54（2026-11-09，P6.5 T1）：新增 v2/core/accounting 3 模块
+# （virtual_ledger / physical_lot_view / reconciliation）+ v2/hosts/virtual_native_engine
+# 1 模块，仅被 T1 测试与合成宿主可达（不属两条主链路三入口）
+# ⇒ 静态闭包 270、在用 274 不变，全仓 477→481、不在用 203→207。底稿同步刷新（沿用既有约定）。
+# v0.209.54（2026-11-09，P6.5 T2）：新增 v2/core/decision/virtual_merger、
+# v2/core/accounting/settlement_batch 与 settlement_kernel 3 模块，仅被 T2 测试与
+# 虚拟账本可达（生产默认合并器仍是单袖实现）⇒ 静态闭包 270、在用 274 不变，
+# 全仓 481→484、不在用 207→210。底稿同步刷新（沿用既有约定）。
+# v0.209.54（2026-11-09，P6.5 T3）：新增 v2/core/execution/fill_observer（被
+# buy_execution 导入的受控注入点，进回测/纸面主链路闭包）⇒ 静态闭包 270→271、
+# 在用 274→275；另新增 v2/hosts/order_chain（仅由 T3 合成宿主
+# virtual_native_engine 引用）与 v2/hosts/virtual_arm_runs（仅被 T3 单元测试可达，
+# 尚未接入宿主运行路径；自拆臂装配归 T4）2 模块 ⇒ 全仓 484→487、不在用 210→212。
+# 底稿同步刷新（沿用既有约定）。
+# v0.209.54（2026-11-10，P6.5 T4）：新增 v2/core/accounting/g4_nav、
+# v2/core/decision/target_synthesis、v2/hosts/self_split_arms、
+# v2/evidence/arm_comparator、v2/evidence/p65_t4_evidence 共 5 模块，仅被 T4 测试与
+# scripts/v2_p65/run_t4_acceptance.py 可达（不属两条主链路三入口；合成对账边界专用）
+# ⇒ 静态闭包 271、在用 275 不变，全仓 487→492、不在用 212→217。
+# 底稿同步刷新（沿用既有约定）。
+# v0.209.55（2026-11-10，P6.5 T5）：新增 v2/core/accounting 3 模块
+# （state_envelope / state_owners / envelope_store）+ v2/hosts 3 模块
+# （recovery_runtime / recovery_state_digest / recovery_cases）+ v2/evidence 1 模块
+# （p65_t5_evidence），仅被 T5 测试与 scripts/v2_p65/run_t5_acceptance.py 可达
+# （不属两条主链路三入口；合成对账边界专用）⇒ 静态闭包 271、在用 275 不变，
+# 全仓 492→499、不在用 217→224。底稿同步刷新（沿用既有约定）。
+# v0.209.55（2026-11-10，P6.5 T5 / Codex-C1 整改）：新增 v2/core/accounting/state_consistency
+# （五项经济一致性：整数股 tol=0 + 现金 I1 容差；仅由 state_owners 引用，T5 合成边界内）
+# ⇒ 静态闭包 271、在用 275 不变，全仓 499→500、不在用 224→225。底稿同步刷新（沿用既有约定）。
+INUSE_BASELINE = 275
+NOTIN_BASELINE = 225
+STATIC_BASELINE = 271
+ALL_MODULES_BASELINE = 500
 
 
 @pytest.fixture()

@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.209.55] - 2026-11-10
+
+### Added（P6.5 T5 独立同代状态信封与恢复语义）
+P6.5 最后一件（T5）交付：独立状态信封、同代恢复语义、G5~G7 证据包与阶段总账。
+**未修改任何已生效契约**（F25/F13/runs 契约、P4 `EngineState` 键集一律不动），
+生产默认链路（回测 runtime / `PaperHost` / 纸面入口）零改动：
+
+- **独立同代状态信封**（`v2/core/accounting/state_envelope.py`）：五项所有权
+  （P4 基础 blob / 物理 lot 伴随视图 / 虚拟账 / 结算与估值身份 / schema 与同代标记）
+  在**同一原子提交点**落盘；规范化 JSON（`sort_keys` + ASCII + 紧凑分隔）内**禁止裸
+  float**，所有 float64 经 `float.hex` 位精确编码；信封摘要 = 文件字节 SHA-256。
+- **五项投影与还原**（`state_owners.py`）：物理伴随视图新增来源批次**成本/批次顺序/
+  事件水位/初始冻结输入身份**（I2 仍只比整数股数，且不从虚拟侧反推）；虚拟账落盘
+  来源/取得双层 lot、费用、占用与结算批次结果；结算身份与 P4 账本键、虚拟账身份
+  **逐项交叉校验**（同代一致性）。
+- **原子落盘与同代链**（`envelope_store.py`）：校验先行 → 临时名 → `os.replace`；
+  禁止覆盖、禁止跳号/倒退；写入前必须通过五项联合解码（落盘的信封一定可恢复）；
+  半提交代残骸（截断文件/临时文件）一律拒绝并可隔离到 `crashed/`（保留现场、禁止覆盖）。
+- **恢复语义**（`v2/hosts/recovery_runtime.py` + `recovery_cases.py`）：恢复只能由
+  信封**新建实例**（`assert_fresh_instance` 拒绝在已演化实例上续跑），返回
+  `_applied_keys/last_fill_date`、结算幂等键、事件序号与价源标识；六类场景
+  （多来源 lot / 中途提交点 / 恢复后再次内部转账 / 成交后水位 / 半提交代崩溃 /
+  恒等式破缺终态）与无中断参照**逐位一致**（float64 位模式 + 整数股 + 键序，零容差）；
+  破缺为终态（不可续跑、不可写入新信封），修复路径唯一 = 从破缺前完整信封新建实例重放。
+- **G5~G7 证据包**（`v2/evidence/p65_t5_evidence.py` + `scripts/v2_p65/run_t5_acceptance.py`）：
+  证据根 `data/frozen_reference/v2_p65/<run_id>/`，含 `recovery_matrix.json`、
+  `state_envelopes/`（两代及以上信封本体 + 逐文件 SHA 与上一代摘要衔接）、
+  `pytest_targeted.txt`、`pytest_full.txt`、`complexity.json`、`flake8.txt` 与自含
+  `manifest.json`（HEAD/脏标记、输入、费率、容差、排除表哈希、runs writer 身份、
+  信封版本与提交点链、恢复场景清单、文件哈希、命令）。规范化/SHA/排除表口径**复用
+  T4 实现**（`p65_t4_evidence.py` 零改动）。
+- **测试**：`tests/test_v2_p65_t5_{state_envelope,recovery,failure_modes,evidence_bundle}.py`。
+- **外部复审核对（三轮，第四轮复核 3 通过）**：在首轮 5 条整改之上，复审 1 又指出
+  ①来源 lot 错配（总量相同、`source_lot_id` 之间一增一减）可绕过、②当日日终估值陈旧可绕过
+  ——已改为按 `(ts_code, source_lot_id)` 逐键对账并绑定当日快照（`capital == 待提交现金`、
+  `portfolio_value == capital + market_value`）；复核 2 再指出③快照 `capital=NaN` 会绕过
+  不等式比较、④探针临时目录应归仓库 `temp/` ——已改为三项估值字段**先 `math.isfinite`
+  再比较**、探针用 `temp/` 下独立随机目录 + 自清理。终审全量 **5947 passed / 0 failed**，
+  正式证据根 `data/frozen_reference/v2_p65/v2p65_t5_20261110_7d3ce51f/`。
+- **外部评审整改（Codex，1×P1 + 4×P2 全部修复）**：
+  ①新增 `v2/core/accounting/state_consistency.py`——五项**经济一致性**（P4 持仓整数股 ==
+  物理来源 lot 视图 == 虚拟取得批次，tol=0；Σ(虚拟现金+占用) == P4 现金，I1 容差），
+  阻断"旧代物理视图 + 本代其余四项"这类形式合法但经济上不可能的信封；
+  ②`envelope_store` 读侧识别**只有临时文件的半提交现场**（`load_latest`/`assert_chain_intact`
+  报损坏并要求隔离后重放，显式 `load(n)` 仍可读破缺前完整代）；
+  ③`recovery_runtime` 把**隔离记录与实例失效联动**（现场在本实例建立后才被隔离 ⇒
+  拒提交，必须 `restart(之前)` 重放）；
+  ④证据装配区分"执行前输入拒绝"与"运行中破缺"——后者保留破缺前信封与现场并写
+  `failure.json`，回归输入缺失检查前置到跑矩阵之前；
+  ⑤`common/cost.py` 与 `v2/common/cost.py` 在四项费率全显式时**不再读取默认配置**，
+  证据包新增全新解释器探针 `config_probe.json`（拦截 `Config.load_config`）证明
+  "合成链零配置读取"，`manifest.inputs.config` 由探针结果决定而非常量。
+- **边界**：T5 完成 ≠ P6.5 出口验收；未宣称 B 区转正、生产多袖能力、前向/日历验证；
+  S5 卖出仍归 P7；不改契约、不改生产默认路径、不使用真实行情/账户。
+
 ## [0.209.54] - 2026-11-09
 
 ### Changed（P6.5 T0.5 治理闭合）

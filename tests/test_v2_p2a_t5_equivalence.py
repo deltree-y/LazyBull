@@ -217,10 +217,11 @@ _RETIRED_SYMBOLS = _extract_retired_symbols() - _SCAN_EXCLUDED_SYMBOLS
 def synthetic_cost_settings(monkeypatch):
     """合成成本配置（范式同 T4 ``synthetic_cost_settings``，R2-T4-01 处置）。
 
-    新旧 ``CostModel`` 构造器即使四参全显式传入，也会**无条件**调用
-    ``get_cost_settings()`` 读取共享配置单例。本 fixture 把新旧两侧成本模块
-    各自绑定的 ``get_cost_settings`` 打为同一合成读取函数，pytest 结束自动
-    恢复；返回读取计数供锚定断言。"""
+    P6.5 T5-Codex-C5 后：``CostModel`` 在**四参全显式**时不再触碰默认配置
+    （``get_cost_settings()`` 只在任一参数缺省时调用），因此引擎按显式费率运行时
+    读取计数应为 0。本 fixture 仍把新旧两侧成本模块各自绑定的
+    ``get_cost_settings`` 打为同一合成读取函数：一旦有路径重新引入隐式读取，
+    读到的也是合成值而非真实 configs/，并由锚定断言报出。"""
     reads: List[int] = []
 
     def _stub() -> dict:
@@ -448,7 +449,9 @@ def test_e2e_normal_buy_and_holding_period_sell(synthetic_cost_settings):
     """
     old_engine, new_engine, nav_old, nav_new = _scenario_constant_ab()
     _assert_runs_identical(old_engine, new_engine, nav_old, nav_new)
-    assert len(synthetic_cost_settings["reads"]) >= 2  # 成本读取确实经由合成 stub
+    # 四参全显式 ⇒ 执行期**零**共享配置读取（T5-Codex-C5）；若重新出现隐式读取，
+    # 这里会从 0 变正并通过合成 stub 暴露出来，而不是静默读真实 configs/
+    assert synthetic_cost_settings["reads"] == []
 
     trades = new_engine.get_trades()
     assert len(trades) > 0
@@ -1002,8 +1005,26 @@ def test_importer_package_of_scanned_files_exact():
     core/execution 新增 live_schedule 一件（D1/D2 状态外置与入账分离），
     扫描面 31→34，属 P4 规划 §4.1 预登记增长（live_schedule 为 T1 执行
     登记偏差项，见规划 §17）；__init__.py 5 个不变。）
+    （P6.5-T1 注记：core/accounting 新增 virtual_ledger / physical_lot_view /
+    reconciliation 三件（最小虚拟账、物理 lot 伴随视图、三恒等式校验器），
+    扫描面 35→38（+3），属 P6.5 设计 §4.6 预登记增长；__init__.py 5 个不变。）
+    （P6.5-T2 注记：core/decision 新增 virtual_merger 一件（多袖合并 + 公开净额
+    物理全量目标）、core/accounting 新增 settlement_batch（结算编排）与
+    settlement_kernel（Q13 费用瀑布 / Q18 股数分摊内核）两件，扫描面 38→41（+3），
+    属 P6.5 设计 §4.6 预登记增长；__init__.py 5 个不变。）
+    （P6.5-T3 注记：core/execution 新增 fill_observer 一件（物理入账的受控注入点，
+    默认无观察者时等价直调 ``Ledger.apply_fills``），扫描面 41→42（+1），
+    属 P6.5 设计 §4.6 预登记的执行适配增长；__init__.py 5 个不变。）
+    （P6.5-T4 注记：core/accounting 新增 g4_nav 一件（G4 双 NAV 门：先合并货币总值
+    再单次派生，与 I3 的逐袖和运算顺序分离）、core/decision 新增 target_synthesis
+    一件（先合并再整手 / 插入序 / 单次归一化），扫描面 42→44（+2），
+    属 P6.5 设计 §4.3/§8.4 预登记增长；__init__.py 5 个不变。）
+    （P6.5-T5 注记：core/accounting 新增 state_envelope（同代状态信封值对象与编码）、
+    state_owners（五项所有权投影与还原）、envelope_store（原子落盘与同代链）、
+    state_consistency（五项经济一致性：整数股 tol=0 + 现金 I1 容差）四件，
+    扫描面 44→48（+4），属 P6.5 设计 §4.5 预登记的独立状态信封边界；__init__.py 5 个不变。）
     """
-    assert len(_V2_CORE_SCAN_FILES) == 35
+    assert len(_V2_CORE_SCAN_FILES) == 48
     assert len(_V2_CORE_INIT_FILES) == 5
     for path in _V2_CORE_SCAN_FILES:
         expected = ".".join(path.resolve().parent.relative_to(_REPO_ROOT).parts)
