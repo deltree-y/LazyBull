@@ -1003,6 +1003,34 @@ python scripts/v2_p65/run_t5_acceptance.py \
   --complexity logs/p65_t5_complexity_src_scripts.log
 ```
 
+**v2 P7 T0.5 治理落档（预检 + 预登记，状态 draft_pending_review）：** P7（首袖子立项 +
+历史多袖复核）的 T0.5 交付三个只读/确定性入口，均不联网、不写生产根、不运行训练或推理：
+
+```bash
+# 1) 输入完整性预检（约 2~4 分钟）：14 折 test/bt 日期核对、模型与清单 SHA、逐折面板覆盖、
+#    V20/V10 相位日历与末折 runoff、三源水位（fina 只读扫描推导）、三源事件分布与有效块计数；
+#    交易日历先截断到共同数据截止，日历尾部不参与成熟判定
+python scripts/v2_p7/precheck_t05_inputs.py \
+  --out-dir data/paper_shadow/p7_testbed/p7_t05_20261111_r5/precheck
+
+# 2) 崩盘窗规格冻结（沪深300 年内峰谷规则；首次联网取指数快照，规格已存在即拒绝覆盖）
+python scripts/v2_p7/crash_spec.py \
+  --basis market_index --rule year_peak_trough --index-code 000300.SH \
+  --out data/paper_shadow/p7_testbed/p7_t05_20261111_r5/specs/crash_windows_v5.json
+
+# 3) 治理工件生成（确定性，重复运行逐字节一致）：复合 prereg / R3 授权快照 / 预算台账 /
+#    写白名单与禁改面 / H 报告 schema 与 kill criteria / 治理快照
+python scripts/v2_p7/build_t05_governance.py \
+  --root data/paper_shadow/p7_testbed/p7_t05_20261111_r5
+```
+
+退出码：`0` 通过 / `2` 输入验收门失败（含附件缺件或字节不符）/ `3` 核心格有效块不足
+（Q5=A 回用户重裁）/ `4` 写域拒绝 / `5` 输入不可用；非零退出不写出任何工件。
+本次结果：timeline 3637 日、块总数 121、有效块 forecast 121 / express 72 / fina 121，
+右删失 75 / 0 / 1468；崩盘窗 2015-06-08~08-26、2018-01-24~12-27、2022-01-04~10-31。口径与契约文本见 `docs/plans/v2/p7_t05_contract_revisions_20261111.md`
+与运行手册 `docs/plans/v2/p7_t05_runbook_20261111.md`；**边界：T0.5 未生效、T1~T6 未获授权，
+本阶段不产生任何前向/日历结论，也不构成 B 区转正**。
+
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
 未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用

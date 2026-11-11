@@ -3,6 +3,7 @@
 > **P0 落档标记**：本文档冻结 `events/` 与 `state/` 两类资产的统一 schema，并落档**公告源试数据协议**
 > （公告源是袖子 B 的"第一优先"数据，协议优先级不低于分钟线试数据协议）。
 > 生效状态：**已于 2026-10-01 P0 确认通过，正式生效**。
+> **P7 T0.5 治理已于 2026-11-11 生效：现行版本 = 架构 F26（v1.32）/ 净额化 F26 / 协议 F14（v0.14）/ events F4 / 台账 F7**；P7 适用注记与本行同批落档。
 > 上游依据：方案 §4.1 补丁 2（events/state schema 提前到 P0）、§7（试数据协议）、R2.5-7（披露时点 PIT 审计）。
 
 | 契约版本 | 落档日期 | 来源 | 变更摘要 |
@@ -10,6 +11,7 @@
 | F1 | 2026-10-01 | 方案 v1.8 §4.1 / §7 + 四族数据集契约 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮（6-A~6-C） | 扩 revision_policy/dedup_rule 封闭词表（修 §2 违反 §1 的自相矛盾）；存量公告型数据集映射补全计划；公告源审计样本量升级（≥60）+ 前视/延迟分离 + 分层抽样 |
 | F3 | 2026-10-06 | P1 单元 5（F2 §2 欠账偿还） | 存量公告型四族映射补全落地（forecast / express / dividend / share_float，键与重复率经全量实证扫描） |
+| F4 | 2026-11-11 | P7 T0.5 治理生效（同架构 F26 同批） | §2 映射表新增 `fina_report`（`event_date=end_date`、`knowledge_date=ann_date`、`revision_key=(ts_code,end_date,ann_date,update_flag)`、`keep_all` + 同日 `update_flag=1` 优先、`full_row`）；§1 补「单一只读纯事件构建器」与「fina 水位由 raw 分区只读扫描推导、不要求 `_sync_watermark.json`」两条规则 |
 
 ---
 
@@ -88,3 +90,19 @@
 - 缺口管理：抓取缺口**逐日登记**（数据集 `_meta.json` 水位 + 缺口清单），禁止静默跳过；
   连续失败超阈值升级告警（沿每日运行契约的失败处理分级）。
 - 已落库数据不受降级影响（raw 不可变只追加）。
+
+## 5. P7 事件接入补充（F4，2026-11-11 生效）
+
+| 族 | `event_type` | `event_date` | `knowledge_date` | `revision_key` | `revision_policy` | `dedup_rule` |
+|---|---|---|---|---|---|---|
+| 财务指标 | `fina_report` | `end_date`（报告期） | `ann_date`（公告日） | `(ts_code, end_date, ann_date, update_flag)` | `keep_all`（同日多版按 `update_flag=1` 优先，历史版本不删除） | `full_row` |
+
+- **单一只读纯事件构建器**：输入 raw、输出内存七元组；P7 的 T1 与 T2 调用同一实现并绑定
+  `event_builder_sha256`；T2 只物化，不另写 `ann_date`/`knowledge_date` 映射。
+- **水位推导**：`forecast`/`express` 用各自 `_sync_watermark.json`；`fina_report` 对全部 raw
+  分区只读扫描有效 `ann_date` 取最大值，清单记录行数、分区路径、逐文件 SHA、最大日期与无效日期
+  计数，**不要求不存在的 `_sync_watermark.json`**。
+- **共同数据截止** = 三源水位与 clean 水位的**最小值**；超出观察窗属尾端右删失登记，
+  不是「效果为 0」。
+- **负面事件边界**：`or_yoy<=0` 或 `netprofit_yoy<=0` 只用于边界/覆盖报告，不得生成
+  R-002/R-005 邻域标签或个股退出排序。

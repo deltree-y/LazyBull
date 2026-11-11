@@ -4,6 +4,7 @@
 > 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
 > （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
 > 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F13（2026-11-09 P6.5 T0.5 闭合：`net_across_sleeves` 多袖上下文与物理全量目标、多袖目标/配额校验、三恒等式口径；F12 的 `PaperHost.run_t1` 语义继续有效）**。代码实现以本文档为唯一接口依据。
+> **P7 T0.5 治理已于 2026-11-11 生效：现行版本 = 架构 F26（v1.32）/ 净额化 F26 / 协议 F14（v0.14）/ events F4 / 台账 F7**；P7 适用注记与本行同批落档。
 
 | 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
 |---|---|---|---|---|
@@ -20,6 +21,7 @@
 | F11（= v0.11） | 2026-10-22 | 本文件单文件制修订（P3 T4 评审处置包：reviewer2 R2-T4-01 P1 + reviewer1 P3-9；实施规划 §18.11） | **生效**（2026-10-23 用户批准；reviewer1 复核一通过 + reviewer2 复核一确认草案内容可接受；随 P3 T5 收口提交落档） | §6 补过渡注记：P3 期 `v2/sleeves/_registry.py` 为 **SleeveSpec 注册表**（`get_sleeve_spec` / `list_sleeve_ids`，注册条目 = 规格对象而非信号类），**不是** §6 `SleeveRegistry` 协议的代码化；差异理由 = 信号实现 P3 期维持 `v2/core/signal/` 单处（P3 实施规划 §1.1-4）且 sleeves → core import 违反 §7 依赖方向，现行 `register/get/list_all` + `signal_class: type[Signal]` 签名本期无可实现形态（MLSignal 未实现协议 Signal）；`SleeveRegistry` 协议代码化兑现节点 = 信号实现迁入 sleeves 的阶段（**P4/P5 袖子信号迁移评审**，到期表登记随方案 F15 同批）；过渡期 spec 注册表为**唯一袖子入口**，hosts/薄入口经规格对象 + `signal_impl` 限定名字符串解析装配信号；**禁止以接口别名将 spec 与 signal_class 两种返回语义视为等价** |
 | F13（= v0.13） | 2026-11-09 | P6.5 T0.5 用户 Q1~Q25 裁决 + 契约评审 C65-01/02 处置及复核 1 通过；设计 `docs/plans/v2/p65_merger_reconciliation_design_20261108.md` §17/§18 | **生效**（2026-11-09 用户确认 T0.5 闭合） | ① `net_across_sleeves` 增加可选 `virtual_accounts`；多袖物理输出按全账户虚拟持仓基数恢复 `物理目标=Σ当前虚拟+Σ增量`，多袖缺上下文不得走S6；② 配额与每袖目标权重运行时校验：有限/非负/ID一致/`math.fsum` 容差 `n×2^-52`，不重归一化；③ `Ledger` 三恒等式补充 P6.5 容差与来源 lot/直接 NAV；④ 零物理成交内部结算由具体虚拟账本实现；⑤ 订单级全链为 P6.5 证据义务 |
 | F12（= v0.12） | 2026-10-28 | P4 T2 评审处置 + 用户裁决（实施规划 §18.10/§18.11） | **生效**（2026-10-28 用户批准；登记即生效，沿 F7 勘误先例） | §3.2/§4 `PaperHost.run_t1` 语义勘误：纸面由引擎按真实行情记账为权威，`fills` 非空仅作提交前核对（不一致零副作用拒绝，可修正重试），人工回填直接驱动入账归 live 阶段；代码协议签名同步为 `fills: Optional[Sequence[Fill]] = None` |
+| F14（= v0.14） | 2026-11-11 | P7 T0.5 治理生效（同架构 F26 同批） | **生效**（2026-11-11 用户确认） | 新增 §13 P7 历史虚拟研究宿主与状态所有权：`HistoricalVirtualSleeveHost`（`v2/hosts/p7/`，历史研究宿主、非生产宿主）、P7 独立状态信封（物理/虚拟 lot 双模型版本、`cash_open`/`credit_outstanding`/`credit_granted` 三分、净残差与信号资格、借款 lot 与`deadlocked`/`late_recovery`、价源、双口径、幂等键与 generation）、同一原子提交点写入、不扩改生产 `EngineState` 键集；`net_across_sleeves` 沿用 F13 多袖上下文与物理全量目标语义，不新增字段、不放宽 `Σ袖权重 = 1` 前置。兼容性：**兼容**（只新增 P7 专用类型，单袖默认零变化） |
 
 ---
 ---
@@ -1140,3 +1142,19 @@ evidence -/-> （直接写文件；台账经 DataStore）
    T0 五轮评审复核记录（`_normalize_signals` / `_kelly_weights` / `keep_buy_date` /
    `stop_loss_checker` / `is_holding_period_exit_due` / exposure 组合清单与 11 处调用点等，
    行号级核实，见 `docs/plans/v2/p2a_implementation_plan_20261006.md` §8 处置对照表）。
+
+## 13. P7 历史虚拟研究宿主与状态所有权（F14，2026-11-11 生效）
+
+- **宿主**：`HistoricalVirtualSleeveHost`（`src/lazybull/v2/hosts/p7/`），**历史研究宿主**，
+  与 `native_engine.py`、P5b `testbed/` 显式区分，禁止命名复用；不接生产装配。
+- **独立状态信封（P7 版本号）**至少含：① 物理 lot 与虚拟 lot（各自 `origin_model_version` /
+  `current_model_version`）；② 日初 `cash_open`、存量 `credit_outstanding`、本日
+  `credit_granted`、成交后 `cash/credit`；③ 待执行净残差及原信号资格（S2/S3/S5 各归其袖，
+  S4 剩余日终作废）；④ 借款 FIFO lot、召回、`deadlocked`、`late_recovery`；
+  ⑤ 估值价 `price_date/price_source`（与成交价分离）；⑥ 实际账双口径科目（含/不含节省及敏感性）；
+  ⑦ 结算幂等键与 generation。
+- **写入语义**：同一原子提交点写入；同一代不可重复发布；恢复只接受已发布代幂等键，
+  未发布 attempt 重算；**不得扩改生产 P4 `EngineState` 键集**。
+- **调度**：`FundScheduler` 仍为 Protocol，P7 新建实现；`net_across_sleeves` 沿用 F13 的多袖
+  上下文与物理全量目标，不新增可选字段、不放宽 `Σ袖目标权重 = 1` 前置条件。
+- **兼容性**：兼容（只新增 P7 专用类型与模块；单袖默认行为与既有签名不变）。
