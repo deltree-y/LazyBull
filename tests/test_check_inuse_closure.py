@@ -171,10 +171,10 @@ import check_inuse_closure as cic  # noqa: E402
 # v0.209.55（2026-11-10，P6.5 T5 / Codex-C1 整改）：新增 v2/core/accounting/state_consistency
 # （五项经济一致性：整数股 tol=0 + 现金 I1 容差；仅由 state_owners 引用，T5 合成边界内）
 # ⇒ 静态闭包 271、在用 275 不变，全仓 499→500、不在用 224→225。底稿同步刷新（沿用既有约定）。
-INUSE_BASELINE = 275
+INUSE_BASELINE = 276
 NOTIN_BASELINE = 225
-STATIC_BASELINE = 271
-ALL_MODULES_BASELINE = 500
+STATIC_BASELINE = 272
+ALL_MODULES_BASELINE = 501
 
 
 @pytest.fixture()

@@ -1,5 +1,6 @@
 """Data模块初始化"""
 
+from . import sw_industry_pit  # noqa: F401  包级注册（行业 PIT 数据层，供在用闭包可见）
 from .cleaner import DataCleaner
 from .ensure import (
     ensure_basic_data,

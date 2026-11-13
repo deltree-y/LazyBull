@@ -2,6 +2,865 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.210.1] - 2026-11-13
+
+### Fix（P7 T6 · 外部专家 Codex 评审 4×P2 整改，证据根 r5→r6）
+
+- **C6-01**：G5 现在**合取宿主自检**——两臂两次运行的 `replay`/`restart` 必须 `checked` 且
+  `all_bitwise_identical`，`present/checked/identical` 缺一即失败（`arms.self_check_rows` /
+  `self_checks_ok` / `arm_determinism_payload`，`_g5` 暴露 `self_checks` 并写入 manifest/identity）。
+  此前"重跑逐位一致但重放/续跑不一致"会被错误放行；新增 4 类隔离负例。
+- **C6-02**：噪声带抽样改为**与预登记同名的方法**——`_stationary_index` 实现几何块长 stationary bootstrap
+  （逐位置 `1/block` 重抽起点、越界环回、两臂共用索引、`block=1` 退化为 i.i.d.、全向量化），删除定长环形块；
+  载荷新增 `method_matches_preregistration=true` 与 `sampler`。带仅小幅变化
+  （TR se 1.4455pp → 1.4362pp），五项 `excludes_zero` 与 `verdict` 不变。
+- **C6-03**：回撤费用占比改用**峰谷资产损失金额**为分母（`loss_amount` / `fee_share_of_loss`），
+  保留 `fee_pp_to_trough`；最大回撤事件费用占比 10.39% → **4.8739%（VV-H）/ 4.8733%（VV-S）**。
+- **C6-04**：毛利润 = 净利 + 累计费用（`gross_profit`），新增 `net_profit`/`over_net_profit`；
+  费用占毛利 10.29% → **9.3308%（VV-H）/ 9.3115%（VV-S）**，净利为负不再屏蔽毛利比例。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t6_20261113_r6/`（12 件产物、264.9s、门 7/7、
+  `verdict=inconclusive` 不变；`_r5` 只读保留）；定向回归 **28 passed**；`verify.py` 复算全 0。
+- 外部专家 Codex 复审**通过**（2026-11-13 18:50，`p7_t6_recheck_codex_20261113.md`）：4×P2 全部关闭，
+  未发现新增 P1/P2；另提 **2 处报告勘误 P3**（sharpe 带被放大 100 倍 → `[-0.007070, +0.008591]`；
+  C1 区间中点与 `boot_mean` 之差 0.021pp → **0.209pp**），均为展示层、已更正，r6 产物与裁定不变。
+  作者自建内部复核代理另提 3 条 P3（`method_matches_preregistration` 未门控、G5 自检行无样量、`CHUNK` 注释），
+  已书面登记为下一轮加固（归档 `author_recheck_internal_r2_20261113.md`，非外部意见）。
+- 全量回归 **6304 passed / 0 failed**（35:57）。**闭合程序缺口已登记**：收口提交（18:54）
+  早于读取外部复审件（18:50 落盘），当时依据内部复核代理；结论一致但流程不合规，已更正记录归属。
+  提交 SHA 只在本地收口报告登记，不在本文件内自指。
+- 预登记与上游未动：`criteria_digest` r1–r6 全等；处置见
+  `docs/review/v2_p7_t6/author_disposition_codex_r1_20261113.md`。
+
+## [0.210.0] - 2026-11-13
+
+### Feature（P7 T6 落地：两臂运行、绩效与三连指标经济裁定）
+
+- 新增 `scripts/v2_p7/t6/`（十三件：`calibration` `params` `arms` `daily` `metrics` `noise` `verdict`
+  `golden` `gates` `artifacts` `runner` `verify` `run_t6`），**只读复用** T4/T5 宿主与既有唯一入口
+  （`calculate_nav` / `calculate_chain_metrics` / `calculate_annualized_return`），不改上游语义。
+- §6.2 判据**运行前预登记**并落 `calibration.json`（δ_TR=0.50pp、δ_MDD=0.50pp、δ_cagr=0.10pp、
+  δ_vol=0.50pp；配对分块 bootstrap block=20 / B=4000 / seed=42；越带 ≡ |Δ|≥δ 且 95% 区间不含 0）；
+  `criteria_digest` 在 r1–r5 五次运行中完全一致。
+- 两臂全窗 1,745 日：ΔTR=+0.2248pp、ΔMaxDD=+0.0160pp、Δcagr=+0.0134pp、Δvol=+0.00137pp（方向相反）、
+  Δfee=−200.28 元、Δturnover=−0.2228；分年同号 5 正/3 负/1 零 = 0.625 < 2/3。
+- **`verdict = inconclusive`**：C1/C2/C3/C5 未满足、C4 通过（费用只解释差异的 8.9%，即「差异不由费用解释」），
+  无「方向相反且越带」⇒ 不判 pass 也不判 fail。边界：只对本窗口机械与费用口径成立。
+- 噪声带与唯一入口**同源**（全序列算 TR/MDD/cagr、同折掩码算 vol/sharpe；cagr 指数用入口交易日数 1,731），
+  并落盘 `bias` / `mde` / `mde_over_delta`（C1 的 mde 2.83pp = 5.67×δ，登记为统计功效限制）。
+- 新增只读校验器 `scripts/v2_p7/t6/verify.py` 并接入 G4（`artifact_recompute`）：从落盘 parquet 重算
+  NAV / 链式 / 年化 / 费用 / 换手 / 配对差与归因 / 分月分年与 C5 三项 / 噪声带 / 预登记摘要，差异全 0.0。
+- 机械门 G1–G7 全通过（上游 SHA 未改、两臂同参、逐日 I1/I1b/I2/I3 与非负门、公开口径与落盘复算、
+  同参重跑逐位一致、黄金例三条、产物 SHA + 预登记 mtime + 跨 run 摘要一致）。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t6_20261113_r5/`（12 件产物、270.1s）；定向测试 23 passed；
+  复杂度新增硬超限 0（该包 3 条软超限为拆分义务）。两位独立评审 3 轮复审（第 3 轮双方**同意闭环**，无未处置 P1/P2）；
+  闭环后全量回归 **6299 passed / 0 failed**（36:44）。
+  收口报告 `docs/reports/p7_t6_closure_20261113.md`；评审 `docs/review/v2_p7_t6/`。
+- 边界：不构成 T6 之后的阶段授权、B 区转正、生产多袖、前向/日历验证或实盘可用结论。
+
+## [0.209.96] - 2026-11-13
+
+### Close（P7 T5 闭环）
+
+- 外部专家（Codex）第 4 轮复审**通过**：此前 P1/P2 阻断项全部关闭，无新增阻断项
+  （`docs/review/v2_p7_t5/p7_t5_code_review_codex_r4_20261113.md`，对象 = 当前工作区 + `p7_t5_20261113_r15/`）。
+- 累计处置：两位独立评审（A 会计/守恒、B 生命周期/风险）+ Codex 三轮复审，共 17 项阻断项 100% 修复并复核关闭；
+  非阻断建议按甄别结果分别修复或登记为已知限制（N 袖分支、`calculate_nav` 入口收口项）。
+- 收口报告 `docs/reports/p7_t5_closure_20261113.md` 增「闭环结论」；闭环后执行阶段收口全量回归并回填。
+- 边界不变：`alpha_consumed=false`、`verdict=null`；不构成 T6 启动、B 区转正或前向/日历验证通过。
+
+## [0.209.95] - 2026-11-13
+
+### Fix（P7 T5 · 外部专家复审 3 整改）
+
+- **R3-01**：权威序列的无效判定改为 `equity <= 0 or counterfactual <= 0`——负节省把已非正的 E 抬成
+  正反事实权益的组合不再错标为有效；有符号贡献与账本不变。
+- 非阻断项：`sleeve_balance` note 口径改为「贡献保留有符号、仅独立指标按 E/反事实非正置空」；
+  收口报告旧表述（r6 / 36 passed / 三态均历史命中）统一到 r15 真实证据；`calculate_nav` 唯一入口
+  登记为实现约束收口项。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t5_20261113_r15/`（250.5s、14 类门全过、定向 42 passed）。
+
+## [0.209.94] - 2026-11-13
+
+### Fix（P7 T5 · 外部专家复审 2 整改，3×P2 全部接受）
+
+- **R2-01**：`record_credit_nav()` 改为按冻结输入直接派生（`physical_capital` / `sleeve_capital` / `savings`），
+  贡献 `= E/物理初资`（零总值仍有有符号贡献），独立指标按 `E−累计节省` 重新判有效性（跨零两方向均正确）。
+- **R2-02**：`_raw_buy_need()` 按 `ts_code` 分组逐股票计费（不再合并享受一次最低佣金）。
+- **R2-03**：新增授信后额度决策 `quota_post_credit`（同一实际 L、无现金约束）作为拒绝**原因分类**依据，
+  出借导致的配额缩减不再误记为现金不足；`quota_daily.quota_post_credit` 落盘。
+- 纯函数拆至 `planutil.py`（`host.py` 1,185 行，回到文件规模硬上限内）。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t5_20261113_r13/`（246.6s、14 类门全过、构造例 11/11、定向 42 passed）。
+
+## [0.209.93] - 2026-11-13
+
+### Fix（P7 T5 · 外部专家复审 1 整改，1×P1 + 5×P2 全部接受）
+
+- **R1-01（P1）权威净值序列回归冻结口径**：贡献改 `E/物理初资`（可加、保持有符号，`E<=0` 不置空）；
+  独立净值改 `(E − 累计节省)/袖初资`；不再用首个收盘 E 作分母、不再丢弃负贡献。
+- **R1-02（P2）权威序列可续跑且入门**：删除 `_equity_credit_base/_equity_credit_prev`（改为当日无状态派生），
+  检查点新增 `credit_nav_identical` 并进入 `required`，汇总 `credit_nav_all_identical`。
+- **R1-03（P2）拒绝拆分以最终拒绝量为上限**：授信全额解除后不再残留授权前拒绝量（`original` 与真实申报一致）。
+- **R1-04（P2）部分授信按实际 L 重验**：不能多成交则不落账，登记 `credit_partial_no_gain`。
+- **R1-05（P2）价源逐臂汇总**：任一臂失败即整体失败（`price_source.arms` 覆盖全部已运行臂）。
+- **R1-06（P2）历史缺席态替代证据入硬门**：死局构造例输出检查点/连续日数/逐位一致明细，
+  新硬门 `credit_state_substitutes` 强制校验。
+- 拆分 `planutil.py`（计划签名与保留归因纯函数），`host.py` 回到文件规模硬上限内。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t5_20261113_r12/`（247.8s、14 类门全过、构造例 11/11、
+  定向 42 passed、复杂度新增硬超限 0）。
+
+## [0.209.92] - 2026-11-13
+
+### Fix（P7 T5 · 外部专家复审整改，2×P1 + 6×P2 全部接受）
+
+- **C-T5-01（P1）袖级 credit 净值**：T4 `total_value = cash + MV` 不含 credit，直接用于袖级贡献会把借入
+  当收益、出借当亏损。T5 新增 `record_credit_nav()`：按 `E_i = cash_i + MV_i − credit_i` 生成权威袖级序列
+  （`contribution_credit_adjusted` / `independent_nav_credit_adjusted`），`E≤0` 置空并标
+  `invalid_nonpositive_equity`；落地 `sleeve_balance.json.arms.<arm>.credit_adjusted`。T4 兼容视图逐位不动。
+- **C-T5-02（P1）到期归还预留**：新增 `DayPlan.due_reserve`/`cash_budget`，二次授权与执行期均先扣减当日到期
+  本金（`hold = credit_hold + due_reserve`），消除「买完只剩零钱」造成的可避免死局；逐日登记
+  `credit_daily.due_reserve_by_sleeve`。全窗 `deadlocked_total` 由 30,366.73 降为 0。
+- **C-T5-03（P2）原始需求口径**：申请额与出借闲置改取未受 `ρG` 截断的**原始申报需求**
+  （`need = max(原始需求含费, 配额后负债含费)`），`credit_daily.allocation.raw_need` 逐日登记。
+- **C-T5-04（P2）拒绝合并**：纠正上轮误加的 `break`（会跳出整个循环）为「遍历全部行、同键只并入首行」；
+  新增硬门 `denial_double_count`（同键至多一行 `voided>0`）与诊断量 `conservation_unique`
+  （同一意图按腿拆行属设计内，键不唯一不作硬门）。
+- **C-T5-05（P2）授信可成交性**：删除「缺口 < 一手名义」绝对门，改为比较授信前后的整手可授权量。
+- **C-T5-06（P2）迟回收逐笔**：逾期归还（含**部分**归还）均计 `late_recovery`，与「lot 是否结清」解耦。
+- **C-T5-07（P2）价源硬门**：`price_source` 纳入硬失败集合（任一臂失败即禁止发布）。
+- **C-T5-08（P2）身份重采**：发布前重采 `workspace_identity` 与 `params_digest`，漂移即 `RunnerError`。
+- 证据根 `data/paper_shadow/p7_testbed/p7_t5_20261113_r9/`（243.6s、13 类门全过、构造例 11/11、
+  定向 41 passed、复杂度新增硬超限 0）；`CLAUDE.md` 状态行与收口报告同步。
+
+## [0.209.91] - 2026-11-13
+
+### Feat（P7 T5 · 原始需求 / 配额 / 借用会计 / 召回与死局）
+
+- 新增 `scripts/v2_p7/t5/`（`params` `quota` `borrow` `credit` `recall` `state` `runstate` `denials`
+  `host` `restart` `scenarios` `checks` `artifacts` `runner` `run_t5` `errors`）：在 T4 生命周期之上补齐
+  **授权额度 + 借用会计 + 召回/死局**，并把逐袖 `cash_i + credit_i >= 0` 从 T4 的登记项升级为**逐日硬门**。
+- 日内顺序写死：原始目标 `G` → `ρG`（不改写逐袖归一化权重）→ 约束/整手 → 预净额计划（零副作用）→
+  `cash_open + 本日 credit_granted` 背书 → 授权后最终净额 → 仅净市场卖出 → 内部转账与净市场买入 →
+  一次结算；`G` 取 T2.5 `targets/daily_{arm}.parquet.target_notional`（账户级 = Σ相位，
+  `(ρ_V20, ρ_V10) = (0.7, 0.3)` 为资本份额）。
+- 授权：`A <= min(D, R+L)` 且 `A + Fee(A) <= cash_open + L`；`credit_outstanding` **不参与**授权；
+  `L` 有符号（出借为负）且只按本日转账一次入账，`ΣL = 0 ⇒ ΣA <= ΣR`（账户级目标不被借用突破）。
+- 借用：FIFO lot + 部分归还 + T+1 召回；到期未还即**永久** `deadlocked`，自然卖出只记 `late_recovery`
+  （无被动卖出路径）；`Σ credit = 0` 精确成立、本金逐笔对消、本金转移零 P&L。
+- 状态：`p7_t5_state/v1` 版本化信封（不与 `p7_t4_state/v2` 混用），credit 台账置于
+  `resume_state.credit_state` 与账本同一次提交校验；兼容视图仍为 T4 三键 ⇒ 逐日摘要与 r31 逐位可比。
+- **T4 兼容门**：`credit=off & quota=off` 与 T4 完成根逐位一致（逐日账本投影行 / 交易 / 守恒行 /
+  费用逐键 / 实际与独立 NAV / 终态摘要）；`t4_parity.json` 逐日相等。首两轮因比对口径（按键折叠、
+  Parquet 往返补 NaN、未按同式拍平）误判，已改**多重集 + 缺值等价 + 同式拍平**并补回归用例。
+- 构造例 11 条（`synthetic`）：无借款 / 需求不足 / 双向同时需求 / 整手后无额度 / 部分归还 /
+  T+1 召回+死局+迟回收 / 既有+新增借款（出借方负 credit、零 P&L）/ cap-binding 非真空 /
+  VV-H 与「同配额禁 credit」参照逐位一致 / B4 黄金例逐步核对 / `E<=0` 禁买禁 credit。
+- 定向测试 `tests/test_v2_p7_t5_quota_credit.py` **33 passed**；flake8 / black / isort `exit=0`；
+  复杂度双口径 `exit=0`、**新增硬超限 0**（`_run_day` 267 行已拆分、`runner.py` 1226 行已拆模块）。
+- **边界**：`alpha_consumed=false`、`verdict=null`；只交付机械量与逐日序列，两臂绩效 / 三连指标经济裁定 /
+  阶段收口归 T6；不构成 B 区转正或前向/日历验证通过。
+
+## [0.209.90] - 2026-11-13
+
+### Docs
+
+- 新增 **P7 T5 任务书** `docs/plans/v2/p7_t5_prompt_20261113.md`：原始需求/配额/日内净额/借用会计/死局，
+  含日内流水线顺序（预净额 → 授权 → 最终净额 → 仅净卖 → 转账与净买 → 一次结算）、
+  授权公式 $A^H/A^S$、FIFO 借款 lot + T+1 召回 + `deadlocked`/`late_recovery`、
+  `cash_i+credit_i≥0` 逐袖硬门（CD-2 的 T5 归属）、T4 兼容门（`credit=off` 与 r31 逐位一致）、
+  10 类黄金例/负例、8 类验收门与证据落点。
+- **评审闭环方式**（用户 2026-11-13 授权）：T5 由执行代理启动 **2 位独立评审专家**（A 会计/守恒、
+  B 生命周期/风险），不设固定轮次、**最多 5 轮**，关键意见全部关闭且复核通过才闭环；
+  **整改/复审期间只跑定向回归、不跑全量 pytest**（全量仅闭环后跑一次）。
+  `CLAUDE.md` 评审条款同步登记该授权，并明确**仅对 T5 有效**。
+
+## [0.209.89] - 2026-11-13
+
+### Docs（P7 T4 收口）
+
+- **外部评审 Codex 复审 3 判定通过**（`docs/review/v2_p7_t4/p7_t4_code_review_codex_r3_20261113.md`）：
+  C4-02（冻结 Q18 + 降 Q）/ C4-03（全窗行情身份）/ C4-04（续跑信封）三项 P2 全部关闭，
+  既有已关闭项保持关闭，**无新增 P1/P2**；**P7 T4 已收口**。
+- 两项**非阻断文字勘误**同步（数值阈值与证据均未改动）：
+  ① C4-02 隔离例由 `Q=2,400 / 1,800 / 600` 更正为实测 **`Q=2,700 / 2,025 / 675`**
+  （报告、作者回应 r3、本文件同步；`test_s4_allocation_base_is_frozen_original_intent`
+  改为逐股精确断言，不再只断言 3:1）；
+  ② `CLAUDE.md` CD-1 残句「超出 1 ulp 仍拒绝」改为「**超出 100 ulp 仍拒绝**」，与生效的
+  `100 ulp(F)` + 全窗 `1e-9` 元硬门一致。
+- 收口报告 `docs/reports/p7_t4_closure_20261112.md` 更新为「已收口」，新增 §10 评审闭环
+  （两轮独立评审 A/B + Codex 三轮）与 §11 收口全量回归；作者回应 r3 顶部加复审通过补记。
+- **全量 pytest：6,234 passed / 0 failed / 0 skipped，2,136.31s（35:36）**；
+  定向 78 passed、上游 T2.5 定向 37 passed；flake8 / black / isort `exit=0`；
+  复杂度双口径 `exit=0`、新增硬超限 0、基线未修改。
+- 证据根**不重取**：`data/paper_shadow/p7_testbed/p7_t4_20261112_r31/`
+  （`source_digest = fdbe003e…` 750 件、`params_digest = d6458af7…` 均与 r31 相等；工程改动仅测试
+  精确断言与文档）。T5/T6 未启动，收口提交待用户明确指示。
+
+## [0.209.88] - 2026-11-12
+
+### Fixed（P7 T4 外部评审 Codex 复审 2：C4-02 / C4-03 / C4-04）
+
+- **C4-02（冻结 Q18 的最终分摊向量）**：`_resolve_buy_allocation` 删除落地后重分配——基数固定为
+  `market.owners` 的原始买入意图（零资金袖保留在分母），先算 `allocate_shares(原始增量, Q)`，
+  向量超出某袖费用后现金就把物理 Q 按整手步长下调重算，Q=0 即不成交。r31 的 557 笔 S4 市场买入
+  逐笔等于受审 `allocate_shares`（0 笔不符；r28 为 223/652 不符），其中 146 笔触发降 Q。
+  `trades.parquet` 新增 `intent_shares` / `shares` 两列供逐股复算；回归改为断言 3,000:1,000 →
+  2,025:675（Q=2,700）且逐股等于受审函数。
+- **C4-03（行情/日历身份覆盖全窗并纳入身份）**：`market_identity` 改用 `params.extended_days`
+  （1,745 日，含 20 个 runoff 交易日），与上游 `manifest.input_identity` 逐项对账（daily digest
+  `806ea4fd…`、trade_cal / stock_basic SHA），未显式 `accept_input_drift` 即 `ParamsError`
+  （写盘前 fail-fast）；身份写入 `params_payload` ⇒ 纳入 `params_digest`；执行结束后重采同一身份
+  比对，不一致即拒绝发布。补信号域行情 / runoff 行情 / 日历 / 证券主表 / 分区数五类隔离拒绝用例。
+- **C4-04（续跑态进入同一次提交 + 真重启）**：`StateEnvelope.commit` 的重复分支不再排除续跑态，
+  同一提交把 `as_of/sleeves/physical/resume_state`（价源缓存、禁买集合、序号）一起校验；
+  新增版本化完整信封（`p7_t4_state/v2`，`restore_from` 还原代际 + 幂等历史 + 双口径 + 续跑态）；
+  新增 `FeeBook.snapshot()/restore()`（`p7_t4_fee_state/v1`）；新增 `scripts/v2_p7/t4/restart.py`
+  （重启审计迁出，宿主 `_finalize` 延迟导入），从「当日开始」的完整信封（先 JSON 往返）+ 费用快照还原，
+  用**新宿主连续续跑 3 日**（末日 1 日），逐日比对 lot 级账本 / 费用累计 / 实际与独立 NAV / 账本投影行，
+  末日检查点再比完整费用 payload；检查点新增「停牌中 / 顺延残差 / 禁买状态」首次命中日，
+  禁买态另用**同一信封注入探针**覆盖（基线 v10 买入 116,653 股 → 注入后 0 股）。
+  `state_payload()` 保持三键契约，续跑态只走 `settlement_payload()`。
+- 测试：`tests/test_v2_p7_t4_lifecycle.py` 64 + `tests/test_v2_p7_t4_host.py` 14 = **78 passed**
+  （+ 上游 T2.5 定向 37 passed）；flake8 / black / isort 与复杂度双口径 `exit=0`、新增硬超限 0。
+- 证据：`data/paper_shadow/p7_testbed/p7_t4_20261112_r31/`（54.9s，8 道门全过，物理现金最低
+  +20.224366200979375 元、0 负日，`source_digest = fdbe003e…`，`params_digest = d6458af7…`）；
+  `r29` / `r30` 为整改中间代，`r1`~`r28` 只读保留。**T4 未收口**：复审只能由用户召集；
+  逐条关闭情况见 `docs/review/v2_p7_t4/p7_t4_author_response_codex_r3_20261112.md`，
+  收口报告更新为 `docs/reports/p7_t4_closure_20261112.md`，`CLAUDE.md` 的 P7 T4 条目同步到 r31。
+
+## [0.209.87] - 2026-11-12
+
+### Docs
+
+- **新增契约 `CLAUDE.md` §7.10「长任务的上下文预算与状态外部化」**（P7 T4 上下文耗尽事件复盘）：
+  长任务开工即建 `temp/<阶段>_<任务>_state_<日期>.md`（已完成 / 未完成 / 踩过的坑 / 下一步四栏），
+  每完成一项或重取证据后更新；预算过半主动报告；接近上限停止新增改动并先落盘交接；
+  **连续两次工具调用无实质产出即判定劣化，立即停手**；禁止用"要不要继续"这类问句掩盖预算耗尽。
+  T5/T6 及所有跨多轮工具调用的任务适用。
+- 修正 CHANGELOG 中重复的 `0.209.85` 标题。
+
+## [0.209.86] - 2026-11-12
+
+### Fixed（P7 T4 外部评审 C4-02 ~ C4-06 整改）
+
+- **C4-02**：S4 的 Q18 分摊基数改回**冻结原始意图**（此前误用现金截断后的可执行量，
+  评审实测 640 笔中 232 笔归属不同）；现金可执行量只作上限裁剪，S4 费用瀑布的 `q_i` 同步改回原意图。
+- **C4-04**：状态载荷补全（lot `signal_date`、残差 `signal_date/due_date/model_version`、
+  物理 `total_fee/total_buy_amount/total_sell_amount`、`PhysicalLot.buy_fee`）；新增
+  `sleeves_from_payload` / `physical_from_payload`；检查点区分**开始时载荷（供还原）**与
+  **结束时载荷（供比对）**，并存 `price_last_known` 与逐股估值探针；`_restart_check` 改为
+  **从序列化载荷还原 + 新价源恢复缓存 + 估值探针逐位比对**（`state_all_identical` /
+  `valuation_all_identical` 均 true）；`maybe_checkpoint` 主路径补传实际禁买集合。
+- **C4-05**：`ResidualEntry.model_version` 落地，`Intent` 增 `first_blocked_date/carried_days`，
+  `carried_intent` 双向保留；`_first_blocked` 不再回落信号日，`_carried_days` 返回真实累计值
+  （此前顺延第二日起首阻断日被改写、天数停在 1、成交 lot 模型丢为 0）。
+- **C4-06**：独立绩效不再用 `dropna` 删掉无效权益日：出现无效日即整袖标
+  `invalid_nonpositive_equity_day`、指标置空并保留 `sleeve_nav_invalid_dates`，不跨无效日拼接收益。
+- **C4-03**：新增上游 `manifest.outputs` 逐件 SHA 核验，不一致即 `ParamsError` 阻断，
+  结果写入 `inputs.input_verification`；**但 T2.5 `outputs` 字段结构与实现假设不同，
+  本轮实测 `checked=0 / unverified=6`，尚未真正校验任何一件**，待下一轮对齐 schema。
+- 新增回归 2 条（C4-01 的评审隔离构造、C4-04 复现 A），定向 **63 passed**；
+  证据 `p7_t4_20261112_r17`（47.1s，8 道门全过，物理现金 0 负日）。
+- **T4 仍未收口**：六条意见均已整改并有定点回归，但按纪律仍需用户召集复审后才可收口；
+  且 C4-01 导致的净额化规模变化（抵消 736,000 -> 10,800 股）仍需用户确认 T4/T5 边界。
+
+## [0.209.85] - 2026-11-12
+
+### Fixed（P7 T4 外部评审 C4-01 / P1：物理现金被扣成负数，非杠杆前提破缺）
+
+- **缺陷**：`_execute_buy` 直接 `book.phys_cash -= amount + fee`，无物理可用现金上界；
+  `_affordable_by_sleeve` 只看每袖虚拟现金。而内部转账在买方袖现金不足时仍照常完成，等于
+  **用买方袖的负现金给卖方袖充值出「可花费的虚拟购买力」**，卖方拿它去市场买入即造成账户透支。
+  I1 校验的是 `Σ cash_i ≡ 物理现金`（相等），两侧一起变负仍通过 —— 相等不等于非负。
+  实测 `daily.parquet` 20250801~20250814 共 **10 个交易日** `physical_cash = -14,296.55`。
+- **修复（用户裁决口径 a）**：
+  - 内部转账按**买方袖自有现金**可负担的整手股数限额（`ledger._run_offsets` + `_affordable_shares`），
+    撑不住的部分不打抵消、残差按既有资金约束语义顺延，计入 `blocks.transfer_cash_capped` 与
+    `t4_boundaries.transfer_cash_cap`（`capped_shares` / `offset_shares`）。
+  - 新增**物理现金硬门** `checks.physical_cash`（逐日 `物理现金 >= 0`），并入 `_stop_on_hard_failures`。
+  - 两处兜底断言：`_apply_transfer` 买方现金不足以付转账额即 `LedgerError`；
+    `_execute_buy` 若会让物理现金转负即 `LedgerError`。
+  - 新增回归 3 条（原样复刻评审的隔离构造：物理 1,000 / X 200 股现金 0 / 对方 1,000 / X 10 元 / Y 15 元）。
+- **结果（`p7_t4_20261112_r15`，41.8s，8 道门全过）**：物理现金最低 **+22.18 元、0 个负日**；
+  逐袖现金最低 **+0.45 元、0 个负日**（CD-2 的负现金随之消失，语义边界仍留给 T5）。
+- **副作用（如实登记）**：内部抵消 **736,000 -> 10,800 股**、净额化节省 **8,460 -> 543 元**、
+  物理费用 **298,015 -> 145,961 元**、执行层 S2/S3/S5/S6 由 15/54/557/2230 降为 6/44/312/1904。
+  原因是结构性的：T4 两袖基本满仓，买方袖没有自有现金，按「无借用」语义本来就买不了 ——
+  **原先的抵消规模绝大部分由空头购买力撑起**。这同时印证 F26 把授权额度 + 借用放在 T5 的必要性。
+- **状态（当时）**：C4-02~C4-06 待整改，**T4 维持「整改中」**。
+
+## [0.209.84] - 2026-11-12
+
+### Fixed（P7 T4 评审闭环整改：A 3 轮 / B 2 轮，共 25 条意见 + 13 条复核新发现）
+
+- **A-01（原 P1）S4 费用第二实现 / ulp 搜索越界 / 无计数 / 文档反指**：删除两变量 ulp 搜索，改「直接 → 一次修正 →
+  **仅终端袖** ±8 ulp → 物理侧吸收（`F_applied = Σf_i`，**不改任何袖取值**）」四步策略；逐笔计数进
+  `fees.json.float_closure`（实测 `direct 3483 / absorbed 18`、`max_abs_ulp_gap 5.68e-14` 元）并加 `1e-9` 硬门；
+  `ledger.py` 模块说明改为「股数复用受审 `allocate_shares`、费用按 F25 §5 同公式 P7 侧实现」。
+- **A-02**：新增构造例 `audited_waterfall_rejects_1ulp`（确定性搜到第 18 个样例复现受审件 1 ulp 拒绝，落盘入参与异常文本）；
+  差分回归改为「异常文本白名单 + `compared >= 3`」，不再可能静默跳过。
+- **A-03 / B-03**：删与「登记不拒判」矛盾的零调用守卫；`E_i <= 0` **禁新增买入**政策接线（含顺延买入残差、检查点快照集合）+ 回归；
+  逐袖现金符号逐日登记（实测 v10 连续 10 日 −14,312.95）。
+- **A-04**：S4 `q_i` 改回**原始意图金额**、S5 `intent_shares` 改回原意图，使「分得不得超意图」守卫在主路径可失败。
+- **A-05**：`legacy_sha` 拆 `verifiable`(9 件 `src/**`，2 件与 P6.5 T5 逐字节一致) / `not_verifiable`(8 件 t25，无基线) + `src_ok` / `gate_scope`。
+- **A-06 / N-1 / N-2**：费用门升级为**三条独立累计通道**（逐事件 3501 笔 / 按袖 4.07e-10 / 物理账本 1.16e-10）+
+  浮点闭合阈值（`max_abs_ulp_gap`、`ulp_gap_total` ≤ `1e-9`），全部进 `_stop_on_hard_failures`。
+- **A-11 / A-12 / A-13 / A-14 / A-10 / A-09 / A-08**：费用键集断言 + 回归；`cash_minus_credit` 统一命名；构造例拆分；
+  `ok:"informational"+gate:false`；聚合函数单一实现；链指标改 `contribution_nav_metrics` / `sleeve_nav_metrics` + 分母标注；S1 逐条 provenance。
+- **B-01 / B-02**：`note_valuation` 落 `price_date`，`per_stock` 增 `dates_recorded/last_price_date/last_source`，
+  `valuation_dates_missing = 0` 入门；停牌恒定性期望价改**独立复读** `clean/daily`，并新增 `resume_consistency`
+  （恢复日来源须 `day_close` 且与独立复读原始收盘价逐位相等，实测 5/5）。
+- **B-04 / N-6**：新增 `cross_day_conservation`（5,150 意图 / 0 违例）+ **两条独立锚**
+  （`Σ逐键 offset = 2×抵消股数` 1,472,000、`Σ逐键 filled = 市场成交量` 50,871,800），防记账内重分配。
+- **B-05**：`StateEnvelope.commit` 同键同代同指纹时**再比对状态本体**，不同即拒绝（含回归）。
+- **B-06 / N-4 / B-17**：检查点改 **~50% / ~90% / 末日 3 个**并逐个重放；重放/重启/分段各用**独立 `PriceBook`**
+  + 检查点当时的禁买集合快照；`price_book_isolated` 由工厂存在性派生。
+- **B-07**：按任务书 §2「不改 20 日到期」拒绝重排到期，改为 `t4_boundaries.exit_schedule_from_plan` 登记 + 期末零滞留 lot 佐证。
+- **B-08 / B-09 / B-10..B-19**：自然实例删 `notional` 并标 `notional_omitted`；`split_index` 由 `params.split_of(day)` 强制写入
+  （14 折全覆盖）；`t4_boundaries`（资金/借用边界、S4 作废、逐袖现金符号、E≤0 政策）；同袖双向显式拒绝；删死代码；
+  `origin_signal_date` 改名；新增宿主级回归 `tests/test_v2_p7_t4_host.py`（11 例）。
+- **新增 `checks.contract_deviations`（CD-1 / CD-2）**：把两处**口径偏差**显式登记并标 `requires_user_confirmation: true`
+  （CD-1 = 终端不闭合改物理侧吸收，替代契约的「拒绝」；CD-2 = 逐袖 `cash_i` 可为负，逐袖非负门归 T5）。
+- **CD-1 / CD-2 于 2026-11-12 由用户裁决并落入契约 P7 注记**：CD-1 改「精度容差」——逐事件
+  `100 ulp(F)` 内视为闭合（298 元量级约 `5.7e-12` 元；物理费用取 `Σf_i`，`Σ cash_i ≡ 物理现金` 仍精确），**超出 100 ulp 仍拒绝**
+  （新增回归 `test_close_terminal_rejects_gap_beyond_one_ulp`）；全窗硬门 `1e-9` 元。
+  CD-2 保持「T4 登记不拒判、逐袖非负门归 T5」，并说明「拦下转账 = 放弃净额化、费用翻倍」的因果。
+  `checks.contract_deviations` 两项均标 `status: resolved_by_user`、`requires_user_confirmation: false`。
+  轨迹标签 `absorbed` 更名 `within_tolerance`（数字不变），证据新增 `event_tolerance_ulp` / `run_tolerance`。
+- **证据（代际）**：`p7_t4_20261112_r1`~`r12` 全部只读保留，**现行 = `_r12`**（41.2s、`checks` 全过、
+  `alpha_consumed=false`）；`_r1`~`_r11` 为同会话迭代代际，逐代登记于收口报告。
+- **静态门**：flake8 / black / isort `exit=0`；复杂度双口径 `exit=0`、新增硬超限 **0**；定向回归 **59 passed**
+  （`test_v2_p7_t4_lifecycle.py` 46 + `test_v2_p7_t4_host.py` 11）。
+
+## [0.209.83] - 2026-11-12
+
+### Added（P7 T4：P7 专用生命周期、价源、双口径与状态）
+
+- **净额化生命周期**（`scripts/v2_p7/t4/netting.py`）：T2.5 相位目标 → **零副作用预净额计划**
+  （S1/S2/S3 跨袖抵消 + 净额方向唯一、S4 同向合并、S5 同向卖出、S6 单袖、S7 到期 sell 入同一流程）；
+  `original = offset + filled + voided + carry` 逐意图恒等（5,510 行 / 0 违例）。
+- **Q3=A 费用纯函数**（`fees.py`）：S5 `f_i = F·a_i/A` + 终端袖 `(a_i 降序, sleeve_id 升序)` 一次闭合；
+  S4 复用受审 `allocate_shares`（Q18），费用瀑布按 F25 §5 同公式在 P7 侧实现（受审件在真实数据上
+  会因 1 ulp 尾差拒绝，**未修改受审件**，另加差分回归锁定同公式）；独立费用按
+  `(sleeve, 日, 股票, 方向)` 聚合后只计一次；有符号节省允许为负。
+- **价源分离**（`price.py`）：成交只认真实 T+1 开盘（open 缺失/为 0/停牌/反向涨跌停逐项登记，
+  **禁止回退当日收盘**）；估值按「当日价 → 最后已知价 → 买入价」共享解析并逐股记
+  `price_date/price_source`；内部转账只认当日真实开盘价（缓存估值不得完成 B1 转账）。
+- **双口径恒等式**（`dual.py`）：I1/I2/I3 逐日闭合（I3 允许 E 零/负有符号贡献）、
+  只读反事实 NAV（`E_nosave = total_value − 累计节省`，分母为袖自身初资，非正标
+  `invalid_nonpositive_equity` 并保留当日）。
+- **P7 专用状态信封**（`state.py`）：物理/虚拟 lot、cash/credit、袖级残差、借款 lot 位、
+  召回/死局位、价源、双口径累计、幂等键 + generation 同代提交（同代重放无操作、跨代拒绝）；
+  **不改** P4 `EngineState`。
+- **历史宿主**（`host.py`）：`HistoricalVirtualSleeveHost` 跨 14 折连续账户（1,745 日）、
+  逐日同代提交（generation 1,745）、重放 40 日与末日重启**逐位一致**。
+- **场景提取与正负例**（`scenarios.py`）：自然实例逐笔复算 **S1 0 / S2 20 / S3 56 / S4 695 /
+  S5 695 / S6 2,218**（与 T2.5 `intent_precheck.json` 逐项一致）；9 条构造例全过
+  （S1 严格等量黄金例、`F > Σ独立费用`、单袖零份额、尾单 167/167/166、部分成交+跨日残差+恢复、
+  抵消双方独立费用与印花税、有符号节省为负、`A=0,F=0` / `A=0,F≠0`、缓存估值不得完成转账）。
+- **证据**：`data/paper_shadow/p7_testbed/p7_t4_20261112_r3/`（七件套 + `scenarios/` +
+  `legacy_sha.json` + 3 个 parquet；42.5s）；`alpha_consumed=false`。
+- **受审旧面零改动**：17 件逐件 SHA + 最近提交登记；`order_chain.py` / `virtual_native_engine.py`
+  与 P6.5 T5 旧证据登记的源码 SHA **逐字节一致**。
+- **仓库卫生（`CLAUDE.md` §7.6 强制）**：`src/lazybull/data/sw_industry_pit.py` 此前无任何
+  `src/lazybull/**` 内真实 import，使 `tests/test_check_inuse_closure.py` 两项既有失败（notin 225→226）。
+  本轮在 `src/lazybull/data/__init__.py` 增加包级注册 + 同步
+  `tests/fixtures/inuse_closure_baseline_20261006.json` 与三个基线常量（**notin 保持 225，只减不增**），
+  两项失败已修复（6 passed）。
+- **边界**：T5/T6 未启动；B 区未转正；生产链路零改动；不产生任何 pass/fail 经济判定；
+  T4 无借用/配额，逐袖现金约束残差按日终作废（授权/借用归 T5）。
+
+## [0.209.82] - 2026-11-12
+
+### 收口（P7 T2.5 通过复审，仅文档与版本，无代码改动）
+
+- **复审 4 通过**：四轮评审（2×P1+4×P2 → 2×P1+2×P2+1×P3 → 1×P1+2×P2 → 3×P2 → 通过）全部整改，
+  另附 3 项非阻断维护意见已登记 backlog。
+- **收口身份**：证据根 `data/paper_shadow/p7_testbed/p7_t25_hk_20261112_r6/`（56 件 / 484.2s）；
+  工作区 `source_digest = 7aa31670…`、测试 SHA `844f5360…` 与复审 4 记录逐字节一致；
+  代码、测试、证据在本轮**零改动**（避免 digest 漂移）。
+- **交付结论**：S1 0 / S2 20 / S3 56 / S4 695 / S5 695 / S6 2,218，机械栏
+  `observed_with_registered_gap`（S1 缺口登记，S2~S5 缺位仍阻断）。
+- **边界**：T4~T6 未启动；B 区未转正；`src/lazybull/**` 零改动；`alpha_consumed=false`。
+- **文档**：新增 `docs/reports/p7_t25_closure_20261112.md`；CLAUDE.md P7 状态行改为「已收口」。
+
+## [0.209.81] - 2026-11-12
+
+### Fixed（P7 T2.5 复审 3 整改：D1/D2/D3，均 P2）
+
+- **D1 无效开盘价不再回退当日收盘**：`_open_price` 只用 open；open 无效/缺失时用开盘时已知的最后价格
+  （存量持仓买入价）或 0，新买入不成交并登记 `run_integrity.unpriced_buys`
+  （`{trade_date, ts_code, reason: no_valid_open}`）。回归：仅扰动执行日 close 不得改变计划（open=0 场景）。
+- **D2 方差取样按行/值分离**：`VarianceBook` 增 `present` 矩阵，先按**实际行情行**计数并取末 60 行，
+  行内 NaN 交共享估计器过滤（与内核 `estimate_stock_variance` 同序）。回归：20 行含 1 个 NaN 行仍可估计，
+  真缺行（19 行）才回退。
+- **D3 数量口径标签与文档统一**：`intent_precheck.QUANTITY_BASIS =
+  half_kelly_signal_day_weight_at_t1_open_nav`、`INTENT_NOTE` 改述；主报告 NAV 描述、代际引用与回归计数（31）同步。
+- **证据**：`data/paper_shadow/p7_testbed/p7_t25_hk_20261112_r6/`（56 件 / 484.2s / digest `7aa31670`）；
+  场景仍 **0 / 20 / 56 / 695 / 695 / 2,218**（D1/D2 不改当前数值，`unpriced_buys` 0 / 0）。
+- **测试** 37 passed（T2.5 31 + T1 6）。
+
+## [0.209.80] - 2026-11-12
+
+### Fixed（P7 T2.5 复审 2 整改：C1/C2/C3）
+
+- **C1（P1）切断两处未来信息**：权重改在**信号日 T** 定死（`sleeve_weights(signals, signal_day, variance_book)`，
+  写入计划行 `weight` 列），执行日不再重算；执行日 NAV 只用开盘已知量
+  （`cash_open + 当日卖出回款 + Σ 存量持仓 × 当日 open`），不再用执行日 close。
+  新增两条因果性回归：只改 T+1 close 时计划/持仓逐位不变；方差截止日只出现信号日。
+- **C2（P2）方差窗口改逐股取样**：`VarianceBook.variance` 改为「先剔该股缺失日、再取最近 60 行」，
+  与内核 `estimate_stock_variance` 同义；复用共享 `estimate_variance_from_prices`。
+- **C3（P2）README 代际与示例**：改指现行代际、历史代际标不可复算、`--resume` 示例改为未完成 run
+  并注明完成根只读、补 `--accept-input-drift` 用法。
+- **结果变化（如实登记）**：因果修正后 **S1 由 1 变 0**，S2 20 / S3 56、S4/S5 695、S6 2,218
+  ⇒ 按**用户 2026-11-12 裁决**：S1 不作阻断项，登记 `observed_with_registered_gap`
+  （`missing_scenarios=["S1"]` 如实保留），**机械线 T4~T6 继续**；S1 由 T4 构造黄金例覆盖。
+- **证据**：`data/paper_shadow/p7_testbed/p7_t25_hk_20261112_r6/`（56 件 / 484.2s / digest `7aa31670`，含复审 3 整改）；
+  锚分数 1,747/1,747、计划 175/175（未解释 0）、分数与目标双重重放零差、输入 3,472 件比对（1 件显式接受）。
+- **测试** 28 passed（新增两条因果性回归）。
+
+## [0.209.78] - 2026-11-12
+
+### Fixed（P7 T2.5 复审 1 整改：R1/R2/R3/R4 + T1 复杂度，用户裁决「接入 half-Kelly」「修它」）
+
+- **R1 基准袖 sizing 已按冻结值接入**：`target_layer.sleeve_budgets` 走内核
+  `compute_kelly_weights(half=True, max_leverage=0.2)` → `cap_and_normalize_weights(0.15/本批比例)`，
+  预算 = 袖 NAV（成交日）× 本批资金比例 × 批内权重；波动窗 60 日、`close_adj`、最小样本 20（与内核一致）；
+  计划帧新增 `weight`/`budget` 可审计。`params.sizing_basis` 改 `half_kelly`。
+  **更正**：此前「接入 half-Kelly 后 S1 必然归零」的说法作废（复审反例 + 实测 S1=1）。
+- **R2 输入身份绑定与元数据比对**：`compute_input_identity` 提到打分之前并并入 `params_digest`
+  （续跑据此拒绝异源分片）；`clean/trade_cal`、`clean/stock_basic` 纳入与冻结清单的逐件比对与发布门；
+  新增显式接受机制（`--accept-input-drift` / `P7_T25_ACCEPT_DRIFT` / `scripts/v2_p7/t25/accept_input_drift.json`），
+  命中项记入 `accepted_input_drift` 并在 manifest 留痕，未显式接受仍阻断发布。
+- **R3 证据代际与完成根只读**：本轮以**新 run ID** 重取（`p7_t25_hk_20261112_r3`）；
+  `resume` 遇到已存在 `manifest.json` 的完成根直接拒绝；目标帧与汇总件改为**发布门全部通过之后**才落盘。
+  v1/v2 旧证据因同 ID 重取已被覆盖、无备份，已在报告 §9 与作者回应 r2 §3 如实登记。
+- **R4 目标比较器改为严格位相等**：按列校验 dtype；整数精确 `!=`（消除 int64 减法溢出漏检）；
+  浮点按 `float64` 位表示（覆盖 `+0.0/-0.0`、尾数、NaN 位模式）；新增三条反例回归。
+- **T1 复杂度（用户裁决）**：`scripts/v2_p7/t1/matching.py::match_one_day` mccabe 13 拆分出
+  `_standardize_columns` / `_empty_day_match`（纯提取，行为不变），
+  `--paths src/lazybull scripts` 恢复 exit=0、新增硬超限 0；T1 `source_digest` 随之变化已登记。
+- **证据**：`data/paper_shadow/p7_testbed/p7_t25_hk_20261112_r3/`（新代际）；
+  S1 1 / S2 19 / S3 56（反向 76 笔）、S4 695 / S5 695、S6 2,218，`observed`；
+  分数锚 1,747/1,747、计划 175/175（未解释 0）、分数与目标双重重放零差、输入 3,472 件比对（1 件显式接受）。
+- **测试** 26 passed（新增 sizing 口径、位相等比较器、续跑身份、发布门、资金时点等负例）。
+- **裁决闭合（用户 2026-11-12）**：① `clean/stock_basic.parquet` 的更新接受为受权输入更新，不重取全链
+  （无备份且非 PIT，重取需动 B0 锚证据）；② T1 `source_digest` 变化接受并登记为静态检查整改。
+  **同时新增「作者自决边界」**（CLAUDE §5）：不影响信号域的输入漂移、不改数值路径的静态整改、
+  证据代际重取与文档数字校正由作者自决留痕，仅四类（改冻结参数/改口径/触碰 B0/需新预算）才上报。
+
+## [0.209.77] - 2026-11-12
+
+### Fixed（P7 T2.5 外部评审整改：2×P1 + 4×P2 逐条甄别）
+
+- **P1 续跑身份（已修）**：`runner._assert_resume_fold_identity` 复用分片前核验折号/模型号/
+  `params_digest`/`source_digest`/`scores.parquet` 与 `signal_topk.parquet` 实际 SHA（缺件同样拒绝）；
+  新增发布门 `_stop_on_hard_failures`：锚分数不一致、目标层不可重放、分数不可重放、日历污染、
+  锚计划存在未解释差异、实际读入数据与冻结清单不一致——任一命中即 `RuntimeError`，**不写汇总件与 manifest**。
+- **P2 资金诊断时点（已修）**：`_daily_row` 改为同一时点——目标槽位 = 成交前持仓 − 当日到期 + 新买、
+  市值 = 成交后 book 且**每个持仓日都计算**；`raw_demand_mean` 由 V20 589,476 / V10 252,175 降为
+  **11,847 / 6,246**（修前换仓日会把目标算成 30 槽、普通持仓日市值置 0）。
+- **P2 目标全字段重放（已实现）**：`signal_layer.verify_targets_replay` 同进程重算两袖，对
+  `plans/holdings/daily` **6 帧全字段逐位比对**（`compare_frames`），每次运行必跑并进发布门。
+- **P2 本 run 输入内容身份（已实现）**：`params.compute_input_identity` 对实际读入的
+  `features/cs_train` 1,725 件（15,469 MB）+ `clean/daily` 1,745 件 + `clean/trade_cal/stock_basic`
+  重算 SHA，落 `input_identity.json` 并写入 manifest；与冻结输入清单**逐件比对 3,470 件、不一致 0**。
+- **P2 报告数字校正（已修）**：报告资金/借出数字全部改为证据根实际值（V10 缺口日 39、不紧绑定 132、
+  借出 1 次 / 2,034 元），并注明来源文件与复算命令。
+- **P1 基准袖 sizing（接受问题、待用户裁决）**：本 task 两袖仍用等权预算代理，manifest 新增
+  `params.sizing_basis`（含锚批次 half-Kelly 四项冻结值、影响说明），报告 §8-2 明确
+  「股数级数字只作量级、不得作为冻结 A sizing 的数量证据」；接入 half-Kelly 后 S1 将结构性归零。
+  两个处置选项见 `docs/review/v2_p7_t25/p7_t25_author_response_20261112.md` §1。
+- **证据重取**：`data/paper_shadow/p7_testbed/p7_t25_c7_20261111_r1/`（**56 件**、446.1s）；
+  分数锚一致 1,747/1,747、计划 175/175（未解释 0）、分数与目标双重重放零差、输入身份 3,470 件零不一致；
+  S1 16 / S2 26 / S3 34 / S4 695 / S5 695 / S6 2,218，`observed`（前提为上述 sizing 裁决）。
+- **测试** `tests/test_v2_p7_t25_target_layer.py` **25 passed**（新增续跑身份、发布门、目标篡改、
+  资金时点四组负例）。
+- **未修项**：复杂度合并口径 `--paths src/lazybull scripts` 为 exit=1，唯一新增来自
+  `scripts/v2_p7/t1/matching.py::match_one_day`（T1 文件，非本 task；修会改动 T1 已收口证据的
+  `source_digest`，待用户裁决）。本目录 `scripts/v2_p7/t25` 自身 exit=0、0 硬超限。
+
+## [0.209.76] - 2026-11-12
+
+### Added（行业分类快照归档 + 变更检测）
+
+- **数据层** `src/lazybull/data/sw_industry_pit.py`：
+  - `panel_fingerprint`：与 parquet 引擎无关的内容指纹（行数 / 股票数 / 版本分布 /
+    `max(source_updated_at)` / 关键列 CSV 的 SHA-256）；
+  - `diff_panels`：两次抓取对比，输出 `changed` / `added_intervals` / `removed_intervals` /
+    `reclassified_intervals` / `codes_added` / `codes_removed` / 新旧指纹。
+- **入口** `scripts/download_sw_industry_history.py`：
+  - **按抓取日归档**（不覆盖历史）：`data/raw/sw_industry_history/snapshot_YYYYMMDD.parquet`、
+    `data/clean/sw_industry_pit/pit_YYYYMMDD.parquet`、`code_table_YYYYMMDD.parquet`、
+    `meta_YYYYMMDD.json`；flat 路径保持为 `latest`，旧读法不受影响；
+  - **仅在有变化或该指纹尚未归档时写盘**：无变化则 latest 不重写、不重复归档（二次运行幂等已验证）；
+  - 新增 `--check-only`（只检测不写盘，供 cron/巡检）、`--force`（强制重写并归档）、`--diff-out`；
+  - `meta` 记录 `content_sha256`（口径无关指纹）与 `pit_file_sha256`（文件级 SHA，与 run manifest 同口径）。
+- **验证**：归档元数据 `pit_file_sha256 = ca69f80d08c73d83a3e0bb6d1a31c4bd614f8db74ea95674c269c9f02072d343`
+  与 r4 manifest 的 `data_state.input_files["data/clean/sw_industry_pit.parquet"]` **逐字节一致** ⇒
+  r3/r4 证据的输入已可回溯物化（此前为单份可覆盖文件，属"记账无凭证"）。
+- **测试** `tests/test_sw_industry_pit.py` 增 4 项（指纹顺序无关、无变化、增删改、无基线），共 23 项通过。
+- **文档** `docs/data/sw_industry_pit_audit.md`：存储布局补归档路径与 SHA 追溯口径、新增 §5.1 变更检测、
+  §11 增「未接线自动刷新」限制、§12 复现命令更新。
+- **边界**：仅补齐"可自动刷新"的前置能力；`features/ensure/industry.py` 仍只管 TuShare 当前快照，
+  **自动刷新未接线**（属行为变更，需另行裁决）；实验侧禁止自动刷新，运行前锁定 `pit_file_sha256`。
+
+## [0.209.75] - 2026-11-12
+
+### Changed（行业输入裁决落档：G1′ 口径无效剔除，判「可用」）
+
+- **用户裁决（2026-11-12）**：G1′（事件可匹配率）在 r2/r3/r4 三代均为 90~92%、缺口由停牌致
+  协变量缺失主导，**与行业输入无关** ⇒ 判**口径无效并剔除**；其余六门（G2′~G7′）全过 ⇒
+  **行业输入判「可用」**。
+- **生效范围**：仅解除「行业数据能否作为 P-1 输入」；B0 冻结状态不变（r2/r3/r4 三代
+  `inconclusive_frozen` 独立保留），不构成 B 区转正、不构成前向/日历验证通过、
+  不得把 r4 与 r2/r3 的净值差异读作策略效应。
+- **落档**：`CLAUDE.md` §5 新增「行业输入升级契约」（0 元公开源、区间语义、`UNMAPPED` 计已知、
+  `--industry-source` 默认 snapshot、r3 免罚缺陷与 v2 修正、r4 读数、G1′ 剔除、残余四类）；
+  `docs/experiments/p7_industry_input_prereg_v2_20261111.md` §九 与
+  `docs/reports/p7_t1_p4_industry_input_v2_20261111.md` §七 追加裁决（append-only）；
+  `docs/plans/v2/p7_industry_data_brief_20261111.md` §11.4 待办 5 标记完成。
+- **后续**：P7b 与新 prereg 若使用行业项，判据直接引用 v2 §三 的 G2′~G7′，**不重新发明门槛**。
+
+## [0.209.74] - 2026-11-11
+
+### Fixed（P7 T1 r4 执行：未知不入池后未知对归零，六门过、G1′ 口径无效）
+
+- **执行**：`--run-id p7_t1_20261111_r4 --industry-source pit`，证据根
+  `data/frozen_reference/v2_p7/p7_t1_20261111_r4/`（`status=final`）；意图组与 r2/r3 同
+  （54,331 / 14,913 / 106,019），`verdict=inconclusive_frozen`（不比较）。
+- **门读数**：G2′ 未知致不可匹配 0.026%（14）/0.000%（0）/0.079%（84）过；G3′ 有效对<3 组 0/97,681 过；
+  G4′ 台账排除 0/586,086 过；G5′ 入选对 `all_known_share=1.000`（边界全幅 0pp）过；
+  G6′ 台账 0==排除 0 过；G7′ 结构断言与 `validate_pit` 全过。
+- **A 的效果**：入选的 586,086 个股票-日对**全部已知**（r3 为 99.14%，5,019 未知集中在 45 只股票）；
+  匹配数 Δ −27/**+53**/−107（≤0.11%，express 反而上升）；unresolved Δ +33/−51/+110。
+- **G1′ 不过**（90.90%/90.65%/92.14%，阈值 ≥99%），但 r2 同口径为 90.41%/90.19%/91.97%、
+  r3 为 90.95%/90.29%/92.23% —— **三代不变 ⇒ 不随行业输入变化**，缺口由 `events_covariate_missing`
+  主导 ⇒ 登记为**口径无效**（口径设计错误，不是结果不利）。这是本议题第二次口径修正，按契约不得形成改门循环，
+  故**不自动生效**：需用户在「接受（判可用）」与「不接受（判不可用、行业维度标输入受限）」之间二选一，
+  **不再新开 r5 迁就判据**。
+- 报告 `docs/reports/p7_t1_p4_industry_input_v2_20261111.md`；v2 协议 §八 追加执行结果（append-only）。
+
+## [0.209.73] - 2026-11-11
+
+### Fixed（行业匹配资格前置：未知不入对照池，v2 协议 A）
+
+- **`scripts/v2_p7/t1/matching.py`**：按用户裁决实现方案 A。
+  - 候选资格：`candidate_industry >= 0` 才可入选，未知候选距离置 `inf`——消除"未知免罚"
+    （r3 实测该偏差使 `302132.SZ` 作为对照出现 2.83%，均匀期望 0.086%，33 倍）。
+  - 事件资格：`event_industry < 0` 整行不可匹配，落 `insufficient_controls`；
+    与 `insufficient_controls` 并列新增诊断计数 `events_industry_unknown`，不新增状态枚举（避免下游枚举漂移）。
+  - 标准化母池**不变**（仍为当日全候选池）：未知股 <1%，对中位数/MAD 影响可忽略，
+    保持与 r2/r3 的标准化口径一致。
+- **测试**：`tests/test_v2_p7_t1_industry_source.py` 增 2 项（未知候选即使最接近也不得入选、
+  事件未知则 5 个对照全 -1）；`tests/test_v2_p7_t1_review_fixes.py::test_r10…` 按新契约更新
+  （入选对必然全已知，`industry_known_pair_share == 1.0`，未知股不在 members 内），保留其"不混口径"意图。
+  定向回归 30 项通过。
+- **新协议** `docs/experiments/p7_industry_input_prereg_v2_20261111.md`（v0.209.73）：
+  v1 的 G1/G2 在 A 之后恒为 100%（失去检验力）、G7 字面口径不可执行，故替换为
+  **G1′ 事件可匹配率 ≥99%**、**G2′ 未知致不可匹配 ≤1%**、**G3′ 有效对<3 ≤0.1%**、
+  **G4′ 排除率 ≤1.5%**、**G5′ 一致性边界全幅 =0pp**、**G6′ 台账==排除**、
+  **G7′ 结构纯净性（入选对全已知 / match 同码 / `validate_pit` 通过）**。
+  v1 全文与 r3 判定保持不变（append-only）。
+- **run**：`p7_t1_20261111_r4`，证据根 `data/frozen_reference/v2_p7/p7_t1_20261111_r4/`；
+  r2/r3 只读保留。不得把 r4 与 r2/r3 的净值差异读作策略效应。
+
+## [0.209.72] - 2026-11-11
+
+### Fixed（P7 T1 r3 行业输入升级执行与判定：门未过，根因已定位）
+
+- **执行**：`python scripts/v2_p7/t1/run_p1.py --run-id p7_t1_20261111_r3 --industry-source pit`，
+  证据根 `data/frozen_reference/v2_p7/p7_t1_20261111_r3/`（原子发布）；`industry_source=pit`、
+  复合 prereg SHA `e88efd87…` 与崩盘规格 `61c6b7d1…` 均未变；PIT 输入 SHA
+  `ca69f80d…`（面板）与 `c4747966…`（码表）入 manifest。面板 3,657 日 × 5,849 股，
+  事件 54,331 / 14,913 / 106,019（与 r2 同）。
+- **七道门**：G3 0.0051%（≤0.1%）过、G4 0.856%（≤1.5%）过、G6 台账 5,019 == 排除 5,019 过；
+  **G1 不过**（对级 98.03%~98.83% 质量口径 / 99.14% fina 复算，门槛 99.5%）、
+  **G2 不过**（组级六股全已知 90.92%~94.69%，门槛 99%）、
+  **G5 不过**（边界全幅 5.31~9.08pp，门槛 3pp）；
+  **G7 定义不可执行**（抽样 180 日全部"混合"，诊断为命名标注 artifact——2014 版仅部分行业重编号，
+  同一日内不跨编号体系，实现上不做跨日比较；按纪律不解释为通过）。
+- **根因（已定位，非数据不足）**：`matching.match_one_day` 中
+  `industry_gap = both_known & (event_ind != cand_ind)`，任一方未知时惩罚为 **0（免罚）**。
+  r2 时代已知对仅 12.6%~30.7%，免罚是普遍现象无区分度；升级后未知只剩 45 只股票，
+  免罚变成稀缺优势 → 被系统性优先选为对照：`302132.SZ` 出现率 **2.83%**（均匀期望 0.086%，**33 倍**）、
+  `001914.SZ` 1.42%、`601360.SH` 1.01%。0.86% 的对级缺口由此放大为 5~9pp 的组级/边界缺口。
+- **判定**：`industry_input_not_usable_in_r3`。**不调阈值**（禁止事后改门）；推荐 v2 方案 A
+  （未知行业候选不入对照池，未知事件组按 `insufficient_controls`/`unresolved` 登记），
+  以新协议 + `p7_t1_20261111_r4` 重跑；r3 证据只读保留。
+- **B0 边界**：r3 `verdict=inconclusive_frozen`（与 r2 同态），两代独立冻结，不得互相覆盖或
+  引用为改进；不得称行业输入可用、不得称前向/日历验证通过。
+- 报告 `docs/reports/p7_t1_p3_industry_input_20261111.md`；预登记 §九 追加执行结果（append-only）。
+
+## [0.209.71] - 2026-11-11
+
+### Added（T1 行业来源开关，r3 前置实现）
+
+- **`scripts/v2_p7/t1/dataplane.py`**：新增 PIT 分支，**默认行为不变**。
+  - `Panel` 增可选 `industry_matrix`（默认 `None`）：`None` 时 `industry_at` 走原「`T >= in_date`」快照路径，
+    与原实现逐值相同；非 `None` 时按 `matrix[day, stocks]` 取码。
+  - 新增 `_industry_matrix(root, stocks, days)`：读 `data/clean/sw_industry_pit.parquet`，按
+    `in_date <= T < out_date` 展开 `(日 × 股)` int32 矩阵（无覆盖 -1）；取申万**二级代码**（`l2_code`）
+    与 r2 快照口径同粒度；`sw_version=UNMAPPED`（pre-2014 旧码）计为已知，跨版本比较禁止。
+    `_industry_vector` / `load_industry_mapping` **未改动**。
+  - `load_panel(..., industry_source="snapshot")`：`pit` 时末日码仅作诊断、`industry_since` 置 -1；
+    `load_stats` 增 `industry_source_mode` / `industry_cells` / `industry_cells_known`。
+- **`scripts/v2_p7/t1/run_p1.py`**：CLI 增 `--industry-source {snapshot,pit}`（默认 `snapshot`）并透传；
+  manifest 增 `industry_source`；`input_identity` 增 `data/clean/sw_industry_pit.parquet` 与
+  `data/clean/sw_industry_code_table.parquet` 的 SHA，使 r3 行业输入可逐字节追溯。
+- **测试** `tests/test_v2_p7_t1_industry_source.py`（5 项）：区间切分、`UNMAPPED` 计已知、缺件报错、
+  矩阵优先、快照回退逐值不变。
+- **契约**：G4 排除率门槛用户裁决放宽至 **1.5%**，已在 `CLAUDE.md` §5 登记为例外；
+  `docs/experiments/p7_industry_input_prereg_20261111.md` §四 与
+  `docs/data/sw_industry_pit_audit.md` §9 同步。
+
+## [0.209.70] - 2026-11-11
+
+### Added（P7 行业输入升级预登记）
+
+- **预登记协议** `docs/experiments/p7_industry_input_prereg_20261111.md`：把 v0.209.68 的 PIT 数据层接入 T1 的
+  判据在**开跑前**冻结，避免"先看结果再定门"。
+  - **唯一变更点**：行业输入 `raw/shenwan_industry.parquet`（快照 + 单一 `in_date`）→ `clean/sw_industry_pit.parquet`
+    （区间表），`dataplane._industry_vector` / `industry_at` 改区间驱动；复合 prereg（`e88efd87`）、崩盘规格
+    （`61c6b7d1`）、cells、三种子、成本、`MATCH_VARIABLES`、`CONTROL_COUNT=5`、MAD 裁剪、顺延 10 日、α/MDE 门
+    **逐字节不变**——属输入修正而非参数变体，仪器变更由 manifest `code_state.script_sha256` 留痕。
+  - **可复现性约束**：实现须提供 `--industry-source {snapshot,pit}` 开关（**默认 `snapshot`**）；
+    默认路径须与 r2 **行为等价**（同输入下 `industry`/`industry_since` 逐值相同，单测锁定），
+    r3 显式传 `pit` 并写入 manifest；manifest 因 script SHA 变化必然不同，属预期。
+  - **口径写死**：`industry_known_at(T) = in_date <= T < out_date`，**不要求名称可翻译**——
+    `sw_version=UNMAPPED`（pre-2014 旧码）计为已知（同日全市场同码制，跨版本比较禁止）；行业项仍只作 0/1 惩罚，
+    不进入 z 距离求和。
+  - **七道机械门**：G1 股票-日 ≥99.5%（实测 99.92%）/ G2 六股全已知 ≥99%（99.52%）/ G3 有效对<3 组 ≤0.1%
+    （0.005%）/ G4 排除率 ≤**1.5%**（用户裁决，覆盖契约默认 MDE/10=1.2%，已在契约登记）（实测 0.48%）/
+    G5 边界全幅 ≤MDE/4=3pp（0.48pp）/ G6 台账行数==排除计数 / G7 版本纯净性（同日不得跨版本混比）。
+    全过 → 可用；任一不过 → 不可用，**不得调阈值重跑**。
+  - **G5 口径边界预先声明**：行业项进入对照选择，两端赋值+重匹配等于替换仪器，故 G5 只对行业诊断量做 bounding，
+    净值层不 bounding；r3 的 `verdict` 按复合 prereg 原规则出，且**不与 r2 比较**。
+  - **结论边界**：不得把 r3 与 r2 的净值差异读作策略效应（对照集已换）、不得称前向/日历验证通过、
+    不得称 B0 复活或 B 区转正、不得覆盖 r2 冻结读数。
+  - **失败处置**：G2/G4 不过 → 回退 r2 口径并把行业维度标「输入受限、不可验收」；分年塌陷 → 该年单独
+    `input_limited`；G5 超限 → 判不可用并登记缺失非随机。
+  - run id `p7_t1_20261111_r3`，证据根 `data/frozen_reference/v2_p7/p7_t1_20261111_r3/`，报告须含本协议 SHA、
+    输入件 SHA、G1~G7 实测、台账摘要、新旧匹配集差异、行业一致率双口径。
+
+- **文档联动**：`docs/data/sw_industry_pit_audit.md` §9 验收门标注已冻结进该协议；
+  `docs/plans/v2/p7_industry_data_brief_20261111.md` §11.4 待办 4 标记为已起草。
+
+- **边界**：纯文档变更，无代码改动、无测试改动；r3 **尚未启动**。
+
+## [0.209.69] - 2026-11-11
+
+### Added（P7 T2.5 A 逐日信号再生 / 相位目标 / 原始意图预检）
+
+- **工具** `scripts/v2_p7/t25/`（`params` / `signal_layer` / `target_layer` / `intent_precheck` / `runner` /
+  `run_t25`，`pilot_fold.py` 保留为单折回归夹具）：14 折逐日分数、Top-N、20 日持期目标与 V20/V10 相位日历；
+  目标层**复用内核** `signal_execution._filter_signal_candidates` + `_resolve_signal_target_n` →
+  `params.get_tranche_target_count`，`src/lazybull/**` 未改。
+- **证据根** `data/paper_shadow/p7_testbed/p7_t25_c7_20261111_r1/`（55 件、423.0s）：1,725 日信号域、
+  1,719 打分日（+6 日 Stock Connect 合法闭市已登记）、计划行 2,575、持仓登记 51,500 行；逐位重放
+  split00/06/13 × 3 日 `max_abs_diff=0`；折界 26 处全部承接；末折 runoff 30 条未决义务、右删失 0。
+- **原始意图预检（估计口径）**：S1 16 / S2 26 / S3 34（反向合计 76 笔）、S4 695 / S5 695、S6 2,218；
+  持仓重叠日均 Jaccard 0.422、两袖日收益相关 0.891；`natural_observations.status = observed`。
+- **口径变更（用户 2026-11-11 裁决）**：**对手袖是构造对手盘，其参数可设计；真实性只约束信号、分数、价格、
+  持仓、日历与整手**。据此把对手袖由「top_n=20 + 300k」改为「top_n=10 + 350k」（单槽名义与基准袖 35k 对齐）。
+  冻结口径实测反向仅 1 笔（相位偏移 10 日 = 分批间隔 ⇒ 平移退化，两袖持仓 1,690/1,740 天完全相同）；
+  偏离项在 manifest `params.design_deviation` 逐条登记，基准袖口径未动。
+- **锚一致性追查（结论：双方代码均无缺陷，是比对键用错）**：`attribution.pred_score` 的语义是
+  「**实际成交**股票在 `ranking_date` 当日的分数」——T+1 停牌顺延时 `actual_ts_code ≠ planned_ts_code`，
+  且补位阶段 `ranking_date` 晚于 `signal_date`。此前按「计划股票 + 信号日」关联得出的「9 个信号日名次错位」
+  是比对错误；改按 `(ranking_date, actual_ts_code)` 关联后 **1,747/1,747 逐位全等（`max_abs_diff=0`）**，
+  其中 39 行为停牌顺延；折内计划把**持仓集合钉在锚逐日快照**上（隔离「计划账 vs 实际成交账」的停牌顺延分叉）后
+  **175/175 一致、未解释 0**。两条口径分别固化为纯函数 `signal_layer.compare_anchor_scores` 与两条单测防复发。
+  锚证据未改，P2a 回放路径经查无缺陷。
+- **测试** `tests/test_v2_p7_t25_target_layer.py`（19 项）：相位平移/无环绕、槽位拆分校准、持仓排除、
+  T+1 买入与 20 日到期、跨折承接、S1~S6 分类、反向量与合并量分列、1 日借还台账、重叠与相关性、runoff 右删失。
+- **报告** `docs/reports/p7_t25_result_20261111.md`（口径、交付物、验收门、锚侧差异诊断与限制）。
+- **边界**：只推理不训练（`alpha_consumed=false`），不产生 pass/fail 经济判定；写域仅
+  `data/paper_shadow/p7_testbed/**`，不写 `data/raw|clean|features|models|runs|paper`。
+
+## [0.209.68] - 2026-11-11
+
+### Added（行业 PIT 数据层落地）
+
+- **数据层** `src/lazybull/data/sw_industry_pit.py`：申万行业分类历史（0 元公开源）→ PIT 区间表。
+  - `fetch_history_raw`：下载官网 Excel，TLS 证书链不完整时降级 `verify=False` 并告警，降级事实经
+    `meta.json.tls_verified` 可审计；`normalize_history`：唯一键 `(code6, in_date)` 去重（保留 `更新日期` 最新）、
+    `out_date` = 下一条 `in_date`；
+  - `assign_version`：**版本由码表反查**（`in_date >= 20210730` → SW2021；否则查 SW2014；查不到 → `UNMAPPED`），
+    不按日期硬切——文件跨 pre-2014 / SW2014 / SW2021 三套码表；
+  - `attach_code_names`：6 位行业码 → L1/L2/L3 名称 + 三级指数代码（`857831.SI` 等，可与本地快照 `sw_l3_code` 对齐）；
+  - `finalize_pit` / `validate_pit`：补 `ts_code`（按代码段推断交易所）、注入 `bse_mapping` 别名行（`code_alias`）、
+    强制校验键唯一与 `out_date > in_date`，违例报错不静默修正；
+  - `lookup_industry` / `attach_pit`：PIT 语义 `in_date <= T < out_date`，`attach_pit` 不改行数不改顺序并输出 `industry_known`；
+  - `build_exclusion_ledger` / `summarize_ledger`：未命中行给 `reason`（`not_yet_classified` / `no_record` /
+    `relisting_shell`）与 `fixable`，直接对应「数据完备性判据契约」的排除台账。
+
+- **入口** `scripts/download_sw_industry_history.py`：产出 `data/raw/sw_industry_history.parquet` +
+  `sw_industry_history_meta.json`、`data/clean/sw_industry_code_table.parquet`、`data/clean/sw_industry_pit.parquet`；
+  支持 `--skip-tushare`（离线降级）与 `--coverage-dates`（按 `clean/daily` 对账）。
+
+- **实测（2026-11-11 首次落地）**：码表 SW2014 28/104/227 + SW2021 31/134/346；`bse_mapping` 248 条；
+  PIT 13,205 行 / 6,186 只（SW2014 6,080 / SW2021 5,280 / UNMAPPED 1,845）；覆盖
+  2012-06-29 **99.87%**、2015 **98.94%**、2020 **98.36%**、2024 **99.98%**、2026 **100%**。
+  `UNMAPPED` 为 pre-2014 旧码（银行 `440101` vs SW2014 `480000`），有码无名，仅可同码聚合。
+
+- **文档**：`docs/data/sw_industry_pit_audit.md`（数据源 / 存储布局与偏离按年分区的理由 / 字段 / 版本规则 /
+  去重与水位 / 覆盖 / 残余四类 / 台账 / 验收门 / 用法 / 限制 / 复现）；README 增「申万行业分类历史（PIT）」小节。
+
+- **测试** `tests/test_sw_industry_pit.py`（19 项）：区间构造与去重、非法行剔除、交易所推断、版本反查、
+  码表翻译、PIT 边界（`in_date` 当天算已知、`out_date` 当天不算）、无匹配不误判为开区间、台账三种原因、
+  别名行、重复键报错。
+
+- **依赖**：`pyproject.toml` 增 `xlrd`（`.xls` 解析）。
+
+- **边界**：本层为**新增能力**，不写回 `cs_train/cs_infer`、不改变任何既有生产行为（行为冻结纪律）；
+  接入特征/T1 需新 prereg，判据按 §5「数据完备性判据契约」的三件套写。
+
+## [0.209.67] - 2026-11-11
+
+### Added（数据完备性判据契约 + 行业 PIT 问题闭合）
+
+- **契约（反例入库）**：`CLAUDE.md` §5 新增「数据完备性判据契约」——**任何数据类验收门禁止使用「100% / 零缺失 / 全命中」**。
+  反例即 P7 行业 PIT：曾以「六股全部已知」为可用门，但任何真实数据源都必然残留（北交所代码段变更、
+  借壳/重新上市旧归属缺失），按 100% 口径该输入永远不可用 ⇒ 属「契约把自己脖子掐死」。
+  规矩三件套 = **覆盖门（阈值 ≤ MDE/10）+ 排除台账（行数 == 排除计数，单测锁定）+ 边界敏感性（两端重算，
+  符号一致且幅度 ≤ MDE/4）**；并强制区分 `unresolved`（口径不明 ⇒ 冻结）与 `excluded`（口径明确、已披露、
+  已做边界 ⇒ 放行）。§10.3 关键禁忌同步补两条索引。
+
+- **行业 PIT 数据结论反转（0 元路径已实测，不构成采购）**：申万宏源官网下载中心
+  `StockClassifyUse_stock.xls`（akshare `stock_industry_clf_hist_sw` / `sw_stock_industry_classification_hist`）
+  **公开可下、无需采购**，含个股行业分类**变动历史**（12,934 行 / 5,938 只 / 每股最多 10 段 / 字段
+  `股票代码, 计入日期, 行业代码, 更新日期`），可直接构造 `in_date`/`out_date` 区间。实测：
+  - 全市场行业已知率 2012-06-29 **66.1% → 99.9%**、2020-07-01 **75.7% → 98.4%**、2026-07-01 **100%**；
+    `clean/daily` 面板 5,781 只**零缺口**（原 50 只不在快照）；
+  - T1 r2 冻结证据重算：股票-日已知 **99.92%**（事件 99.92% / 对照 99.91%）、**六股全已知 12.5% → 99.52%**、
+    逐年 99.77%~100%、每组有效对 <3 仅 **5 组**；
+  - 文档点名的三个反例全部补齐（`601888` 2009 起休闲服务、`002352` 借壳前金属制品、`000001` 三段归属）。
+
+- **残余与处置（全部落台账，不做 100% 要求）**：① 33/38 只未知源于**北交所代码段 `83xxxx/87xxxx/43xxxx → 920xxx`**，
+  可用 TuShare `bse_mapping`（一次性映射表）修掉；② 5 只（`001914`/`601360`/`601399`/`302132`/`605055`）
+  属借壳与重新上市**旧归属确实未保留**，标 `relisting_shell`；③ 2012–2015 段 **60.1%** 记录的「更新日期」晚于
+  2021-07，回溯重写**不可证伪**（2011 及更早段仅 2.7%），写入输入限制；④ 2014-02-21 前使用 pre-2014 码表
+  （银行 `440000`，不在 SW2014 的 `480000`）⇒ 该段**有码无名**，仅可用于同码聚合。
+  边界敏感性实测：行业一致率 4.05%（下界）/ 4.07%（全已知子集）/ 4.53%（上界），全幅 **0.48pp << MDE 12pp**。
+
+- **`index_classify` 澄清**：其 `src` 只切**码表版本**（SW2014 28 个 L1 / SW2021 31 个 L1，含 `industry_code` 与
+  `index_code` 双码），**不含成分**；成分接口 `index_member_all` 传 `src`（SW2014 或 SW2021）**直接返回空表**
+  （表内无该标签），不传 `src` 才返回当前快照单行 ⇒ 不能替代历史成分，但可作为码表/版本切换的配套件。
+
+- **文档**：`docs/reports/p7_industry_pit_feasibility_20261111.md` 增 §6「实测修正与结论更新」；
+  `docs/plans/v2/p7_industry_data_brief_20261111.md` 状态由 `open_unresolved` 改为
+  `resolved_by_zero_cost_source`（待数据层落地）。
+
+- **待办**：`bse_mapping` 接入 + 数据层落地（`data/raw/` 新数据集、PIT 面板、码表 join）+ 新 prereg（行业变量可用性判据按三件套写）。
+
+## [0.209.66] - 2026-11-11
+
+### Added（P7 T2.5 单折试点 + 行业 PIT 联网勘察）
+
+- **T2.5 单折试点**（用户授权「可以进行 1 折试点」）：新增 `scripts/v2_p7/t25/pilot_fold.py`，
+  对锚批次 `split00`（v24008，test 20181126~20190524）只推理不训练地再生逐日分数与 Top-N。
+  实测 119 日 / 287,255 行 / **26.7 秒**，指纹 `047957ea…` 两次运行一致；
+  与锚 `attribution.pred_score` **120/120 逐位相同**（max abs diff = 0）。
+  产物 `data/paper_shadow/p7_testbed/p7_t25_pilot_r1/`，报告 `docs/reports/p7_t25_pilot_20261111.md`。
+  **关键发现**：Top-N 与锚计划买入集合仅 1/12 个（日期, 档）一致，原因是 tranche 选择需
+  **排除当前持仓**（同股不加仓），属回测内核行为——T2.5 的目标层必须与内核同源，
+  不得用「score → top-N」冒充目标。实测性能使全窗（14 折）约 6~10 分钟，远低于计划 3.00h。
+- **行业 PIT 联网勘察**（用户授权）：四条探针实测（`index_member_all` 按股票/`is_new=N`/`src=SW2014`、
+  `index_weight`）均确认**无法获得申万历史成分**——该接口只返回当前快照（`out_date` 全空，
+  `in_date` 混合上市日与 20210730 切换日，改过分类的股票无历史行）；本地亦无历史成分。
+  结论与三条可行路径见 `docs/reports/p7_industry_pit_feasibility_20261111.md`（建议短期按
+  「输入受限」登记，中期若要重开事件类候选需外部历史成分并走数据层变更 + 新 prereg）。
+  供新会话接手的自包含交接摘要：`docs/plans/v2/p7_industry_data_brief_20261111.md`。
+  勘察中另发现 `industry_known_pair_share` 口径可能有误（报告 17.19%/12.61%/30.75% vs
+  独立重算 49.6%，而 `industry_all_known` 两者一致），已登记为「重开事件类候选前必须复核」的前置项。
+
+**边界**：试点 `alpha_consumed=false`，不构成 T2.5 验收、不产生 pass/fail；行业结论只影响
+后续新袖子设计，不阻塞 T2.5/T4~T6。
+
+## [0.209.65] - 2026-11-11
+
+### Changed（B0 冻结登记与 P7b 范围裁决）
+
+用户 2026-11-11 三项裁决落档（纯文档，无代码变更）：
+
+- **冻结口径** = 「不可估计（含输入受限）」，**不记经济失败退役**：`statistic_intent` 从未生成，
+  B0 假设仍存活但不可估计；冻结理由按三层并列登记（六股共同成交耦合 / 长期停牌致协变量不可算 /
+  行业 PIT 输入受限）；新增冻结登记 `docs/reports/p7_b0_freeze_record_20261111.md`，
+  内含 r2 冻结读数与对外表述约束（不得称「B0 被否证」「收益不佳」「前向/日历验证通过」）。
+- **T1 仪器保留**：`scripts/v2_p7/event_builder.py` + `scripts/v2_p7/t1/` 作为审计与复用工具保留，
+  不适用「冻结时删除未收口可执行实现」条款。
+- **P7b 范围 = T2.5 + T4 + T5 + T6（4.75 编码单元）、先 T2.5 后 T4**：T2.5 属 A 线任务
+  （A 逐日信号再生、相位目标、原始意图预检），是 T4 的强依赖，不随 B0 冻结取消；
+  B0 线 T2（1.50）+ T3（1.25）**不再发生**，回收 2.75 单元；P7 已用 T0.5 1.00 + T1 1.25。
+- 新增 T2.5 任务书 `docs/plans/v2/p7_t25_prompt_20261111.md`（输入身份、四项产出、八条硬契约、
+  验收门、停止规则、证据落点），本轮**不直接开跑**，按逐批申请推进。
+
+**边界不变**：P7b 结论域 `pass / fail / incomplete`（无 frozen），通过不构成 B 区转正；
+B0 不得进入 T2/T3；生产链路零改动。
+
+## [0.209.64] - 2026-11-11
+
+### Fixed（P7 T1 首轮评审 13 条整改并重取证据）
+
+reviewer1 首轮评审判定不通过（3×P1 / 9×P2 / 1×P3），**13 条全部接受**并修复，
+以新 run ID `p7_t1_20261111_r2` 重取（旧 `_r1` 只读保留、不覆盖、不引用）：
+
+- **R1**：意图域改由**上市事实**判定（`list_date` ∪ 首个有限收盘日取较早），停牌不再被剔出域外
+  （原用「当日有无行情行」判断，误剔 `2012-01-17` 停牌股）；域口径更名 `observable → listed`。
+- **R2**：新增冻结观察窗约束（10 日入场 + h 日持有 + 10 日离场），不足者登记
+  `events_right_censored_tail`，不再记真实 0；匹配表按 (源, 持期) 分别构造。
+- **R3**：买入/卖出条件移除 `open_adj`，复权链缺失改归 `return_chain_unresolved`（不可解析）。
+- **R4**：新增送转倍数矩阵，卖出股数 = 买入股数 × `C[exit]/C[entry]`，卖出金额与费用用真实金额。
+- **R5**：行业标签改为 PIT 屏蔽（仅 `T >= in_date` 可用），诊断拆为「同业占比（双方已知）」与
+  「双方已知占比」；已知对占比仅 12.6%~30.7%，作为**输入限制**登记。
+- **R6/R7**：随机化块轴改为完整交易日轴（3,637 日）；每个被抽日期实例独立置换标签
+  （两日各一组 h=1 的方差由 0.1497 修正为 0.1017，理论值 0.10）。
+- **R8**：并列决胜改为全局 `(距离, ts_code)`，不再受 `argpartition` 截断影响。
+- **R9**：同日冲突决胜加入全字段字典序，与分区/行序无关（补重排不变性测试）。
+- **R10**：`industry_match` 改存真同业并新增 `industry_known`，行业一致率方向纠正。
+- **R11**：压力情景只作用于未知组，已解析保留实际、未成交保留真实 0。
+- **R12**：无对照池时不再空指针，落 `insufficient_controls`。
+- **R13**：运行手册/报告按 manifest 校正（`min_ticket=25,588.54`、佣金 1.954bp、最低 5 元、
+  无独立过户费、脚本 17 个、离场用开盘价、距离为行业惩罚+三个标准化绝对差之和）；
+  删除「4σ 说明单事件噪声」的错误解释。
+- 新增 `tests/test_v2_p7_t1_review_fixes.py`（11 项）覆盖上述修复；T1 定向回归 54 项通过，
+  flake8/black/复杂度双口径 exit=0。
+
+**结果**：意图域 54,331 / 14,913 / 106,019 组，已解析 49,122 / 13,450 / 97,503，
+不可解析 4,255 / 1,174 / 7,349（7.83% / 7.87% / 6.93%，主因长期停牌致事件协变量不可算），
+右删失 140 / 0 / 1,479 单独登记；有效块 117 / 71 / 90，MDE 4.0σ，假通过率 1.43%~1.58% 在 CP 内。
+**裁决维持 `inconclusive_frozen`**（修复使分母更完整、不可解析更多，冻结更强）。
+文档：`docs/reports/p7_t1_p1_result_20261111.md`、`docs/plans/v2/p7_t1_runbook_20261111.md`、
+`docs/review/v2_p7_t1/p7_t1_author_response_20261111.md`；证据根
+`data/frozen_reference/v2_p7/p7_t1_20261111_r2/`（禁覆盖）。**边界不变**：不构成 B 区转正、
+生产多袖、前向/日历验证通过；T2~T5 不进入。
+
+## [0.209.63] - 2026-11-11
+
+### Added（P7 T1 · P-1 同域静态可执行性落码与冻结结论）
+
+按用户 2026-11-11 授权启动 P7 T1，交付 P-1 仪器并跑出冻结结论（**不进入 T2/T3**）：
+
+- 新增 `scripts/v2_p7/event_builder.py`（冻结事件构建器，`p7_event_builder/v1`，
+  forecast `type` 映射 / express 前置 forecast 身份 / fina 四季度完整口径 / 同日去重与修订规则）。
+- 新增 `scripts/v2_p7/t1/` 九件：`params`（prereg 身份 + 参数派生）、`dataplane`（面板与 PIT 协变量）、
+  `matching`（六股组 + MAD 标准化 + 行业/缺口/并列决胜）、`execution`（T+1 入场、共同离场、
+  10 万元订单与双向成本）、`randomization`（校准/评估/功效三条互斥流 + δ 注入）、`power`、
+  `report`（逐格报告）、`verdict`（三向裁决）、`run_p1`（原子发布、写域与禁改面守卫）。
+- 新增 8 个测试文件（43 项）：泄漏格拒答、`unresolved>0` 冻结、计数不守恒拒答、随机化内层不破组、
+  ΔR 单调、写域越界与禁覆盖零副作用、事件股不进自身对照池、协变量缺失不进 G1。
+- **结果**：意图域 246,257 事件 → 52,002 / 14,268 / 102,761 组；已解析 49,126 / 13,479 / 97,165；
+  不可解析 2,519 / 717 / 4,807（主因「到期后 10 日无共同离场日」占 64.6%~69.6%，
+  其中事件股自身停牌占 44.2%）；计数全格守恒、有效块 118 / 71 / 89、MDE = 4.0σ、
+  假通过率 1.47%~1.74% 均在 CP 上界内。按 prereg §6.2.4 判为 **`inconclusive_frozen`**。
+- 口径补充（`requires_review=true`）：事件股在信号日无行情行（pre-IPO/NEEQ/BJ 上市前）不计入
+  P-1 意图域，逐源登记 `universe_excluded`；strict 口径下 verdict 方向一致。
+- 文档：`docs/plans/v2/p7_t1_runbook_20261111.md`、`docs/reports/p7_t1_p1_result_20261111.md`；
+  证据根 `data/frozen_reference/v2_p7/p7_t1_20261111_r1/`（原子发布，禁覆盖）。
+
+**边界**：T1 不产生经济结论、不做完整复合门；T2~T5 不进入；不构成 B 区转正、生产多袖能力、
+前向或日历验证通过；生产默认链路零改动。
+
 ## [0.209.62] - 2026-11-11
 
 ### Changed（P7 T0.5 治理生效闭合）

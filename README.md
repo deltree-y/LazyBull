@@ -1031,6 +1031,118 @@ python scripts/v2_p7/build_t05_governance.py \
 与运行手册 `docs/plans/v2/p7_t05_runbook_20261111.md`；**边界：T0.5 未生效、T1~T6 未获授权，
 本阶段不产生任何前向/日历结论，也不构成 B 区转正**。
 
+**v2 P7 T1 · P-1 同域静态可执行性（候选线冻结判定）：** 用 T 日公开信息构造「1 事件股 + 5 对照股」
+六股匹配组，判定六股能否按冻结的 T+1 开盘入场 / 到期收盘离场规则共同成交并完整持有：
+
+```bash
+# 正式全量（约 9 分钟）：全历史面板 + 三源全部事件 + 6 格 × 3 条互斥随机流 × 10000 次内层实现
+# 产物原子发布到 data/frozen_reference/v2_p7/<run_id>/，禁止覆盖；exit 2 输入不可用 / 4 写域拒绝或已存在 / 5 计数不守恒
+python scripts/v2_p7/t1/run_p1.py --run-id p7_t1_20261111_r1
+
+# 冒烟降配（自动标 diagnostic_only，不产生三向结论）
+python scripts/v2_p7/t1/run_p1.py --run-id smoke_x --out-root temp/p7_t1_smoke \
+  --smoke-panel-start 20200101 --smoke-event-start 20200401 --limit-signal-days 40 --implementations 200
+```
+
+本次结果（`data/frozen_reference/v2_p7/p7_t1_20261111_r2/`，首轮评审 13 条整改后重取，
+旧证据 `_r1` 只读保留）：意图域 246,257 事件 → 54,331 / 14,913 / 106,019 个六股组；
+已解析 49,122 / 13,450 / 97,503，不可解析 4,255 / 1,174 / 7,349（7.83% / 7.87% / 6.93%，
+主因是长期停牌导致事件协变量不可算，其次到期窗内无共同离场日），尾端右删失
+140 / 0 / 1,479 单独登记不记 0；计数全格守恒、有效块 117 / 71 / 90、MDE = 4.0σ、
+假通过率 1.43%~1.58% 均在 CP 上界内。按 prereg §6.2.4「任一核心格 `unresolved_count>0` ⇒ 冻结」，
+裁决为 **`inconclusive_frozen`（不可估计/研究冻结）**：B0 复合条目不得进入 T2/T3，
+冻结期间不得改口径重跑。详见 `docs/reports/p7_t1_p1_result_20261111.md`、
+运行手册 `docs/plans/v2/p7_t1_runbook_20261111.md`、评审处置
+`docs/review/v2_p7_t1/p7_t1_author_response_20261111.md`；**边界：不构成 B 区转正、生产多袖能力、
+前向或日历验证通过，也不是「B0 无效」的经济结论**。
+
+**v2 P7 T2.5 · A 逐日信号再生 / 相位目标 / 原始意图预检（机械线输入层）：** 14 折逐日分数与 Top-N、
+20 日持期目标、V20/V10 相位日历、跨折连续持仓账与 runoff 输入清单，另做**原始意图级**预检
+（S1~S5 分字段计数 + 额度缺口/召回/重叠/相关性，标 `estimated_intent_coverage=true`）：
+
+```bash
+# 正式全窗（约 8 分钟）：硬门全过才落盘；run_id 已存在即拒绝覆盖
+python scripts/v2_p7/t25/run_t25.py --run-id <NEW_RUN_ID> \
+  --counterpart-top-n 10 --counterpart-capital 350000 --verify-splits 0 6 13
+
+# 分段验证（新 run）/ 续跑（仅限**未完成**的 run）/ 跳过锚批次计划复算
+python scripts/v2_p7/t25/run_t25.py --splits 0 1 --run-id <SMOKE_ID>
+python scripts/v2_p7/t25/run_t25.py --splits 2 --resume --run-id <UNFINISHED_RUN_ID>
+python scripts/v2_p7/t25/run_t25.py --run-id <SMOKE_2> --no-anchor-plans
+
+# 显式接受输入漂移（形如 path:sha256；也可用 P7_T25_ACCEPT_DRIFT 或 accept_input_drift.json）
+python scripts/v2_p7/t25/run_t25.py --run-id <NEW_RUN_ID> \
+  --accept-input-drift data/clean/stock_basic.parquet:<sha256>
+```
+
+`--resume` **只对未完成运行有效**：目标根一旦写出 `manifest.json` 即只读，续跑会被拒绝（改用新 `run_id`）。
+`--counterpart-top-n` / `--counterpart-capital` 只改**构造对手袖**（v10）的深度与初资，基准袖（v20）恒为冻结值；
+偏离项写进 manifest 的 `params.design_deviation`。
+
+**状态：2026-11-12 复审 4 通过并收口**（四轮评审全部整改）。收口证据
+`data/paper_shadow/p7_testbed/p7_t25_hk_20261112_r6/`（56 件、484.2s）——基准袖按冻结 **half_kelly**
+计权重（信号日定权、执行日只用开盘已知量），原始意图 S1 **0** / S2 20 / S3 56、S4 695 / S5 695、S6 2,218；
+**S1 无自然输入，按用户 2026-11-12 裁决登记为缺口（`observed_with_registered_gap`），S2~S5 缺位仍阻断**；
+锚分数 1,747/1,747、计划 175/175（未解释 0）、分数与目标双重重放零差、输入 3,472 件比对（1 件显式接受）；
+工作区 `source_digest` 与测试 SHA 与复审记录逐字节一致。
+**T4 / T5 / T6 均已收口**（见后续 P7 T5、T6 章节；P7 出口由用户裁决）；**历史代际**（`p7_t25_c7_20261111_r1` 等）为等权代理时期产物，
+已被同 ID 重取覆盖或仅作历史登记、不可复算，不得与现行结果并列当作"本次结果"。
+**边界：只推理不训练（`alpha_consumed=false`），不产生 pass/fail 经济判定，不构成 B 区转正。**
+详见 `docs/reports/p7_t25_closure_20261112.md`（收口）、`p7_t25_result_20261111.md`（结果）与
+`docs/review/v2_p7_t25/`（四轮评审与作者回应）。
+
+**v2 P7 T5 · 原始需求 / 配额 / 日内净额 / 借用会计与死局（机械复核第二段）：** 在 T4 生命周期之上补齐
+「授权额度 + 借用会计 + 召回/死局」，把逐袖 `cash_i + credit_i ≥ 0` 从 T4 的登记项升级为**硬门**，
+并交付 VV-H（同配额、禁 credit 参照）与 VV-S（允许 credit）**共用的机械实现**与逐日序列：
+
+```bash
+# 全窗三臂（T4 互证 / VV-H / VV-S + VV-H 参照重跑；约 6~8 分钟）
+python scripts/v2_p7/t5/run_t5.py --run-id <NEW_RUN_ID>
+
+# 分段验证（子窗口）/ 单臂（调试）/ 续跑（完成根仍拒绝）
+python scripts/v2_p7/t5/run_t5.py --run-id <SMOKE_ID> --window 20190101 20191231 --arms parity vvs
+python scripts/v2_p7/t5/run_t5.py --run-id <SMOKE_ID> --arms vvs
+python scripts/v2_p7/t5/run_t5.py --run-id <UNFINISHED_ID> --resume
+```
+
+日内顺序写死：原始目标 `G` → 额度 `ρG`（不改写逐袖归一化权重）→ 约束/整手 → **预净额计划（零副作用）**
+→ `cash_open + 本日 credit_granted` 对原始买入负债背书 → 授权后最终净额 → 仅净市场卖出 →
+内部转账与净市场买入 → 一次结算。`G` 取 T2.5 `targets/daily_{arm}.parquet` 的 `target_notional`
+（账户级 = 各相位之和，`(ρ_V20, ρ_V10) = (0.7, 0.3)` 为资本份额），**不改写**选股、权重与 20 日到期口径。
+
+机械口径：`D=max(0,G−MV)`、`R=max(0,ρG−MV)`、`A ≤ min(D, R+L)` 且 `A+Fee(A) ≤ cash_open+L`；
+`credit_outstanding` 不参与授权、`L` 只按本日转账一次入账；`creditsign` 借入为正、出借为负，
+`E_i = cash_i + MV_i − credit_i`，本金转移零 P&L；T+1 召回未还即永久 `deadlocked`，
+自然卖出只记 `late_recovery`（无被动卖出路径）。`credit=off & quota=off` 与 T4 完成根**逐位一致**
+（逐日账本投影行 / 交易 / 守恒行 / 费用逐键 / 实际与独立 NAV / 终态摘要）。
+**边界：只交付机械量与逐日序列（`alpha_consumed=false`、`verdict=null`）；两臂绩效、
+三连指标经济裁定与阶段收口归 T6，不构成 B 区转正或前向/日历验证通过。**
+证据落 `data/paper_shadow/p7_testbed/<t5_run_id>/`（九件套 + 逐日帧），详见
+`docs/reports/p7_t5_closure_20261113.md` 与 `docs/review/v2_p7_t5/`（双评审闭环记录）。
+
+**v2 P7 T6 · 两臂运行、绩效与三连指标经济裁定（机械复核第三段）：** 在同一初资 / 同一目标 / 同一费用模型 /
+同一交易日历 / 同一执行语义下跑 VV-H 与 VV-S（唯一差异 = `credit` 开关），按**运行前预登记**判据给出 `verdict`：
+
+```bash
+# 全窗两臂 + 确定性重跑 + 指标/噪声带 + 裁定 + 黄金例（约 4.5 分钟）
+python scripts/v2_p7/t6/run_t6.py --run-id <NEW_RUN_ID>
+
+# 只读复算（不写盘）：从落盘 parquet 重算 NAV/链式/年化/费用/换手/配对差/分月分年/噪声带/预登记摘要
+python scripts/v2_p7/t6/verify.py --run-root data/paper_shadow/p7_testbed/<run_id>
+```
+
+预登记口径（`calibration.py`，运行后不得改）：δ_TR=0.50pp、δ_MDD=0.50pp、δ_cagr=0.10pp、δ_vol=0.50pp；
+配对分块 bootstrap（block=20=冻结持期、B=4,000、seed=42）；**越带 ≡ |Δ| ≥ δ 且 95% 区间不含 0**；
+判据 C1 收益 / C2 MaxDD / C3 链式三项 / C4 费用-换手归因闭合 / C5 稳健性（集中度 + 留出 + 分年同号）；
+`verdict`：C1–C5 全满足 → `pass`；C1/C2/C3 任一「方向相反且越带」→ `fail`；其余 → `inconclusive`。
+
+最新证据：`p7_t6_20261113_r6`（1,745 日；ΔTR=+0.2248pp、ΔMaxDD=+0.0160pp、Δfee=−200.28 元；
+**`verdict = inconclusive`**，C1 的统计可判下限 2.81pp 为 δ 的 5.63 倍）。
+抽样为预登记同名的 stationary bootstrap（几何块长、两臂共用索引）；回撤费用占比按峰谷损失金额计
+（4.8733%/4.8739%），费用占毛利 9.3308%/9.3115%；G5 已把宿主 `replay`/`restart` 自检纳入硬门。
+**边界：`verdict` 只对本窗口、本机械与费用口径成立；不构成 P7 出口、B 区转正、生产多袖、
+前向/日历验证或实盘可用结论。** 详见 `docs/reports/p7_t6_closure_20261113.md` 与 `docs/review/v2_p7_t6/`。
+
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
 未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用
@@ -1206,6 +1318,37 @@ LazyBull 采用三层数据架构，统一使用 **partitioned 存储**：
   
 - **features 层**: 基于 clean 数据计算的特征和标签
   - 按交易日分区存储: `{YYYYMMDD}.parquet`
+
+### 申万行业分类历史（PIT，v0.209.68）
+
+申万行业分类的**历史归属**取自申万宏源研究公开下载中心（0 元，无需授权采购），
+TuShare 现有接口只能给当前快照。契约见 `docs/data/sw_industry_pit_audit.md`。
+
+```bash
+python scripts/download_sw_industry_history.py        # 拉取官网历史 + 码表 + 北交所映射
+python scripts/download_sw_industry_history.py --skip-tushare   # 离线降级（仅官网数据）
+```
+
+产出：
+
+- `data/raw/sw_industry_history.parquet`（原始四列快照）+ `sw_industry_history_meta.json`
+- `data/clean/sw_industry_code_table.parquet`（SW2014/SW2021 码表，L1~L3）
+- `data/clean/sw_industry_pit.parquet`（区间表：`code6 / in_date / out_date / ind_code / sw_version`）
+
+使用（PIT：`in_date <= T < out_date`）：
+
+```python
+from src.lazybull.data import Storage
+from src.lazybull.data.sw_industry_pit import attach_pit, build_exclusion_ledger, lookup_industry
+
+pit = Storage().load_clean("sw_industry_pit")
+lookup_industry(pit, "601888.SH", "20150105")   # 单点查询
+attach_pit(pit, daily_df)                       # 附加行业列 + industry_known
+build_exclusion_ledger(pit, daily_df)           # 未命中行台账（reason/fixable）
+```
+
+注意：该数据层为新增能力，**不写回 cs_train/cs_infer**，默认不改变既有生产行为；
+接入需新 prereg（判据按 `CLAUDE.md` §5「数据完备性判据契约」的三件套写）。
 
 ### force 参数说明
 

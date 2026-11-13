@@ -1,5 +1,5 @@
 {
-  "all_modules_count": 500,
+  "all_modules_count": 501,
   "conservation_ok": true,
   "dynamic_extra": [
     "src.lazybull.factors.risk.announcement_factors",
@@ -12,7 +12,7 @@
     "D:/my_pro/LazyBull/scripts/compare_walk_forward.py",
     "D:/my_pro/LazyBull/scripts/paper_trade.py"
   ],
-  "inuse_count": 275,
+  "inuse_count": 276,
   "inuse_modules": [
     "src.lazybull",
     "src.lazybull.backtest",
@@ -57,6 +57,7 @@
     "src.lazybull.data.report_rc",
     "src.lazybull.data.repurchase_raw",
     "src.lazybull.data.storage",
+    "src.lazybull.data.sw_industry_pit",
     "src.lazybull.data.top10_floatholders_raw",
     "src.lazybull.data.top_inst_raw",
     "src.lazybull.data.tushare_client",
@@ -523,7 +524,7 @@
     "(root)": 10,
     "backtest": 13,
     "common": 15,
-    "data": 21,
+    "data": 22,
     "execution": 1,
     "factors": 38,
     "features": 27,
@@ -536,5 +537,5 @@
     "universe": 2,
     "v2": 75
   },
-  "static_closure_count": 271
+  "static_closure_count": 272
 }
