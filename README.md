@@ -2110,6 +2110,29 @@ L3 audit 域量化、L4 UNC/file URI、L5 多源 manifest、L6 1,200 点抽样�
 L8 `prev/` 增强、L9 P4 钉住态、L10 trend 路径敏感（`by_design`）。
 豁免后 `unmet_items` 为空、T5 验收为 `pass`（`p6_t5_acceptance_run11`）；**豁免不等于已达成**。
 
+### P7 当前有效状态（2026-11-15）
+
+> 本小节只登记**当前有效**的 P7 状态；上文 T0.5/T1/T2.5/T4/T5/T6 段落是历史实施记录，
+> 不作为当前出口。完整整改说明见 `docs/reports/p7_r01_r05_r02_fix_20261115.md`。
+
+- **P7 整体未通过**：P7a（B0 准入）与 P7b（机械复核）两栏均未达成。
+- **P7a = `fail`**：IDX-IN300 的正式 T2/T3（E1~E4 + 独立夏普区间 + 三口径相关上界 + 完整复合门）
+  在 2026-11-15 执行，verdict=`fail`，**三项经济失败、零冻结**：E1 信号层排序不显著
+  （D=1.9988% < 门槛 2.3769%、p=0.277，功效足够）、E4-4 月利用率中位数 0%（137/179 月空仓）、
+  Q1 夏普下界 −0.345 < 零假设流 p95 0.377（A/A 校准逐位通过、MDE=1.0 功效足够）。
+  证据根 `data/frozen_reference/v2_p7/p7_idx_in300_f2_20261115_r3/`。**旧 P5「正式 pass」与候选准入
+  语义已撤回**（台账 conclusion v6，更正 v5 的判定口径实现错误）。
+- **P7b = `inconclusive` 保留**：`data/paper_shadow/p7_testbed/p7_t6_20261115_r3/`（7/7 机械门）。
+- **R01 公司行为入账已修**：T4/T5/T6 新根 `p7_t4_20261115_r5` / `p7_t5_20261115_r3` /
+  `p7_t6_20261115_r3`；旧 `p7_t4_20261112_r31`、`p7_t5_20261113_r15`、`p7_t6_20261113_r6` 只读保留，
+  **不得再作为 A 参照或准入证据**。
+- **R05 O1 已更正**：`data/frozen_reference/v2_p7/p7_p1r_o1fix_20261115_r1/`（只报不判，不重开 B0）。
+- **多袖候选**：`P7-IDX-IN300-CANDIDATE-20261114` 状态 = `rejected_formal_t2t3_fail`
+  （`data/frozen_reference/v2_p7/p7_idx_in300_candidate_status_20261115_r3/`）。
+- **边界**：H 级历史证据；不构成生产多袖、实盘、前向/日历验证或 B 区转正；不重开 B0/C1/C3。
+- 复算入口：`python scripts/v2_p7/f2/run_f2.py --p4-root <P4 新根> --a-nav <T6 新根>/arms/vvh/daily_vvh.parquet --out <新根>`；
+  O1 重算：`python scripts/v2_p7/t1/o1_recompute.py --out <新根>`。
+
 ### 添加新因子（v0.5.0）
 
 LazyBull 使用模块化的因子库架构。添加新因子只需在 `src/lazybull/factors/` 中添加函数，无需修改核心代码。

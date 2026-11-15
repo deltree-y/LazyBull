@@ -3,7 +3,7 @@
 > **P0 落档标记**：本文档冻结假设台账的条目 schema、多重比较控制规则（候选池分母 / α 预算）与
 > 影子账本顺序检验规格。台账是 v2 的"记忆"——机器可读的证伪清单，新系统的 alpha 之一就是它。
 > 生效状态：**已于 2026-10-01 P0 确认通过，正式生效；现行版本 = F6（架构 F24-A3：删除事件类袖子前向影子 ≥12 个月，改历史证据包；用户 2026-11-08 批准）**。
-> **P7 T0.5 治理已于 2026-11-11 生效：现行版本 = 架构 F26（v1.32）/ 净额化 F26 / 协议 F14（v0.14）/ events F4 / 台账 F7**；P7 适用注记与本行同批落档。
+> **P7 治理：T0.5 于 2026-11-11 生效（架构 F26）；P-1 重开同步于 2026-11-13 生效；B0 停投登记同步于 2026-11-14 生效；袖子分型准入同步于 2026-11-15 生效——现行版本 = 架构 F29（v1.35）/ 净额化 F26 / 协议 F14（v0.14）/ events F4 / 台账 F10**；P7 适用注记与本行同批落档。
 > 对齐协议层：条目类型 = `LedgerEntry`（`docs/contracts/protocols.md` §0）；写入唯一入口 = `DataStore.append_ledger_entry`。
 
 | 契约版本 | 落档日期 | 来源 | 变更摘要 |
@@ -15,6 +15,9 @@
 | F5 | 2026-11-01 | P5b 历史试车场 v4 T0.5（架构 F22；reviewer2 最终确认；用户 Q1~Q5 批准） | §5 前补当前范围边界：P5b 只做历史虚拟时钟试车场与裁判校准，不运行真实前向影子、不注册真实候选、不写正式 `LedgerEntry`；校准报告使用 `calibration_only`，`DD-W`/`DD-I` 分开验收；§5 的旧前向顺序检验规格保持休眠，待真实影子阶段另立预登记；本阶段通过不产生真实前向证据或生产授权 |
 | F6 | 2026-11-08 | 架构方案 F24-A3（裁决包 `docs/plans/v2/f24_adjudication_package_20261108.md`） | §5「观察期下限」删除事件类袖子前向影子 ≥12 个月与 ≥2 个年度披露周期要求，改为历史证据包覆盖要求（≥3 个完整披露季 + ≥2 个独立崩盘事件）；§5 顺序检验规格继续休眠，仅在用户显式恢复前向影子时启用 |
 | F7 | 2026-11-11 | P7 T0.5 治理生效（同架构 F26 同批） | §5 新增「B 域单一候选的顺序复合检验」：登记即锁定 P=1/α=0.05；P-1→T2→T3 为同一历史的顺序读取（不重置 α、不互称独立验证）；组件筛查分位 `0.05/(3λ)`；完整复合门（组件 ∧ T2 组合尺子 ∧ Q1 绝对夏普 ∧ 三口径相关 ∧ 实际容量与利用率 ∧ 五条 E4 否决线）；三段互斥 RNG 数据流（校准/选择/验证）与 λ 一次冻结；有效历史块定义（20 日块 + 10 日 guard、按计划入场日归块、日历先截断到共同截止）；收益可识别性先行与计数守恒；三向 verdict、H 级报告字段与 3/6 个月 kill criteria |
+| F8 | 2026-11-13 | P7 P-1 重开（架构 F27 同批；方案 v0.5 复审通过；用户已裁口径） | 新增 `kind=p1_conclusion`（§3.4）：承载 P-1 否决门结论（`continue` / `continue_limited` / `negative`）与旧条目 `superseded_not_estimable` 处置；**不动 α**；`_LEDGER_KINDS` 白名单同步加 `p1_conclusion`。旧条目仍 append-only，只能追加新条目并经 `target_hypothesis_id` 指向，禁止原地改行 |
+| F9 | 2026-11-14 | P7 B 区替代袖子启动第 0 步（用户 2026-11-14 批准「资源决定与统计结论分层」；架构 F28 同批） | 新增 `kind=research_decision`（§3.5）：登记**资源决定**（当前唯一 `decision=stop_new_investment`，预留 `resume_investment`），与`p1_conclusion` 的统计语汇分层；**`alpha_consumed` 恒 false、不改任何 verdict**；`_LEDGER_KINDS` 白名单同步加 `research_decision`。禁止用 `superseded_not_estimable` 或 `conclusion/terminated` 冒充停投 |
+| F10 | 2026-11-15 | P7 袖子分型准入（架构 F29 同批；用户 2026-11-15 批准） | §4 补 `α 预算口径（F29）`：α 按 `α/pool` 扣减（候选池分母参与 Bonferroni）；校准/选择/验证三流的**试验单位 = 单个候选的完整门**，验收目标为「误放行率单侧 95% CP 上界 ≤ α_c」（不是 ≤0.05）；研究线归属、实际扣减与余额以 `research_line` 登记为准 |
 
 ---
 
@@ -69,6 +72,61 @@
 | `supersedes` | list[str] | 被本条取代的旧条目 id（可空） |
 | `notes` | str | 已知代价 / 解释风险 / 机制归因 |
 
+### 3.4 `kind = "p1_conclusion"`（P-1 否决门结论条目，F8）
+
+> 适用：P7 P-1 这类**只许否决、不产出放行结论**的筛查门。结论语汇只有
+> `continue` / `continue_limited` / `negative`；`negative` 须「包络上界 < 0 且负向功效 ≥80%」。
+> 本条**不消费准入 α**（`alpha_consumed` 恒为 `false`），α=0.05 留 T2/T3。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `title` | str | 一句话标题（沿 §3.1；结论类不带 `vehicle` / `tags`） |
+| `target_hypothesis_id` | str | 被结论挂接的 prereg 条目 id（如 `B0-composite-20261111`） |
+| `prereg_id` | str | P-1 预登记 id |
+| `prereg_sha256` | str | 预登记机器件 SHA256 |
+| `criteria_digest` | str | 判据子集摘要（预登记冻结） |
+| `disposition` | str | `p1_verdict`（新结论）或 `superseded_not_estimable`（旧口径不可估计） |
+| `verdict` | str \| null | `continue` / `continue_limited` / `negative`；`superseded_not_estimable` 时为 `null` |
+| `reason_code` | str | `calibration_not_passed` / `method_sensitive` / `unbounded` / `envelope_crosses_zero` / `negative` / `hard_fail` / `superseded_not_estimable` |
+| `reason` | str | 人读理由（含本次读数与限制） |
+| `envelope` | object | `{lo_bp, hi_bp, unit="bp/event"}`；不可约束时 `lo_bp=-inf` 或 `hi_bp=+inf` |
+| `power` | object | `{negative_detection, theta_bp, samples}`（层二校准的负向检出率） |
+| `calibration` | object | `{passed, coverage, false_trigger_rate}` |
+| `alpha_consumed` | bool | 恒 `false`（P-1 只许否决） |
+| `evidence_refs` | list[str] | 证据根 / verdict / 校准报告路径 |
+| `supersedes` | list[str] | 可选：被本条取代的旧结论条目 id（append-only） |
+| `notes` | str | 已知代价 / 解释风险 / 边界 |
+
+- `superseded_not_estimable` 用于把旧 prereg 记为新状态：**只追加、不改历史行**，
+  `target_hypothesis_id` 指向被处置条目，`verdict=null`，`reason` 写明「不可估计、非经济失败退役」。
+- 各类条目共用 `DataStore.append_ledger_entry` 唯一入口；`_LEDGER_KINDS` 必须包含 `p1_conclusion` 与 `research_decision`。
+- 结论类条目（含本节）不强制 `vehicle` / `tags`（沿 F3 结论类先例）。
+
+### 3.5 `kind = "research_decision"`（资源决定条目，F9）
+
+> 适用：**研究资源的启停决定**（停投 / 恢复投入），与统计结论分层。条目回答「是否继续投入」，
+> 不回答「机制是否成立」；不得承载 `pass` / `fail` / `negative` 等统计语汇。
+> 本条**不消费准入 α**（`alpha_consumed` 恒为 `false`），**不改写任何既有 verdict**。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `title` | str | 一句话标题（沿 §3.1；结论类不带 `vehicle` / `tags`） |
+| `decision` | str | `stop_new_investment` / `resume_investment`（当前仅前者有实例） |
+| `target_hypothesis_id` | str | 被决定的研究对象（prereg 条目 id，如 `B0-composite-20261111`） |
+| `scope` | str | 停止/恢复的**精确范围**（定义、时钟、持有期、基准）；须写明不外推什么 |
+| `reason` | str | 人读理由（引用决定性读数与停止线，不得写成经济失败结论） |
+| `evidence_refs` | list[str] | 非空；结论条目 / 证据根 / 报告 / 评审路径 |
+| `reopen_condition` | str | 重开条件（须为新信息或实质不同的候选定义，并另立 prereg） |
+| `alpha_consumed` | bool | 恒 `false` |
+| `notes` | str | 已知代价 / 边界 / 与统计状态的关系（非空） |
+| `supersedes` | list[str] | 可选：被本条取代的旧资源决定条目 id（append-only） |
+
+- 统计状态与资源决定**必须分列**：例如 B0 可同时存在 `p1_conclusion(continue_limited)` 与
+  `research_decision(stop_new_investment)`；禁止用后者推导前者，也禁止用前者否定后者。
+- 未登记 `research_decision` 的停投只在文档层有效，**不得声称台账已记录**。
+
+---
+
 ## 4. 多重比较控制（候选池分母 + α 预算）
 
 **立法理由**：四轮数据家族全败的候选**全部出自历史内体检"最强列"**——历史内预筛偏误在本项目已实际发生；袖子换了载体（列 → 收益流）没换机制，必须设防。
@@ -76,6 +134,8 @@
 - **候选池登记义务**：任何进入裁决的假设必须登记 `candidate_pool_denominator`——它是从多大的候选集合中选出的。
   无法给出分母的（"就这一个想法"）登记 `pool = 1` 并在 `pool_description` 说明理由；**禁止不登记**。
 - **α 预算**：每条研究线（以 `vehicle` + 家族标签划分）持有 α 预算 0.05；池内每次正式检验消耗 `α / pool`（Bonferroni 口径）；
+
+- **α 预算口径（F10 = F29 同批，2026-11-15 生效）**：校准/选择/验证三流的**试验单位 = 单个候选的完整门**，验收目标为「误放行率单侧 95% CP 上界 ≤ `α_c`」（不是 ≤0.05；逐候选验证 0.05 再取并集，union bound 只能给 `pool×0.05`，不能证明族错误率）。研究线归属、实际扣减金额与余额以 `research_line` 登记为准；研究线身份不在袖子分型契约范围内。
   超出预算的候选只能登记为**探索性**（`exploratory=true`），其结论不得作为裁决依据。- **α 扣减时点（F2，P0 评审 4-B）**：**prereg 登记即锁定扣减**（防「跑完再看要不要认账」）；
   §5（前向影子）与 §6（跨季累积）是**两笔独立的 α 支出**，不得互抵——见 §5/§6 边界。- **家族终结纪律衔接**：判定"家族终结"后，同家族新假设的 `reopen_condition` 必须引用新信息（新数据源 / 新标签目标域 / 新载体），
   且新条目必须 `supersedes` 终结条目——换载体不换机制的假设直接拒绝登记。
