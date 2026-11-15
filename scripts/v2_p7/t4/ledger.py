@@ -239,6 +239,8 @@ class _WorkingBook:
                 borrow_lots=self.inputs[sid].borrow_lots,
                 recalled_amount=self.inputs[sid].recalled_amount,
                 deadlocked_amount=self.inputs[sid].deadlocked_amount,
+                # 公司行为应收不是当日执行产物：必须原样承接，否则除息确认会在结算时丢失
+                receivables=self.inputs[sid].receivables,
             )
             for sid in sorted(self.inputs)
         }
@@ -246,6 +248,7 @@ class _WorkingBook:
     def freeze_physical(self) -> PhysicalBook:
         return PhysicalBook(
             cash=self.phys_cash,
+            receivable=float(self.base.receivable),
             lots=dict(self.phys_lots),
             total_fee=self.base.total_fee + self.fee_total,
             total_buy_amount=self.base.total_buy_amount + self.buy_amount,

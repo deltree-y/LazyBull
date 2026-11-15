@@ -70,6 +70,7 @@ def _restart_child(
         price_factory=host._price_factory,  # noqa: SLF001 - 同上
         restore={"envelope": dict(envelope), "fee_book": dict(fee_state)},
         self_check=False,
+        corporate=getattr(host, "corporate", None),
     )
     return child.run()
 

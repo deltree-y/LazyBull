@@ -126,6 +126,8 @@ class SleeveBalance:
     credit: float
     market_value: float
     equity: float
+    #: 现金分红应收（除息日确认、到账日转现金；计入 E，不计入可用现金）
+    receivable: float = 0.0
 
     @property
     def cash_plus_credit(self) -> float:
@@ -141,6 +143,7 @@ class SleeveBalance:
             "sleeve": self.sleeve,
             "cash": float(self.cash),
             "credit": float(self.credit),
+            "receivable": float(self.receivable),
             "market_value": float(self.market_value),
             "equity": float(self.equity),
             "cash_minus_credit": float(self.cash_minus_credit),
@@ -173,7 +176,9 @@ def sleeve_balances(
                 cash=float(state.cash),
                 credit=float(state.credit),
                 market_value=float(value),
-                equity=float(state.cash) + float(value) - float(state.credit),
+                equity=float(state.cash) + float(state.receivable) + float(value)
+                - float(state.credit),
+                receivable=float(state.receivable),
             )
         )
     return rows

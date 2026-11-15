@@ -51,12 +51,12 @@ def write_calibration(run_root: Path, payload: Mapping[str, Any]) -> Dict[str, A
 def write_arm_frames(
     run_root: Path, frames: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]]
 ) -> Dict[str, Dict[str, Any]]:
-    """两臂帧落盘（daily / sleeve / trades）。"""
+    """两臂帧落盘（daily / sleeve / trades / corporate）。"""
     written: Dict[str, Dict[str, Any]] = {}
     for arm in ARMS:
         directory = run_root / "arms" / arm
         directory.mkdir(parents=True, exist_ok=True)
-        for kind in ("daily", "sleeve", "trades"):
+        for kind in ("daily", "sleeve", "trades", "corporate"):
             name = f"arms/{arm}/{kind}_{arm}.parquet"
             written[name] = _write_frames(directory / f"{kind}_{arm}.parquet", frames[arm][kind])
     return written

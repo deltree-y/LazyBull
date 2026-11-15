@@ -378,4 +378,5 @@ def apply_credit_delta(state: Any, credit_delta: Mapping[str, float]) -> Any:
         borrow_lots=state.borrow_lots,
         recalled_amount=float(state.recalled_amount),
         deadlocked_amount=float(state.deadlocked_amount),
+        receivables=state.receivables,
     )

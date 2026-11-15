@@ -87,6 +87,7 @@ def run_daily_identities(
     rows: List[IdentityRow] = [
         _cash_row(sleeves, physical),
         _credit_row(sleeves),
+        _receivable_row(sleeves, physical),
         _holdings_row(sleeves, physical, trade_date),
     ]
     contribution, phys_nav = _nav_rows(rows, total_value, physical_value, physical_initial)
@@ -114,13 +115,13 @@ def _daily_valuations(
     total_value: Dict[str, float] = {}
     for sleeve_id in sorted(sleeves):
         state = sleeves[sleeve_id]
-        value = float(state.cash)
+        value = float(state.cash) + float(state.receivable)
         for lot in state.lots:
             value += float(lot.shares) * _price_of(prices, lot.ts_code, lot.acquired_price, cache)
         if not math.isfinite(value):
             raise DualCaliberError(f"袖 {sleeve_id} 货币总值非有限：{value!r}")
         total_value[sleeve_id] = value
-    physical_value = float(physical.cash)
+    physical_value = float(physical.cash) + float(physical.receivable)
     for lot in physical.lots.values():
         physical_value += float(lot.shares) * _price_of(prices, lot.ts_code, lot.buy_price, cache)
     if not math.isfinite(physical_value):
@@ -144,6 +145,21 @@ def _credit_row(sleeves: Mapping[str, SleeveState]) -> IdentityRow:
     for sleeve_id in sorted(sleeves):
         credit_sum += float(sleeves[sleeve_id].credit)
     return IdentityRow("I1b", credit_sum, 0.0, credit_sum, 0.0, "元")
+
+
+def _receivable_row(sleeves: Mapping[str, SleeveState], physical: PhysicalBook) -> IdentityRow:
+    """I1r：``Σ 袖应收 == 物理应收``（除息日确认、到账日转现金的公司行为资产）。"""
+    total = 0.0
+    for sleeve_id in sorted(sleeves):
+        total += float(sleeves[sleeve_id].receivable)
+    return IdentityRow(
+        "I1r",
+        total,
+        float(physical.receivable),
+        total - float(physical.receivable),
+        CASH_TOLERANCE,
+        "元",
+    )
 
 
 def _holdings_row(

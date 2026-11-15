@@ -188,6 +188,8 @@ def _run_arm(
     from src.lazybull.data.loader import DataLoader
     from src.lazybull.data.storage import Storage
 
+    from scripts.v2_p7.t4.corporate import build_corporate_book
+
     def _prices() -> PriceBook:
         return PriceBook(DataLoader(Storage(root_path=str(params.data_root))))
 
@@ -201,6 +203,9 @@ def _run_arm(
         days=tuple(days),
         price_factory=_prices,
         mode=mode,
+        corporate=build_corporate_book(
+            calendar=tuple(days), repo_root=params.repo_root, cutoff=str(days[-1])
+        ),
     )
     return host.run()
 

@@ -52,6 +52,8 @@ class T5RunState:
     physical_cash_days_negative: int = 0
     min_physical_cash: Optional[float] = None
     offset_capped_shares: int = 0
+    #: 公司行为入账行（除息应收 / 送转入 lot / 到账兑付）
+    corporate_rows: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         arms = tuple(self.sleeves)
@@ -191,7 +193,9 @@ class T5RunState:
                 new_coverage = True
         return bool(new_coverage or index in marks)
 
-    def accumulate(self, day: str, outcome: Any, fee_events: int) -> None:
+    def accumulate(
+        self, day: str, outcome: Any, fee_events: int, corporate_events: int = 0
+    ) -> None:
         for key, value in outcome.scenario_counts.items():
             self.scenario_counts[key] = self.scenario_counts.get(key, 0) + int(value)
         for key, value in outcome.blocks.items():
@@ -225,6 +229,11 @@ class T5RunState:
                 "residual_entries": {
                     sid: len(st.residuals) for sid, st in sorted(outcome.sleeves.items())
                 },
+                "receivables": {
+                    sid: float(st.receivable) for sid, st in sorted(outcome.sleeves.items())
+                },
+                "physical_receivable": float(outcome.physical.receivable),
+                "corporate_events": int(corporate_events),
                 "identity_ok": True,
             }
         )
@@ -280,6 +289,8 @@ class DayPlan:
     cash_delta: Dict[str, float]
     credit_delta: Dict[str, float]
     credit_events: List[Dict[str, Any]]
+    #: 当日开盘前公司行为入账行数（0 = 无事件；证据与逐日投影用）
+    corporate_events: int = 0
 
 
 @dataclass

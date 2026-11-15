@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from loguru import logger
 
 from scripts.v2_p7.t4 import fees as fee_mod
+from scripts.v2_p7.t4.corporate import merge_corporate_rows
 from scripts.v2_p7.t4.dual import run_daily_identities
 from scripts.v2_p7.t4.host import (
     HistoricalVirtualSleeveHost,
@@ -234,6 +235,8 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
             "borrow_outstanding": bool(self.credit.open_lots()),
             "recall_due": bool(due_today(self.credit, day)),
             "deadlocked": any(lot.deadlocked and lot.open for lot in self.credit.lots),
+            # 公司行为应收未兑付（跨检查点必须可还原）
+            "dividend_receivable": any(item.receivables for item in state.sleeves.values()),
         }
 
     def _plan_stage(
@@ -241,6 +244,8 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
     ) -> "DayPlan":
         """配额（额度口径）→ 授信（VV-S）→ 授权（含费用后现金）→ 预净额计划。"""
         tracked = _tracked_codes(state.sleeves, intents)
+        # 公司行为必须在 begin_day（除权调整旧收盘）与配额/授权之前
+        corporate_events = self._apply_corporate_day(day, state)
         self.prices.begin_day(day, tracked=tracked)
         coverage = self._coverage(day, state, tracked)
         is_checkpoint = state.wants_checkpoint(index, total, coverage)
@@ -326,6 +331,7 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
             index=int(index),
             coverage=coverage,
             is_checkpoint=bool(is_checkpoint),
+            corporate_events=int(corporate_events),
             pre=(state.sleeves, state.physical, self.seq),
             begin_envelope=state.envelope.to_payload() if is_checkpoint else {},
             begin_fees=self.fee_book.snapshot() if is_checkpoint else {},
@@ -392,6 +398,8 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
                 borrow_lots=state.sleeves[sid].borrow_lots,
                 recalled_amount=float(state.sleeves[sid].recalled_amount),
                 deadlocked_amount=float(state.sleeves[sid].deadlocked_amount),
+                # 公司行为应收原样带入执行期（不是可用现金，仍计入 E 与 I1r）
+                receivables=state.sleeves[sid].receivables,
             )
             for sid in state.sleeves
         }
@@ -570,7 +578,9 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
         state.envelope.dual_caliber = _dual_caliber(
             self.params.arms, settled.report, settled.savings, self.fee_book
         )
-        state.accumulate(day, settled.outcome, len(day_costs))
+        state.accumulate(
+            day, settled.outcome, len(day_costs), corporate_events=int(plan.corporate_events)
+        )
         state.quota_rows.extend(
             decision.payload() for _sid, decision in sorted(plan.decisions.items())
         )
@@ -1112,6 +1122,10 @@ class QuotaCreditHost(HistoricalVirtualSleeveHost):
             negative_cash_examples=list(state.negative_cash_examples),
             equity_policy_events=list(state.equity_blocks),
             equity_blocks=list(state.equity_blocks),
+            corporate_rows=list(merge_corporate_rows(state.corporate_rows)),
+            corporate_payload=(
+                dict(self.corporate.payload()) if self.corporate is not None else {}
+            ),
             credit_nav_rows=state.credit_nav_rows,
             mode=self.mode.payload(),
             quota_rows=list(state.quota_rows),

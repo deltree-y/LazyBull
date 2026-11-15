@@ -20,6 +20,7 @@ T5 完成根只登记了 ``scripts/v2_p7/t4/**`` 与受审旧面/T2.5 的逐件 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
@@ -31,7 +32,11 @@ from scripts.v2_p7.t5.params import params_digest as t5_params_digest
 from scripts.v2_p7.t6 import calibration
 
 #: T5 已收口完成根（只读引用；本 task 不覆盖、不重跑）
-T5_ROOT_REL = "data/paper_shadow/p7_testbed/p7_t5_20261113_r15"
+#: R01 整改后 T4/T5 语义变更（公司行为入账），A 参照必须指向**新** T5 根：
+#: 默认仍为历史根，重取时以 ``P7_T5_REFERENCE_ROOT`` 显式覆盖并写入证据。
+T5_ROOT_REL = os.environ.get(
+    "P7_T5_REFERENCE_ROOT", "data/paper_shadow/p7_testbed/p7_t5_20261113_r15"
+)
 
 #: 测试床工作根（唯一写域，与 T4/T5 同）
 TESTBED_REL = "data/paper_shadow/p7_testbed"

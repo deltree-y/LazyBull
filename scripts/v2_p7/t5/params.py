@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
@@ -27,7 +28,11 @@ from scripts.v2_p7.t4.params import build_params as build_t4_params
 from scripts.v2_p7.t4.params import params_digest as t4_params_digest
 
 #: T4 已收口完成根（只读引用；本 task 不覆盖、不重跑）
-T4_ROOT_REL = "data/paper_shadow/p7_testbed/p7_t4_20261112_r31"
+#: R01 整改后 T4 语义变更（公司行为入账），互证基准必须指向**新** T4 根：
+#: 默认仍为历史根，重取时以 ``P7_T4_REFERENCE_ROOT`` 显式覆盖并写入证据。
+T4_ROOT_REL = os.environ.get(
+    "P7_T4_REFERENCE_ROOT", "data/paper_shadow/p7_testbed/p7_t4_20261112_r31"
+)
 
 #: T5 测试床工作根（唯一写域）
 TESTBED_REL = "data/paper_shadow/p7_testbed"

@@ -171,8 +171,29 @@ class BorrowLot:
 
 
 @dataclass(frozen=True)
+class ReceivableEntry:
+    """单笔现金分红应收（除息日确认、到账日转现金；逐事件可对账）。"""
+
+    receivable_id: str
+    ts_code: str
+    amount: float
+    recognized_date: str
+    settle_date: str
+    shares: int
+
+    def __post_init__(self) -> None:
+        if not str(self.receivable_id).strip():
+            raise StateError("应收 receivable_id 不得为空")
+        amount = _require_finite(self.amount, f"应收 {self.receivable_id} amount")
+        if amount <= 0.0:
+            raise StateError(f"应收 {self.receivable_id} 金额必须为正：{amount!r}")
+        if _require_shares(self.shares, f"应收 {self.receivable_id} shares") <= 0:
+            raise StateError(f"应收 {self.receivable_id} 股数必须为正：{self.shares!r}")
+
+
+@dataclass(frozen=True)
 class SleeveState:
-    """单袖只读快照（含残差/借款/召回/死局）。"""
+    """单袖只读快照（含残差/借款/召回/死局/公司行为应收）。"""
 
     sleeve_id: str
     cash: float
@@ -182,20 +203,34 @@ class SleeveState:
     borrow_lots: Tuple[BorrowLot, ...] = ()
     recalled_amount: float = 0.0
     deadlocked_amount: float = 0.0
+    #: 现金分红应收（除息日确认、到账日转现金；不是可用现金，不参与授权/买入）
+    receivables: Tuple[ReceivableEntry, ...] = ()
 
     def __post_init__(self) -> None:
         if not str(self.sleeve_id).strip():
             raise StateError("袖快照 sleeve_id 不得为空")
         for name in ("cash", "credit", "recalled_amount", "deadlocked_amount"):
             object.__setattr__(self, name, _require_finite(getattr(self, name), f"袖 {name}"))
-        seen: set = set()
+        lot_ids: set = set()
         for lot in self.lots:
             key = (self.sleeve_id, lot.virtual_lot_id)
-            if key in seen:
+            if key in lot_ids:
                 raise StateError(
                     f"虚拟取得批次身份重复：袖={self.sleeve_id} lot={lot.virtual_lot_id}"
                 )
-            seen.add(key)
+            lot_ids.add(key)
+        receivable_ids: set = set()
+        for item in self.receivables:
+            if item.receivable_id in receivable_ids:
+                raise StateError(
+                    f"袖 {self.sleeve_id} 应收身份重复：{item.receivable_id}"
+                )
+            receivable_ids.add(item.receivable_id)
+
+    @property
+    def receivable(self) -> float:
+        """应收总额（逐笔求和；I1r 的左值）。"""
+        return float(sum(item.amount for item in self.receivables))
 
     def shares_of(self, ts_code: str) -> int:
         return sum(lot.shares for lot in self.lots if lot.ts_code == str(ts_code))
@@ -210,8 +245,8 @@ class SleeveState:
 
     @property
     def equity(self) -> float:
-        """``E_i = cash_i + MV_i - credit_i`` 的现金/债权部分（MV 由调用方加总）。"""
-        return self.cash - self.credit
+        """``E_i = cash_i + 应收_i - credit_i`` 的现金/债权部分（MV 由调用方加总）。"""
+        return self.cash + self.receivable - self.credit
 
 
 @dataclass
@@ -223,9 +258,12 @@ class PhysicalBook:
     total_fee: float = 0.0
     total_buy_amount: float = 0.0
     total_sell_amount: float = 0.0
+    #: 现金分红应收（到账日转现金；与袖应收之和恒等，见 I1r）
+    receivable: float = 0.0
 
     def __post_init__(self) -> None:
         self.cash = _require_finite(self.cash, "物理现金")
+        self.receivable = _require_finite(self.receivable, "物理应收")
 
     def add_lot(self, lot: PhysicalLot) -> None:
         if lot.source_lot_id in self.lots:
@@ -369,7 +407,9 @@ class StateEnvelope:
                 "禁止跳代或回退提交"
             )
         self.sleeves = {str(sid): sleeves[sid] for sid in sorted(sleeves)}
-        self.physical = physical
+        # **必须复制**：物理账本是可变对象，下一天的除息应收 / 到账兑付会原地修改它；
+        # 若只存引用，已提交代际会跟着变，检查点还原会出现「袖无应收、物理有应收」的错位。
+        self.physical = copy_physical_book(physical)
         self.generation = int(generation)
         self.as_of = str(as_of)
         self.applied[key] = (int(generation), str(fingerprint))
@@ -477,12 +517,36 @@ class StateEnvelope:
         }
 
 
+def copy_physical_book(physical: PhysicalBook) -> PhysicalBook:
+    """物理账本快照复制（批次不可变，故浅复制 dict 即可；禁止共享可变对象）。"""
+    return PhysicalBook(
+        cash=float(physical.cash),
+        receivable=float(physical.receivable),
+        lots=dict(physical.lots),
+        total_fee=float(physical.total_fee),
+        total_buy_amount=float(physical.total_buy_amount),
+        total_sell_amount=float(physical.total_sell_amount),
+    )
+
+
 def _sleeve_payload(sleeves: Mapping[str, SleeveState]) -> Dict[str, Any]:
     """袖快照的证据形态（``to_payload`` 与幂等比对共用同一实现）。"""
     return {
         sid: {
             "cash": float(state.cash),
             "credit": float(state.credit),
+            "receivable": float(state.receivable),
+            "receivables": [
+                {
+                    "receivable_id": item.receivable_id,
+                    "ts_code": item.ts_code,
+                    "amount": float(item.amount),
+                    "recognized_date": item.recognized_date,
+                    "settle_date": item.settle_date,
+                    "shares": int(item.shares),
+                }
+                for item in sorted(state.receivables, key=lambda row: row.receivable_id)
+            ],
             "cash_minus_credit": float(state.equity),
             "lots": [
                 {
@@ -530,6 +594,7 @@ def _physical_payload(physical: Optional[PhysicalBook]) -> Optional[Dict[str, An
         return None
     return {
         "cash": float(physical.cash),
+        "receivable": float(physical.receivable),
         "total_fee": float(physical.total_fee),
         "total_buy_amount": float(physical.total_buy_amount),
         "total_sell_amount": float(physical.total_sell_amount),
@@ -637,6 +702,17 @@ def sleeves_from_payload(payload: Mapping[str, Any]) -> Dict[str, SleeveState]:
             )
             for row in item["residuals"]
         )
+        receivables = tuple(
+            ReceivableEntry(
+                receivable_id=str(row["receivable_id"]),
+                ts_code=str(row["ts_code"]),
+                amount=float(row["amount"]),
+                recognized_date=str(row["recognized_date"]),
+                settle_date=str(row["settle_date"]),
+                shares=int(row["shares"]),
+            )
+            for row in item.get("receivables") or ()
+        )
         restored[sleeve_id] = SleeveState(
             sleeve_id=sleeve_id,
             cash=float(item["cash"]),
@@ -645,6 +721,7 @@ def sleeves_from_payload(payload: Mapping[str, Any]) -> Dict[str, SleeveState]:
             residuals=residuals,
             recalled_amount=float(item.get("recalled_amount") or 0.0),
             deadlocked_amount=float(item.get("deadlocked_amount") or 0.0),
+            receivables=receivables,
         )
     return restored
 
@@ -655,6 +732,7 @@ def physical_from_payload(payload: Optional[Mapping[str, Any]]) -> Optional[Phys
         return None
     return PhysicalBook(
         cash=float(payload["cash"]),
+        receivable=float(payload.get("receivable") or 0.0),
         lots={
             str(row["source_lot_id"]): PhysicalLot(
                 source_lot_id=str(row["source_lot_id"]),

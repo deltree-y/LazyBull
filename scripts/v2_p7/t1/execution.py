@@ -327,6 +327,107 @@ def simulate_horizon(
     )
 
 
+@dataclass
+class SingleLegResult:
+    """单股事件腿一次完整执行（P-1 重开新增；不复用六股共同入离场口径）。"""
+
+    shares: int
+    buy_amount: float
+    sell_shares: float
+    sell_amount: float
+    buy_cost: float
+    sell_cost: float
+    value_exit: float
+    net: float
+    valid: bool
+    zero_lot: bool
+
+
+def single_leg_net(
+    price_buy: float,
+    adj_buy: float,
+    price_sell: float,
+    adj_sell: float,
+    ratio: float,
+    chain_ok: bool,
+    *,
+    cost: Dict[str, float],
+    min_ticket: float,
+    lot_size: int = 100,
+) -> SingleLegResult:
+    """单股事件腿净收益（真实未复权价承载成本，复权价承载经济价值）。
+
+    与六股共同入离场无关：P-1 重开的事件腿只要求**本股**当日可买/可卖。
+    """
+    if not (
+        np.isfinite(price_buy)
+        and price_buy > 0
+        and np.isfinite(adj_buy)
+        and adj_buy > 0
+        and np.isfinite(price_sell)
+        and price_sell > 0
+        and np.isfinite(adj_sell)
+        and adj_sell > 0
+        and np.isfinite(ratio)
+        and ratio > 0
+        and bool(chain_ok)
+    ):
+        nan = float("nan")
+        return SingleLegResult(0, nan, nan, nan, nan, nan, nan, nan, False, False)
+
+    shares_array, buy_amount_array = _lot_and_cost(
+        np.asarray([price_buy], dtype=np.float64),
+        min_ticket=min_ticket,
+        lot_size=lot_size,
+        cost=cost,
+    )
+    shares = int(shares_array[0])
+    buy_amount = float(buy_amount_array[0])
+    if shares <= 0 or not np.isfinite(buy_amount) or buy_amount <= 0:
+        nan = float("nan")
+        return SingleLegResult(0, nan, nan, nan, nan, nan, nan, nan, False, True)
+
+    sell_shares = float(np.floor(shares * float(ratio)))
+    sell_amount = sell_shares * float(price_sell)
+    buy_cost = float(_buy_cost(np.asarray([buy_amount]), cost)[0])
+    sell_cost = float(_sell_cost(np.asarray([sell_amount]), cost)[0])
+    value_exit = buy_amount * (float(adj_sell) / float(adj_buy))
+    net = (value_exit - sell_cost) / (buy_amount + buy_cost) - 1.0
+    valid = bool(np.isfinite(net) and sell_shares > 0)
+    return SingleLegResult(
+        shares=shares,
+        buy_amount=buy_amount,
+        sell_shares=sell_shares,
+        sell_amount=sell_amount,
+        buy_cost=buy_cost,
+        sell_cost=sell_cost,
+        value_exit=value_exit,
+        net=net,
+        valid=valid,
+        zero_lot=False,
+    )
+
+
+def single_leg_net_from_value(
+    value_exit: float,
+    buy_amount: float,
+    buy_cost: float,
+    *,
+    cost: Dict[str, float],
+) -> float:
+    """截止估值净收益：以复权经济价值作为可变现金额，按变现扣一次卖出费用。"""
+    if not (
+        np.isfinite(value_exit)
+        and value_exit > 0
+        and np.isfinite(buy_amount)
+        and buy_amount > 0
+        and np.isfinite(buy_cost)
+    ):
+        return float("nan")
+    sell_cost = float(_sell_cost(np.asarray([value_exit]), cost)[0])
+    return float((value_exit - sell_cost) / (buy_amount + buy_cost) - 1.0)
+
+
 def intent_residual(result: HorizonResult) -> np.ndarray:
     """全部意图的净残差：已成交用真实值，未成交整组取真实 0，不可解析取 NaN。"""
     values = np.full(result.size, np.nan, dtype=np.float64)

@@ -132,6 +132,7 @@ def run(
                 buy_index=buy_index,
                 sell_index=sell_index,
                 days=window,
+                corporate=_corporate_book(params, window),
             )
             segments.append(host.run())
         host_result = segments[-1]
@@ -156,6 +157,7 @@ def run(
             buy_index=buy_index,
             sell_index=sell_index,
             price_factory=_fresh_prices,
+            corporate=_corporate_book(params, tuple(params.extended_days)),
         )
         host_result = host.run()
         segment_payload = []
@@ -213,6 +215,18 @@ def _frozen_counts() -> Mapping[str, int]:
     from scripts.v2_p7.t4.params import FROZEN_INTENT_COUNTS
 
     return FROZEN_INTENT_COUNTS
+
+
+def _corporate_book(params: T4Params, days: Sequence[str]) -> Any:
+    """公司行为事件簿（按运行日历映射；R01 起 T4/T5 全窗必须显式传入）。"""
+    from scripts.v2_p7.t4.corporate import build_corporate_book
+
+    calendar = tuple(str(day) for day in days)
+    return build_corporate_book(
+        calendar=calendar,
+        repo_root=params.repo_root,
+        cutoff=calendar[-1] if calendar else None,
+    )
 
 
 def _cost_model(params: T4Params) -> Any:
@@ -542,6 +556,13 @@ def _write_artifacts(
         run_root / "conservation.parquet", result.conservation_rows
     )
     written["daily.parquet"] = _write_frames(run_root / "daily.parquet", result.daily_rows)
+    # R01：公司行为逐笔入账（除息应收 / 送转并入原 lot / 到账兑付）与事件簿口径
+    written["corporate_actions.parquet"] = _write_frames(
+        run_root / "corporate_actions.parquet", list(result.corporate_rows)
+    )
+    written["corporate_events.json"] = _write_json_counted(
+        run_root / "corporate_events.json", dict(result.corporate_payload)
+    )
     if segment_payload:
         written["segments.json"] = _write_json_counted(
             run_root / "segments.json",

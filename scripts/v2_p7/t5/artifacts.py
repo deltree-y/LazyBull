@@ -51,6 +51,20 @@ def write_artifacts(
             "note": "T4 模块逐件 SHA 用于证明本 task 未改 T4 语义（不重跑、不覆盖 r31）。",
         },
     )
+    # R01：公司行为逐笔入账（逐臂）+ 事件簿口径（除息应收 / 送转入 lot / 到账兑付）
+    written["corporate_actions.parquet"] = write_frames(
+        run_root / "corporate_actions.parquet",
+        [row for name in sorted(results) for row in results[name].corporate_rows],
+    )
+    payloads = {
+        name: dict(results[name].corporate_payload)
+        for name in sorted(results)
+        if results[name].corporate_payload
+    }
+    written["corporate_events.json"] = write_json_counted(
+        run_root / "corporate_events.json",
+        {"schema": "p7_t5_corporate_events/v1", "arms": payloads},
+    )
     written["scenarios/constructed.json"] = write_json_counted(
         run_root / "scenarios" / "constructed.json", scenario_mod.summarize_cases(cases)
     )

@@ -135,6 +135,8 @@ class Panel:
     industry_source: Dict[str, Any]
     load_stats: Dict[str, Any]
     industry_matrix: Optional[np.ndarray] = None
+    #: clean/daily 行存在性（P-1 重开新增；缺行 = 证据未知，不等同于“停牌可证”）
+    has_row: Optional[np.ndarray] = None
 
     @property
     def n_days(self) -> int:
@@ -366,6 +368,7 @@ def _allocate_arrays(n_days: int, n_stocks: int) -> Dict[str, np.ndarray]:
         "limit_up": np.zeros(shape, dtype=bool),
         "limit_down": np.zeros(shape, dtype=bool),
         "announce": np.zeros(shape, dtype=bool),
+        "has_row": np.zeros(shape, dtype=bool),
     }
 
 
@@ -401,6 +404,7 @@ def _fill_daily_files(
         frame = pd.concat(frames, ignore_index=True)
         rows += len(frame)
         frame, d_pos, s_pos = _positions(frame, "trade_date", day_lookup, stock_index)
+        arrays["has_row"][d_pos, s_pos] = True
         for column in ("open", "open_adj", "close_adj", "pre_close", "high", "low", "amount"):
             matrix = arrays["open_u" if column == "open" else column]
             _fill_matrix(matrix, d_pos, s_pos, frame[column].to_numpy(), matrix.dtype)
@@ -731,6 +735,7 @@ def load_panel(
         industry_source=industry_info,
         load_stats=load_stats,
         industry_matrix=industry_matrix,
+        has_row=arrays["has_row"],
     )
 
 

@@ -125,6 +125,7 @@ def _day_row(
     equity = {sid: float(sleeve[sid]["equity"]) for sid in arms}
     credit = {sid: float(sleeve[sid]["credit"]) for sid in arms}
     cash = {sid: float(sleeve[sid]["cash"]) for sid in arms}
+    receivable = {sid: float(sleeve[sid].get("receivable") or 0.0) for sid in arms}
     gate_value = (credit_day.get("nonnegative_gate") or {}).get("min")
     market_notional = float(turnover.get("market") or 0.0)
     return {
@@ -136,8 +137,11 @@ def _day_row(
         "sleeve_equity": equity,
         "sleeve_credit": credit,
         "sleeve_cash": cash,
+        "sleeve_receivable": receivable,
         "contribution": {sid: float(equity[sid] / physical_capital) for sid in arms},
         "cash_sum": float(sum(cash.values())),
+        "receivable_sum": float(sum(receivable.values())),
+        "corporate_events": int(mech.get("corporate_events") or 0),
         "physical_cash": float(mech.get("physical_cash") or 0.0),
         "credit_sum": float(sum(credit.values())),
         "borrow_outstanding": float(sum(max(0.0, value) for value in credit.values())),
@@ -187,6 +191,7 @@ def per_sleeve_rows(result: T5HostResult, params: T6Params) -> List[Dict[str, An
                 "sleeve": sleeve,
                 "cash": float(row["cash"]),
                 "credit": float(row["credit"]),
+                "receivable": float(row.get("receivable") or 0.0),
                 "market_value": float(row["market_value"]),
                 "equity": value,
                 "contribution": value / float(params.physical_capital),
@@ -283,9 +288,11 @@ def _sleeve_fee(trade: Mapping[str, Any]) -> Dict[str, float]:
 
 
 def build_arm_frames(result: T5HostResult, params: T6Params) -> Dict[str, List[Dict[str, Any]]]:
-    """单臂三帧（daily / sleeve / trades）。"""
+    """单臂四帧（daily / sleeve / trades / corporate）。"""
     return {
         "daily": per_day_rows(result, params),
         "sleeve": per_sleeve_rows(result, params),
         "trades": trade_rows(result),
+        # R01：公司行为逐笔入账（除息应收 / 送转并入原 lot / 到账兑付），逐臂独立
+        "corporate": [dict(row) for row in getattr(result, "corporate_rows", ())],
     }

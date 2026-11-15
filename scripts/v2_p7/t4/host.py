@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from loguru import logger
 
 from scripts.v2_p7.t4 import fees as fee_mod
+from scripts.v2_p7.t4.corporate import CorporateActionBook, merge_corporate_rows
 from scripts.v2_p7.t4.dual import DailyLedgerReport, assert_identities, run_daily_identities
 from scripts.v2_p7.t4.ledger import execute_plan
 from scripts.v2_p7.t4.netting import (
@@ -98,6 +99,10 @@ class HostResult:
     negative_physical_cash_examples: List[Dict[str, Any]] = field(default_factory=list)
     #: E<=0 禁新增买入的策略事件（F26）
     equity_policy_events: List[Dict[str, Any]] = field(default_factory=list)
+    #: 公司行为逐笔入账行（除息应收 / 送转入 lot / 到账兑付）
+    corporate_rows: List[Dict[str, Any]] = field(default_factory=list)
+    #: 公司行为事件簿证据（口径 + 计数 + 事件表 + 记录日差异）
+    corporate_payload: Dict[str, Any] = field(default_factory=dict)
 
 
 def _load_plan_rows(root: Any, arms: Sequence[str]) -> List[Dict[str, Any]]:
@@ -208,6 +213,8 @@ class _RunState:
     offset_capped_shares: int = 0
     #: E<=0 禁止新增买入的策略事件（F26）
     equity_policy_events: List[Dict[str, Any]] = field(default_factory=list)
+    #: 公司行为入账行（证据；逐日累加）
+    corporate_rows: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         arms = tuple(self.sleeves)
@@ -378,7 +385,9 @@ class _RunState:
             }
         )
 
-    def accumulate(self, day: str, outcome: Any, fee_events: int) -> None:
+    def accumulate(
+        self, day: str, outcome: Any, fee_events: int, corporate_events: int = 0
+    ) -> None:
         """累加场景/阻断/作废/顺延/成交与逐日明细行。"""
         for key, value in outcome.scenario_counts.items():
             self.scenario_counts[key] = self.scenario_counts.get(key, 0) + int(value)
@@ -413,6 +422,11 @@ class _RunState:
                 "residual_entries": {
                     sid: len(st.residuals) for sid, st in sorted(outcome.sleeves.items())
                 },
+                "receivables": {
+                    sid: float(st.receivable) for sid, st in sorted(outcome.sleeves.items())
+                },
+                "physical_receivable": float(outcome.physical.receivable),
+                "corporate_events": int(corporate_events),
                 "identity_ok": True,
             }
         )
@@ -434,6 +448,29 @@ def _fee_progress(book: Any) -> str:
             "independent": dict(sorted(book.independent_by_sleeve.items())),
         }
     )
+
+
+def apply_corporate_actions(
+    corporate: Optional[CorporateActionBook],
+    *,
+    day: str,
+    sleeves: Dict[str, SleeveState],
+    physical: PhysicalBook,
+    prices: PriceBook,
+) -> List[Dict[str, Any]]:
+    """开盘前公司行为入账（除权应收 + 送转 lot -> 到账兑付）。
+
+    顺序写死为 **除息先、到账后**：同一天既是除权日又是支付日时，应收当日即转现金；
+    反过来（先兑付后确认）会把当日应付推到次一交易日，制造无经济含义的浮存。
+    """
+    if corporate is None:
+        return []
+    rows: List[Dict[str, Any]] = []
+    rows.extend(
+        corporate.apply_ex_day(day=day, sleeves=sleeves, physical=physical, prices=prices)
+    )
+    rows.extend(corporate.apply_pay_day(day=day, sleeves=sleeves, physical=physical))
+    return rows
 
 
 def _tracked_codes(
@@ -472,10 +509,13 @@ class HistoricalVirtualSleeveHost:
         price_factory: Optional[Any] = None,
         restore: Optional[Mapping[str, Any]] = None,
         self_check: bool = True,
+        corporate: Optional[CorporateActionBook] = None,
     ) -> None:
         self.params = params
         self.run_id = str(run_id)
         self.prices = prices
+        #: 公司行为事件簿（缺省 None = 不处理；T4/T5 全窗运行必须显式传入）
+        self.corporate = corporate
         #: 重放/重启自验用的**独立**价源工厂（缺省复用同一价源，证据中会标注未隔离）
         self._price_factory = price_factory
         self.cost_model = cost_model
@@ -539,10 +579,30 @@ class HistoricalVirtualSleeveHost:
         )
         return _RunState(sleeves=sleeves, physical=physical, envelope=envelope)
 
+    def _apply_corporate_day(self, day: str, state: _RunState) -> int:
+        """公司行为入账（**开盘前**）：到账兑付 -> 除权应收 + 送转 lot + 缺价可比调整。
+
+        Returns:
+            当日入账行数（证据用）。缺省事件簿时返回 0（不静默视为通过）。
+        """
+        if self.corporate is None:
+            return 0
+        rows = apply_corporate_actions(
+            self.corporate,
+            day=day,
+            sleeves=state.sleeves,
+            physical=state.physical,
+            prices=self.prices,
+        )
+        if rows:
+            state.corporate_rows.extend(rows)
+        return len(rows)
+
     def _run_day(self, day: str, index: int, total: int, state: _RunState) -> None:
-        """单日：预净额 -> 落账 -> 费用台账 -> 双口径恒等式 -> 同代提交。"""
+        """单日：公司行为 -> 预净额 -> 落账 -> 费用台账 -> 双口径恒等式 -> 同代提交。"""
         intents = self._collect_intents(day, state.sleeves)
         tracked = _tracked_codes(state.sleeves, intents)
+        corporate_events = self._apply_corporate_day(day, state)
         self.prices.begin_day(day, tracked=tracked)
         # 停牌中重启：当日有**持仓**股票无真实有价日（估值只能走 last_known 缓存）
         held_codes = {lot.ts_code for sleeve in state.sleeves.values() for lot in sleeve.lots}
@@ -640,7 +700,7 @@ class HistoricalVirtualSleeveHost:
         state.envelope.dual_caliber = _dual_caliber(
             self.params.arms, report, savings, self.fee_book
         )
-        state.accumulate(day, outcome, len(day_costs))
+        state.accumulate(day, outcome, len(day_costs), corporate_events=corporate_events)
         if len(state.day_rows) % 250 == 0:
             logger.info(
                 f"{self.run_id} {day} 第 {len(state.day_rows)} 日；物理现金="
@@ -705,6 +765,10 @@ class HistoricalVirtualSleeveHost:
             negative_cash_days=int(state.negative_cash_days),
             negative_cash_examples=list(state.negative_cash_examples),
             equity_policy_events=list(state.equity_policy_events),
+            corporate_rows=list(merge_corporate_rows(state.corporate_rows)),
+            corporate_payload=(
+                dict(self.corporate.payload()) if self.corporate is not None else {}
+            ),
         )
 
     def _apply_equity_policy(
@@ -800,6 +864,13 @@ class HistoricalVirtualSleeveHost:
         digests: List[Tuple[str, str]] = []
         for day in window:
             intents = self._collect_intents(day, sleeves, no_new_buy)
+            apply_corporate_actions(
+                self.corporate,
+                day=day,
+                sleeves=sleeves,
+                physical=physical,
+                prices=prices,
+            )
             prices.begin_day(day, tracked=_tracked_codes(sleeves, intents))
             plan = plan_day(day, intents, _available(sleeves))
             outcome = execute_plan(

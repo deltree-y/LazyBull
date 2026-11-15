@@ -83,6 +83,7 @@ class PriceBook:
         self._day: Optional[str] = None
         self._today: Dict[str, Quote] = {}
         self._last_close: Dict[str, Tuple[float, str]] = {}
+        self._prior_close: Dict[str, Tuple[float, str]] = {}
         self._active_gaps: Dict[str, Dict[str, Any]] = {}
         self._distribution: Dict[str, int] = {}
         self._per_stock: Dict[str, Dict[str, Any]] = {}
@@ -95,6 +96,8 @@ class PriceBook:
         self._tracked: Tuple[str, ...] = ()
         self._independent_cache: Dict[Tuple[str, str], Optional[float]] = {}
         self._resume_checks: Dict[str, Any] = {"checked": 0, "bitwise_equal": 0, "mismatch": []}
+        #: 公司行为除权调整（逐股按生效日累积；用于缺价 carry 的可比估值）
+        self._adjustments: Dict[str, List[Dict[str, Any]]] = {}
 
     # ────────────────────────── 续跑状态（C4-04） ──────────────────────────
 
@@ -128,6 +131,7 @@ class PriceBook:
         """
         self._day = str(day)
         self._days += 1
+        self._prior_close = dict(self._last_close)
         self._tracked = tuple(sorted({str(code) for code in (tracked or ())}))
         frame = self._loader.load_clean_daily_by_date(day, auto_ensure=False)
         if frame is None or len(frame) == 0:
@@ -211,6 +215,9 @@ class PriceBook:
                         "gap_days": int(gap["days"]),
                         "resume_date": self._day,
                         "pre_gap_price": gap["pre_gap_price"],
+                        "adjusted_pre_gap_price": self._adjusted_close(
+                            str(gap.get("pre_gap_date") or ""), code
+                        ),
                         "pre_gap_date": gap["pre_gap_date"],
                         "resume_raw_close": resume_close,
                         "resume_independent_close": independent,
@@ -222,6 +229,78 @@ class PriceBook:
                 )
             else:
                 self._episode_truncated += 1
+
+    # ────────────────────────── 公司行为除权调整 ──────────────────────────
+
+    def apply_ex_adjustment(
+        self,
+        ts_code: str,
+        *,
+        cash_per_share: float,
+        share_ratio: float,
+        ex_date: str,
+    ) -> Optional[Dict[str, Any]]:
+        """除权生效日**开盘前**：把「最后已知收盘」调整到可比口径。
+
+        理论除权价 ``(last_close − cash) / (1 + ratio)``：停牌跨除权时若沿用旧价，
+        送转后的新股数会制造机械 NAV 增值（R03 同源问题）。当日有真实行情时，
+        ``begin_day`` 随后会用真实收盘覆盖本缓存，调整不留痕于估值。
+
+        Raises:
+            PriceError: 调整后价格非正、参数非法，或当日行情已装载（顺序越界）。
+        """
+        code = str(ts_code)
+        ratio = float(share_ratio)
+        cash = float(cash_per_share)
+        if not math.isfinite(ratio) or ratio < 0.0:
+            raise PriceError(f"{code} 送转比例非法：{share_ratio!r}")
+        if not math.isfinite(cash) or cash < 0.0:
+            raise PriceError(f"{code} 每股现金非法：{cash_per_share!r}")
+        if ratio == 0.0 and cash == 0.0:
+            return None
+        if self._day == str(ex_date):
+            quote = self._today.get(code)
+            if quote is not None and quote.has_close:
+                raise PriceError(
+                    f"{code} 除权调整必须在 begin_day 之前完成（{ex_date} 行情已装载）"
+                )
+        record: Dict[str, Any] = {
+            "ts_code": code,
+            "ex_date": str(ex_date),
+            "cash_per_share": cash,
+            "share_ratio": ratio,
+            "applied_to_last_known": False,
+            "last_known_before": None,
+            "last_known_after": None,
+        }
+        known = self._last_close.get(code)
+        if known is not None:
+            before = float(known[0])
+            after = (before - cash) / (1.0 + ratio)
+            if not math.isfinite(after) or after <= 0.0:
+                raise PriceError(
+                    f"{code} 除权后价格非正：{before!r} − {cash!r}（比例 {ratio!r}）"
+                )
+            # 保留原价格日期：价格仍是「最后交易日」的观测，只是换到除权后口径；
+            # 若把日期写成除权日，停牌首日就会失去可独立复读的期望价（同源自证缺口）。
+            self._last_close[code] = (after, str(known[1]))
+            record["applied_to_last_known"] = True
+            record["last_known_before"] = before
+            record["last_known_after"] = after
+        self._adjustments.setdefault(code, []).append(record)
+        return record
+
+    def _adjusted_close(self, day: str, ts_code: str) -> Optional[float]:
+        """原始收盘价按**其后**生效的除权事件调整（缺价 carry 的可比口径）。"""
+        value = self._independent_close(day, ts_code)
+        if value is None:
+            return None
+        for item in self._adjustments.get(str(ts_code), ()):
+            if str(item["ex_date"]) > str(day):
+                value = (float(value) - float(item["cash_per_share"])) / (
+                    1.0 + float(item["share_ratio"])
+                )
+        return float(value)
 
     # ────────────────────────── 成交价 ──────────────────────────
 
@@ -316,7 +395,7 @@ class PriceBook:
         gap = self._active_gaps.get(code)
         if gap is None:
             return
-        expected = self._independent_close(str(gap.get("pre_gap_date") or ""), code)
+        expected = self._adjusted_close(str(gap.get("pre_gap_date") or ""), code)
         self._suspension_checks["checked"] += 1
         if expected is not None and float(price) == float(expected) and source == SOURCE_LAST_KNOWN:
             self._suspension_checks["constant"] += 1
@@ -356,7 +435,13 @@ class PriceBook:
         return value
 
     def last_known(self, ts_code: str) -> Optional[Tuple[float, str]]:
-        """最后已知真实收盘价与日期（只读；不参与成交与转账）。"""
+        """最后已知真实收盘价与日期（只读；不参与成交与转账）。
+
+        开盘决策时点不得回退到当日收盘：``begin_day`` 会先写入当日 close，
+        因此这里必须排除 ``price_date >= self._day`` 的条目，只返回历史价。
+        """
+        if self._day:
+            return self._prior_close.get(str(ts_code))
         return self._last_close.get(str(ts_code))
 
     def active_gaps(self) -> Tuple[str, ...]:
@@ -417,6 +502,25 @@ class PriceBook:
                 "bitwise_equal": int(self._resume_checks["bitwise_equal"]),
                 "mismatch": list(self._resume_checks["mismatch"]),
                 "basis": "恢复日估值来源必须为 day_close，且价格与独立复读的原始收盘价逐位相等。",
+            },
+            "corporate_adjustments": {
+                "stocks": len(self._adjustments),
+                "events": sum(len(items) for items in self._adjustments.values()),
+                "applied_to_last_known": sum(
+                    1
+                    for items in self._adjustments.values()
+                    for item in items
+                    if item["applied_to_last_known"]
+                ),
+                "rows": [
+                    dict(item)
+                    for code in sorted(self._adjustments)
+                    for item in self._adjustments[code]
+                ],
+                "basis": (
+                    "除权生效日开盘前把最后已知收盘调整为 (last − 现金)/(1 + 送转比例)，"
+                    "防止停牌跨除权时旧价 × 新股数的机械增值；当日有真实行情时由 begin_day 覆盖。"
+                ),
             },
             "notes": {
                 "execution": (

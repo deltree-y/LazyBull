@@ -67,6 +67,7 @@ def _restart_child(
         mode=host.mode,
         restore={"envelope": dict(envelope), "fee_book": dict(fee_state)},
         self_check=False,
+        corporate=getattr(host, "corporate", None),
     )
     return child.run()
 
