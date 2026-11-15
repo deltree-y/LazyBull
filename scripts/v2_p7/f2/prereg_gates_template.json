@@ -1,0 +1,88 @@
+{
+  "E1_signal_layer": {
+    "alpha_component": 0.05,
+    "core_cells": 1,
+    "lambda": 1,
+    "pass_rule": "D > Q_{1−α/(格数·λ)}(D^0)",
+    "power": "δ_R·σ(D^0) 网格 {0.5,1,2,4}；不可检出且门不过 ⇒ 冻结而非 fail",
+    "quantile": 0.95,
+    "randomization": "组内伪事件：每批从候选池随机抽 k_b 只（k_b = 实际选中数）",
+    "resamples": 10000,
+    "seed": 42,
+    "statistic": "D = mean_i(r_i − r_bench,b)，未成交按现金 0 收益"
+  },
+  "E2_regime_reordering": {
+    "block_months": 3,
+    "pass_rule": "5% 分位 > 0；点估计 ≤0 ⇒ fail；区间跨 0 ⇒ frozen",
+    "resamples": 10000,
+    "seed": 42,
+    "statistic": "12 × 月度配对超额均值（年化 pp）"
+  },
+  "E4_vetoes": {
+    "E4_1": "每个冻结崩盘窗内 ΔMaxDD ≥ 0（combined − a_only，容差 0）",
+    "E4_2": "三口径相关上界 ≥ 0.3 即否决",
+    "E4_3": "实际成交容量：任一新仓成交额 < V=max(25000, 最低佣金/佣金率) 即否决",
+    "E4_4": "月资金利用率中位数 ≥50%（含零事件月）",
+    "E4_5": "坏消息侧越界或 PIT 可得性不可归因即否决",
+    "min_ticket_cny": 25000.0,
+    "utilization_median_min": 0.5
+  },
+  "Q1_absolute_sharpe": {
+    "L_B": "候选独立日收益 10 日循环块自举 95% 下界（rf=0.03、252 日年化）",
+    "aa_calibration": {
+      "failure": "超容差 ⇒ inconclusive_frozen（不得记 fail）",
+      "rule": "模拟器对真实选择的总收益与夏普必须与 P4 实际账户一致",
+      "tolerance_sharpe": 0.05,
+      "tolerance_total_return": 0.02
+    },
+    "block": 10,
+    "mde": {
+      "failure": "网格内无 ≥80% 检出率 ⇒ inconclusive_frozen",
+      "grid": [
+        0.25,
+        0.5,
+        1.0,
+        2.0
+      ],
+      "injection": "r'_t = r_t + δ_S·σ_d/√252",
+      "min_power": 0.8
+    },
+    "null_paths": 200,
+    "null_seed": 4242,
+    "null_stream": "组内伪事件 + 同一约束账户执行模拟器（整手/费用/槽位/顺延/公司行为）；每条路径跑完整时间轴",
+    "pass_rule": "L_B > Q_0.95(S^0)",
+    "resamples": 10000,
+    "seed": 42,
+    "threshold": "Q_0.95(S^0)"
+  },
+  "T2_combo_ruler": {
+    "bootstrap": "配对 10 日循环块，10000 次，seed 42",
+    "note": "门槛常量不变，读数由点估计升级为区间下界",
+    "pass_rule": "2.5% 分位按 ES3 既有规则（≥−1.0 过；−3.0~−1.0 需 ΔCAGR>0；<−3.0 失败）",
+    "statistic": "ΔMaxDD = MaxDD(combined) − MaxDD(a_only)（pp，改善为正）"
+  },
+  "full_gate": "E1 组件筛查 ∧ E2 制度重排 ∧ T2 组合级尺子 ∧ Q1 独立夏普 ∧ 三口径相关 ∧ 五条 E4 否决线（任一不可估计 ⇒ inconclusive_frozen）",
+  "legacy_thresholds": {
+    "ES1_min_pp": 1.0,
+    "ES2_max_pp": 2.0,
+    "ES3_hard_pp": 3.0,
+    "ES3_tolerance_pp": 1.0,
+    "note": "沿用 P3/P4 既有阈值，未新增任何收益/相关/容量口径"
+  },
+  "three_caliber_correlation": {
+    "block": {
+      "crash_segment": 5,
+      "full_sample": 10,
+      "rebalance_10d": 1
+    },
+    "definitions": [
+      "full_sample",
+      "rebalance_10d",
+      "crash_segment"
+    ],
+    "pass_rule": "三口径 97.5% 上界均 < 0.3；任一不可估计 ⇒ frozen",
+    "resamples": 10000,
+    "seed": 42,
+    "upper_bound": 0.3
+  }
+}
