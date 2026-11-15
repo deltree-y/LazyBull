@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """v2 P1 单元 1：假设台账全量 schema 校验（偿还 hypothesis_ledger_schema F3 §8 技术债）。
 
-对 `data/ledger/hypotheses.jsonl` 全量条目逐条校验（schema F3：JSON 可解析 /
-schema_version==1 / hypothesis_id 非空 / kind 合法 / payload 分类必填（含占位 prereg
-字段豁免）/ data_state 四键 / registered_at ISO 可解析 / id 唯一）。**只登记不改写**
-（append-only），本脚本不动台账文件本身。
+对 `data/ledger/hypotheses.jsonl` 全量条目逐条校验（schema F3 / F8：JSON 可解析 /
+schema_version==1 / hypothesis_id 非空 / kind 合法（含 F8 `p1_conclusion`）/ payload 分类必填
+（含占位 prereg 字段豁免）/ data_state 四键 / registered_at ISO 可解析 / id 唯一）。
+**只登记不改写**（append-only），本脚本不动台账文件本身。
 
 用法：
     python scripts/v2_p1/backfill_ledger_validate.py [--ledger PATH] [--out PATH]

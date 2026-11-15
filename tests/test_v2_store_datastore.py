@@ -462,6 +462,25 @@ class TestLedgerAppend:
         with pytest.raises(ValueError, match="kind 非法"):
             store.append_ledger_entry(_ledger_entry(kind="draft"))
 
+    def test_p1_conclusion_kind_allowed(self, tmp_path):
+        """F8：P-1 否决门结论条目可登记，且不动 α。"""
+        store = _make_store(tmp_path)
+        entry = _ledger_entry(hypothesis_id="H-P1R-cons-1", kind="p1_conclusion")
+        store.append_ledger_entry(entry)
+        with open(store.ledger_path, encoding="utf-8") as f:
+            record = json.loads(f.readline())
+        assert record["kind"] == "p1_conclusion"
+        assert record["payload"]["title"] == "测试假设"
+
+    def test_research_decision_kind_allowed(self, tmp_path):
+        """F9：资源决定条目可登记（与统计结论分层，不动 α）。"""
+        store = _make_store(tmp_path)
+        entry = _ledger_entry(hypothesis_id="H-P7-stop-1", kind="research_decision")
+        store.append_ledger_entry(entry)
+        with open(store.ledger_path, encoding="utf-8") as f:
+            record = json.loads(f.readline())
+        assert record["kind"] == "research_decision"
+
     def test_empty_hypothesis_id_raises(self, tmp_path):
         store = _make_store(tmp_path)
         with pytest.raises(ValueError, match="hypothesis_id 不能为空"):

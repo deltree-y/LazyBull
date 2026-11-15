@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """v2 台账 schema 校验测试（合成 jsonl，不触碰真实 data/ledger/）。
 
-覆盖：合法 prereg / conclusion、占位 prereg 豁免（F3 §8）、缺字段、坏 kind、
+覆盖：合法 prereg / conclusion / p1_conclusion / research_decision（F9）、
+占位 prereg 豁免（F3 §8）、缺字段、坏 kind、
 坏 schema_version、坏 verdict、空证据引用、data_state 缺键、坏 registered_at、
 JSON 解析失败、重复 hypothesis_id，以及 CLI 退出码与报告产物。
 """
@@ -57,6 +58,45 @@ def _conclusion_payload(**overrides):
     return payload
 
 
+def _p1_conclusion_payload(**overrides):
+    payload = {
+        "title": "P-1 否决门结论",
+        "target_hypothesis_id": "B0-composite-20261111",
+        "prereg_id": "p7-p1-redesign-20261113",
+        "prereg_sha256": "a" * 64,
+        "criteria_digest": "b" * 64,
+        "disposition": "p1_verdict",
+        "verdict": "negative",
+        "reason_code": "negative",
+        "reason": "最终包络上界 < 0 且负向功效 ≥80%",
+        "envelope": {"lo_bp": -30.0, "hi_bp": -5.0, "unit": "bp/event"},
+        "power": {"negative_detection": 0.85, "theta_bp": -10.0, "samples": 200},
+        "calibration": {"passed": True, "coverage": 0.92, "false_trigger_rate": 0.03},
+        "alpha_consumed": False,
+        "evidence_refs": ["data/frozen_reference/v2_p7/p7_p1r_20261113_r1/verdict.json"],
+        "supersedes": [],
+        "notes": "只许否决，不动 α",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _research_decision_payload(**overrides):
+    payload = {
+        "title": "测试资源决定",
+        "decision": "stop_new_investment",
+        "target_hypothesis_id": "B0-composite-20261111",
+        "scope": "仅当前定义，不外推",
+        "reason": "证据不足，研究优先级下调",
+        "evidence_refs": ["docs/reports/x.md"],
+        "reopen_condition": "新信息或实质不同候选，另立 prereg",
+        "alpha_consumed": False,
+        "notes": "统计状态不变，非经济失败",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _entry(hypothesis_id, kind, payload, **overrides):
     entry = {
         "schema_version": 1,
@@ -93,6 +133,33 @@ class TestValidEntries:
         path = _write_ledger(tmp_path, [_entry("H-2", "conclusion", _conclusion_payload())])
         report = validate_ledger(path)
         assert report["failed"] == 0
+
+    def test_p1_conclusion_pass(self, tmp_path):
+        path = _write_ledger(
+            tmp_path, [_entry("H-P1R-cons-1", "p1_conclusion", _p1_conclusion_payload())]
+        )
+        report = validate_ledger(path)
+        assert report["failed"] == 0, report["entries"][0]["reasons"]
+
+    def test_p1_conclusion_superseded_not_estimable_pass(self, tmp_path):
+        """F8：旧条目改记 not_estimable 用追加条目表达，verdict 为 null。"""
+        payload = _p1_conclusion_payload(
+            disposition="superseded_not_estimable",
+            verdict=None,
+            reason_code="superseded_not_estimable",
+        )
+        path = _write_ledger(tmp_path, [_entry("H-P1R-old", "p1_conclusion", payload)])
+        report = validate_ledger(path)
+        assert report["failed"] == 0, report["entries"][0]["reasons"]
+
+    def test_research_decision_pass(self, tmp_path):
+        """F9：资源决定与统计结论分层；停投条目不动 α、不改 verdict。"""
+        path = _write_ledger(
+            tmp_path,
+            [_entry("H-P7-stop-1", "research_decision", _research_decision_payload())],
+        )
+        report = validate_ledger(path)
+        assert report["failed"] == 0, report["entries"][0]["reasons"]
 
     def test_placeholder_prereg_exemption(self, tmp_path):
         """F3 §8：占位 prereg 允许 arms/metrics/noise_band/stop_rule 空值 + alpha_budget null。"""
@@ -175,6 +242,59 @@ class TestInvalidEntries:
         report = self._report(
             tmp_path, [_entry("H-2", "conclusion", _conclusion_payload(verdict="maybe"))]
         )
+        assert _by_line(report, 1)["status"] == "fail"
+
+    def test_p1_conclusion_alpha_consumed_fails(self, tmp_path):
+        payload = _p1_conclusion_payload(alpha_consumed=True)
+        report = self._report(tmp_path, [_entry("H-P1R-cons-1", "p1_conclusion", payload)])
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("alpha_consumed" in r for r in entry["reasons"])
+
+    def test_p1_conclusion_bad_verdict_fails(self, tmp_path):
+        payload = _p1_conclusion_payload(verdict="pass")
+        report = self._report(tmp_path, [_entry("H-P1R-cons-1", "p1_conclusion", payload)])
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("verdict 非法" in r for r in entry["reasons"])
+
+    def test_p1_conclusion_superseded_with_verdict_fails(self, tmp_path):
+        payload = _p1_conclusion_payload(
+            disposition="superseded_not_estimable",
+            reason_code="superseded_not_estimable",
+        )
+        report = self._report(tmp_path, [_entry("H-P1R-old", "p1_conclusion", payload)])
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("verdict 必须为 null" in r for r in entry["reasons"])
+
+    def test_p1_conclusion_empty_evidence_fails(self, tmp_path):
+        payload = _p1_conclusion_payload(evidence_refs=[])
+        report = self._report(tmp_path, [_entry("H-P1R-cons-1", "p1_conclusion", payload)])
+        assert _by_line(report, 1)["status"] == "fail"
+
+    def test_research_decision_bad_decision_fails(self, tmp_path):
+        payload = _research_decision_payload(decision="pause_thinking")
+        report = self._report(tmp_path, [_entry("H-P7-stop-1", "research_decision", payload)])
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("decision 非法" in r for r in entry["reasons"])
+
+    def test_research_decision_alpha_consumed_fails(self, tmp_path):
+        payload = _research_decision_payload(alpha_consumed=True)
+        report = self._report(tmp_path, [_entry("H-P7-stop-1", "research_decision", payload)])
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("alpha_consumed" in r for r in entry["reasons"])
+
+    def test_research_decision_empty_evidence_fails(self, tmp_path):
+        payload = _research_decision_payload(evidence_refs=[])
+        report = self._report(tmp_path, [_entry("H-P7-stop-1", "research_decision", payload)])
+        assert _by_line(report, 1)["status"] == "fail"
+
+    def test_research_decision_empty_reopen_condition_fails(self, tmp_path):
+        payload = _research_decision_payload(reopen_condition="")
+        report = self._report(tmp_path, [_entry("H-P7-stop-1", "research_decision", payload)])
         assert _by_line(report, 1)["status"] == "fail"
 
     def test_conclusion_empty_evidence_fails(self, tmp_path):

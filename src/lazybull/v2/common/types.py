@@ -48,6 +48,7 @@ def _freeze_plain_mapping(value: Any) -> Any:
         return tuple(_freeze_plain_mapping(item) for item in plain)
     return plain
 
+
 __all__ = [
     "TradeDate",
     "TSCode",
@@ -430,7 +431,6 @@ class ReplayContractError(RuntimeError):
     """
 
 
-
 @dataclass(frozen=True, slots=True)
 class DataState:
     """数据态指纹（对账基线；代码态 + 数据态双指纹）。"""
@@ -470,7 +470,7 @@ class LedgerEntry:
     """假设台账条目（append-only；schema 是 P0 冻结交付物，字段清单 P0 定稿）。"""
 
     hypothesis_id: str
-    kind: str  # "prereg" / "conclusion"
+    kind: str  # "prereg" / "conclusion" / "p1_conclusion" / "research_decision"
     payload: Mapping[str, Any]
     data_state: DataState
     registered_at: str  # ISO 时间戳

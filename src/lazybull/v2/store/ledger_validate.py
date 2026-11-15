@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """假设台账全量 schema 校验（F3 §8 技术债偿还：DataStore 落地后对全量条目跑 schema 校验回补）。
 
-契约依据 `docs/contracts/hypothesis_ledger_schema.md`（F3）：
-- §3.1 公共字段 / §3.2 prereg 必填 / §3.3 conclusion 必填；
+契约依据 `docs/contracts/hypothesis_ledger_schema.md`（F3 / F8 / F9）：
+- §3.1 公共字段 / §3.2 prereg 必填 / §3.3 conclusion 必填 / §3.4 p1_conclusion 必填 /
+  §3.5 research_decision 必填（F9：资源决定与统计结论分层）；
 - §8 + F3：占位 prereg（``retrospective_placeholder=true``）豁免
   ``arms / metrics / noise_band / stop_rule`` 空值；回填条目 ``alpha_budget`` 允许 null；
 - F3 ②-07：结论类条目不带 ``vehicle / tags``（书实差异登记，分类字段不重复校验）；
@@ -51,8 +52,54 @@ CONCLUSION_REQUIRED = (
     "notes",
 )
 
-VALID_KINDS = frozenset({"prereg", "conclusion"})
+#: p1_conclusion payload 必填字段（schema §3.4，F8）
+P1_CONCLUSION_REQUIRED = (
+    "title",
+    "target_hypothesis_id",
+    "prereg_id",
+    "prereg_sha256",
+    "criteria_digest",
+    "disposition",
+    "verdict",
+    "reason_code",
+    "reason",
+    "envelope",
+    "power",
+    "calibration",
+    "alpha_consumed",
+    "evidence_refs",
+    "notes",
+)
+
+#: research_decision payload 必填字段（schema §3.5，F9：资源决定条目）
+RESEARCH_DECISION_REQUIRED = (
+    "title",
+    "decision",
+    "target_hypothesis_id",
+    "scope",
+    "reason",
+    "evidence_refs",
+    "reopen_condition",
+    "alpha_consumed",
+    "notes",
+)
+
+VALID_KINDS = frozenset({"prereg", "conclusion", "p1_conclusion", "research_decision"})
+VALID_RESEARCH_DECISIONS = frozenset({"stop_new_investment", "resume_investment"})
 VALID_VERDICTS = frozenset({"pass", "fail", "terminated", "inconclusive", "not_adopted"})
+VALID_P1_DISPOSITIONS = frozenset({"p1_verdict", "superseded_not_estimable"})
+VALID_P1_VERDICTS = frozenset({"continue", "continue_limited", "negative"})
+VALID_P1_REASON_CODES = frozenset(
+    {
+        "calibration_not_passed",
+        "method_sensitive",
+        "unbounded",
+        "envelope_crosses_zero",
+        "negative",
+        "hard_fail",
+        "superseded_not_estimable",
+    }
+)
 VALID_VEHICLES = frozenset({"sleeve", "factor_family", "rule", "policy", "data_source"})
 DATA_STATE_KEYS = ("raw_partitions", "features_partition_max", "config_digest", "code_digest")
 
@@ -134,6 +181,99 @@ def _check_conclusion_payload(payload: dict[str, Any], reasons: list[str]) -> No
         reasons.append("conclusion title 为空")
 
 
+def _check_p1_identity_fields(payload: dict[str, Any], reasons: list[str]) -> None:
+    """p1_conclusion 身份与处置字段：挂接目标 / 处置枚举 / 三语汇 / 理由码 / α。"""
+    target = payload.get("target_hypothesis_id")
+    if "target_hypothesis_id" in payload and (not isinstance(target, str) or not target.strip()):
+        reasons.append(f"p1_conclusion target_hypothesis_id 为空或类型非法: {target!r}")
+
+    disposition = payload.get("disposition")
+    if "disposition" in payload and disposition not in VALID_P1_DISPOSITIONS:
+        reasons.append(
+            f"p1_conclusion disposition 非法: {disposition!r}"
+            f"（合法值 {sorted(VALID_P1_DISPOSITIONS)}）"
+        )
+
+    verdict = payload.get("verdict")
+    if disposition == "superseded_not_estimable":
+        if verdict is not None:
+            reasons.append("p1_conclusion superseded_not_estimable 的 verdict 必须为 null")
+    elif "verdict" in payload and verdict not in VALID_P1_VERDICTS:
+        reasons.append(
+            f"p1_conclusion verdict 非法: {verdict!r}（合法值 {sorted(VALID_P1_VERDICTS)}）"
+        )
+
+    reason_code = payload.get("reason_code")
+    if "reason_code" in payload and reason_code not in VALID_P1_REASON_CODES:
+        reasons.append(
+            f"p1_conclusion reason_code 非法: {reason_code!r}"
+            f"（合法值 {sorted(VALID_P1_REASON_CODES)}）"
+        )
+
+    if "alpha_consumed" in payload and payload["alpha_consumed"] is not False:
+        reasons.append("p1_conclusion alpha_consumed 必须为 false（只许否决不消费 α）")
+
+
+def _check_p1_evidence_fields(payload: dict[str, Any], reasons: list[str]) -> None:
+    """p1_conclusion 读数与证据字段：包络 / 功效 / 校准 / 证据引用 / 文本。"""
+    envelope = payload.get("envelope")
+    if "envelope" in payload:
+        if not isinstance(envelope, dict) or not {"lo_bp", "hi_bp", "unit"} <= set(envelope):
+            reasons.append("p1_conclusion envelope 须为含 lo_bp/hi_bp/unit 的 object")
+
+    for key in ("power", "calibration"):
+        if key in payload and not isinstance(payload[key], dict):
+            reasons.append(f"p1_conclusion {key} 须为 object")
+
+    refs = payload.get("evidence_refs")
+    if "evidence_refs" in payload and (not isinstance(refs, list) or not refs):
+        reasons.append("p1_conclusion evidence_refs 须为非空 list")
+
+    for key in ("title", "reason", "notes"):
+        if key in payload and _is_empty(payload[key]):
+            reasons.append(f"p1_conclusion {key} 为空（须登记理由 / 代价 / 风险）")
+
+
+def _check_p1_conclusion_payload(payload: dict[str, Any], reasons: list[str]) -> None:
+    """p1_conclusion 必填 + 身份字段 + 证据字段（§3.4，F8）。"""
+    missing = [k for k in P1_CONCLUSION_REQUIRED if k not in payload]
+    if missing:
+        reasons.append(f"p1_conclusion payload 缺字段: {missing}")
+    _check_p1_identity_fields(payload, reasons)
+    _check_p1_evidence_fields(payload, reasons)
+
+
+def _check_research_decision_payload(payload: dict[str, Any], reasons: list[str]) -> None:
+    """research_decision 必填 + 决定枚举 + 不消费 α + 证据/重开条件非空（§3.5，F9）。"""
+    missing = [k for k in RESEARCH_DECISION_REQUIRED if k not in payload]
+    if missing:
+        reasons.append(f"research_decision payload 缺字段: {missing}")
+
+    decision = payload.get("decision")
+    if "decision" in payload and (
+        not isinstance(decision, str) or decision not in VALID_RESEARCH_DECISIONS
+    ):
+        reasons.append(
+            f"research_decision decision 非法: {decision!r}"
+            f"（合法值 {sorted(VALID_RESEARCH_DECISIONS)}）"
+        )
+
+    target = payload.get("target_hypothesis_id")
+    if "target_hypothesis_id" in payload and (not isinstance(target, str) or not target.strip()):
+        reasons.append(f"research_decision target_hypothesis_id 为空或类型非法: {target!r}")
+
+    if "alpha_consumed" in payload and payload["alpha_consumed"] is not False:
+        reasons.append("research_decision alpha_consumed 必须为 false（资源决定不消费 α）")
+
+    refs = payload.get("evidence_refs")
+    if "evidence_refs" in payload and (not isinstance(refs, list) or not refs):
+        reasons.append("research_decision evidence_refs 须为非空 list")
+
+    for key in ("title", "scope", "reason", "reopen_condition", "notes"):
+        if key in payload and _is_empty(payload[key]):
+            reasons.append(f"research_decision {key} 为空（须登记范围 / 理由 / 重开条件 / 边界）")
+
+
 def _check_data_state(obj: dict[str, Any], reasons: list[str]) -> None:
     """data_state 四键齐全。"""
     data_state = obj.get("data_state")
@@ -164,13 +304,26 @@ def validate_entry(obj: dict[str, Any]) -> list[str]:
     payload = obj.get("payload")
     if not isinstance(payload, dict):
         reasons.append(f"payload 缺失或类型非法: {type(payload).__name__}")
-    elif obj.get("kind") == "prereg":
-        _check_prereg_payload(payload, reasons)
-    elif obj.get("kind") == "conclusion":
-        _check_conclusion_payload(payload, reasons)
+    else:
+        _check_payload_by_kind(obj.get("kind"), payload, reasons)
     _check_data_state(obj, reasons)
     _check_registered_at(obj, reasons)
     return reasons
+
+
+def _check_payload_by_kind(
+    kind: Any, payload: dict[str, Any], reasons: list[str]
+) -> None:
+    """按 kind 分派 payload 校验（嵌套深度控制在 2 层内）。"""
+    checks = {
+        "prereg": _check_prereg_payload,
+        "conclusion": _check_conclusion_payload,
+        "p1_conclusion": _check_p1_conclusion_payload,
+        "research_decision": _check_research_decision_payload,
+    }
+    check = checks.get(kind) if isinstance(kind, str) else None
+    if check is not None:
+        check(payload, reasons)
 
 
 def validate_ledger(ledger_path: Path | str) -> dict[str, Any]:
@@ -193,7 +346,7 @@ def validate_ledger(ledger_path: Path | str) -> dict[str, Any]:
     return {
         "checked_at": datetime.now().isoformat(timespec="seconds"),
         "ledger_path": str(path),
-        "schema_ref": "docs/contracts/hypothesis_ledger_schema.md（F3，含 §8 占位豁免）",
+        "schema_ref": "docs/contracts/hypothesis_ledger_schema.md（F3 / F8，含 §8 占位豁免）",
         "total": len(entries),
         "passed": len(entries) - failed,
         "failed": failed,

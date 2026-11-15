@@ -41,7 +41,7 @@ from src.lazybull.v2.store.write_lock import _WriteLock
 __all__ = ["PanelDataStore", "StoreReadReceipt"]
 
 _KEY_COLUMNS = ("trade_date", "ts_code")
-_LEDGER_KINDS = frozenset({"prereg", "conclusion"})
+_LEDGER_KINDS = frozenset({"prereg", "conclusion", "p1_conclusion", "research_decision"})
 _MATURITY_VALUES = frozenset({"forming", "sealed"})
 
 
