@@ -1143,6 +1143,150 @@ python scripts/v2_p7/t6/verify.py --run-root data/paper_shadow/p7_testbed/<run_i
 **边界：`verdict` 只对本窗口、本机械与费用口径成立；不构成 P7 出口、B 区转正、生产多袖、
 前向/日历验证或实盘可用结论。** 详见 `docs/reports/p7_t6_closure_20261113.md` 与 `docs/review/v2_p7_t6/`。
 
+**共同风险与换手成本首关（研究专用）：** 三个入口只读既有资料，输出作用空间、
+数据覆盖与费用情景，不构造候选收益，不改变生产持仓。历史纯A模拟账和P7的70万元
+目标层单独汇总；样本内波动下降不是最大回撤改善，费用率不是CAGR增益。
+先阅读[计算规格](docs/experiments/p7_improvement_prescreen_20261116.md)和
+[到期Top20作用面补充规格](docs/experiments/p7_buffer_scope_prescreen_20261116.md)，结果解释见
+[首关报告](docs/reports/p7_improvement_prescreen_20261116.md)。每次指定新的输出目录，禁止覆盖历史证据：
+
+```bash
+python scripts/v2_p7/improvement_prescreen_risk.py \
+  --spec docs/experiments/p7_improvement_prescreen_20261116.md \
+  --output data/reports/p7_improvement_prescreen_<NEW_RUN_ID>/risk
+python scripts/v2_p7/improvement_prescreen_cost.py \
+  --spec docs/experiments/p7_improvement_prescreen_20261116.md \
+  --output data/reports/p7_improvement_prescreen_<NEW_RUN_ID>/cost
+python scripts/v2_p7/improvement_buffer_scope.py \
+  --spec docs/experiments/p7_buffer_scope_prescreen_20261116.md \
+  --output data/reports/p7_improvement_prescreen_<NEW_RUN_ID>/buffer_scope
+```
+
+Top20补充入口按到期前一交易日的当前模型查询，跨折不沿用原模型；缺排名单列未知，
+原计划预算只计一次，不把命中占比解释成费用节省。工具默认不采购、不联网、不训练。
+首次资料获取和完整账户对照不包含在首关内，
+涉及完整策略或生产变更时仍需另行冻结规格和预算。
+
+**到期Top20固定续持路径对照（研究专用）：**
+在[预登记](docs/experiments/p7_buffer_path_prereg_20261116.md)冻结后，生成完整合法排名共享缓存，
+再运行100万/200万元纯A研究对照、续持候选与机械A/A。现金、费用、应收及送转均入账；
+买入阻断当日取消，没有旧生产候补/补齐路径，不能称为生产逐笔等价。当前入口只接受该规格SHA。
+
+```python
+from pathlib import Path
+import hashlib
+from scripts.v2_p7.buffer_path_data import prepare_inputs
+
+spec = Path("docs/experiments/p7_buffer_path_prereg_20261116.md")
+prepare_inputs(
+    Path.cwd(),
+    Path("data/reports/p7_buffer_path_<NEW_RUN_ID>/input_cache"),
+    spec_sha256=hashlib.sha256(spec.read_bytes()).hexdigest(),
+)
+```
+
+```bash
+python scripts/v2_p7/run_buffer_path.py \
+  --spec docs/experiments/p7_buffer_path_prereg_20261116.md \
+  --input-cache data/reports/p7_buffer_path_<NEW_RUN_ID>/input_cache \
+  --output data/reports/p7_buffer_path_<NEW_RUN_ID>/run_r1
+```
+
+缓存与运行目录均拒绝覆盖；缓存重用仍核验模型、行情、特征及代码身份。长任务后台运行并把日志
+重定向至`logs/`。固定规格、方法快照、逐日/逐笔台账、覆盖/末端义务和耗时随证据保存；
+读数解释见[路径对照报告](docs/reports/p7_buffer_path_result_20261116.md)。
+
+**固定续持的原生执行复核（阶段研究）：**
+新入口先比较关闭续持的研究子类与原生引擎，再共同接入公司行为经济账，
+运行历史窗口和20260203–20261029固定176日窗口。新窗口为本候选未用的历史数据，
+不是前向验证；纸面live的T0固化股数与状态恢复另需接线验证。
+
+```bash
+python scripts/v2_p7/run_buffer_native.py \
+  --spec docs/experiments/p7_buffer_native_prereg_20261116.md \
+  --output data/reports/p7_buffer_native_<NEW_RUN_ID>/run_r1
+```
+
+输出目录必须不存在。入口验证旧完整排名缓存的内容和唯一已登记注释血缘，
+新增窗口经官方panel/freshness路径推理。所有运行都保留源身份、账户守恒和机械门；
+原生raw机械净值不用于经济收益结论。当前纸面的行业限额组仅作描述性附表，
+未证明静态行业表的历史时点可知性。规则及预算见
+[原生复验预登记](docs/experiments/p7_buffer_native_prereg_20261116.md)。
+公司行为账包含已知上市日的送转锁股；实际卖单超出可卖数量时停止该组，
+不自动缩量或改卖出日期。某组公司行为阻断时，保留失败现场并继续其他已登记组。
+完整结果、连续回放的适用边界和产物索引见
+[原生执行复验报告](docs/reports/p7_buffer_native_result_20261116.md)。
+已发布的`input_cache_r1`保留原方法字节身份；收口后数据适配器仅补充阶段豁免注释，
+AST与运行快照相同，但严格字节身份校验仍会拒绝直接复用旧缓存。复现时按上例创建新缓存，
+不要覆盖旧缓存或手改其manifest。
+
+快递经营月报研究使用固定四股、量价同比双正、初始20%资金的单规则，
+按公告日期保守延迟，并与现金及四股等权对照。100万/200万元分别运行实际现金账户，
+独立处理交易成本、涨跌停、分红应收和送转股份。它是经济预筛，不切换生产或宣称P7准入。
+
+```bash
+python scripts/v2_p7/run_operating_monthly.py --run-id run_r1
+```
+
+入口需要已完成且有身份记录的公开月报数据及A历史排名缓存；新run目录必须不存在。
+规则与预算见[经营月报预登记](docs/experiments/p7_operating_monthly_economic_prereg_20261116.md)。
+`unknown_on`和额外分红扣减仅作预先固定的敏感性诊断；用户未设置收益/回撤硬门槛。
+公告取数解析需可导入`pypdf`（本轮使用隔离安装的7.1.0）；已发布记录的账户回放无需重新解析PDF。
+送股未上市时A的整仓退出沿原生待执行队列顺延，规则见
+[锁股执行补充](docs/experiments/p7_operating_monthly_execution_amendment_20261116.md)。
+顺丰2024年中期与特别分红的组件/合计重复，仅凭原始实施公告在独立全域研究副本中消歧，
+不改生产raw，依据见[分红输入修订](docs/experiments/p7_operating_monthly_dividend_resolution_20261116.md)。
+完整账户、现金/行业对照、费用和历史不确定性读数见
+[经营月报经济预筛报告](docs/reports/p7_operating_monthly_economic_result_20261116.md)。
+
+涤纶加工价差研究使用固定两股和月初信号，比较POY扣除PTA/MEG原料代理成本后的价差
+与此前三个月均值。初始20%B独立资金分两个槽，未入选留现金；旧快递入口仍固定四槽。
+规则、信息时间、现金/等权对照及压力场景见
+[涤纶预登记](docs/experiments/p7_polyester_economic_prereg_20261116.md)。
+
+```bash
+python scripts/v2_p7/run_polyester.py --run-id run_r1 --source-manifest-sha256 <已冻结的SHA256>
+```
+
+入口要求已冻结的`input_prices/records.json`及来源manifest；读取报价身份后才加载股票行情。
+A继承已有冻结真实账户，B沿既有现金、股份、送转和交易成本执行，产物只写新的研究run目录。
+跨源或报价缺失月份单列，不通过插值补信号；原料价差仅为行业代理，不代表集团实际毛利。
+`source_strict`只使用明确规格与日期原件，排除南华规格推断和TBS发布时间假设段；
+与信息延迟5日、未知输入和红利扣减场景一起输出。来源边界见
+[报价来源补充](docs/experiments/p7_polyester_source_selection_20261116.md)，账户结果、数据缺口与
+实际投入见[涤纶经济预筛报告](docs/reports/p7_polyester_economic_result_20261116.md)。
+该命令不切换生产，也不构成P7正式准入。
+
+报价时点后续核查按[固定研究范围](docs/experiments/p7_polyester_timing_scope_20261116.md)执行。
+月度时点诊断只读取已封存的主/延迟5日信号和账户，按报价选择与实际资产变动解释差异；
+累计金额分解不能解释为删除某些月份后的策略收益。准入前置仓位读数按前日收盘资产计算，
+`market_value`的分母须为同币种`equity`，不能使用归一化`nav`。
+使用新输出目录复算诊断，已有目录拒绝覆盖：
+
+```bash
+python scripts/v2_p7/polyester_timing_diagnostic.py --output data/reports/p7_polyester_timing_20261116/delay_attribution_recheck
+```
+
+查证边界和实际路径归因见[时点核查报告](docs/reports/p7_polyester_timing_result_20261116.md)；
+付费数据评估使用[样例验收规格](docs/experiments/p7_polyester_data_acceptance_20261116.md)。
+
+生猪饲料比研究使用农业农村部公开周报，将全国生猪售价与育肥猪配合饲料价格同页配对。
+按月比较最近月比价与前三月均值，固定牧原、温氏两股和初始20%独立资金；
+比价仅为行业经营条件代理，温氏还含养鸡业务，两家公司自产饲料也不同于全国商品饲料成本。
+规则、时钟、对照与费用见[生猪预登记](docs/experiments/p7_hog_economic_prereg_20261116.md)，
+资料完整性、经济读数与适用限制见[生猪研究报告](docs/reports/p7_hog_economic_result_20261116.md)。
+
+```bash
+# 只获取公开周报，输出必须为新的独立资料子目录；不读取证券行情
+python scripts/v2_p7/build_hog_inputs.py --output data/reports/p7_hog_feasibility_20261116/collect_new
+# 原件和输入另行核验冻结后，按明确身份重放；不是下载后自动采纳
+python scripts/v2_p7/run_hog.py --run-id run_recheck --source-manifest-sha256 <已冻结的SHA256>
+```
+
+账户入口先核验预登记与输入封包，再读取实际行情；未知、延迟和现金红利压力与主规则同时运行。
+原始周报网站没有提供服务可用性承诺，目录或格式变化须作为缺口处理；数据可取不等于策略有效。
+研究不改变生产配置，也不构成P7正式准入或前向验证。
+
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
 未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用
