@@ -1,0 +1,203 @@
+"""20 日端点收益标签 + PIT 一级行业中性化 + 八态。
+
+标签 = `open_adj(T+21) / close_adj(T+1) - 1`（协议 §7.1），不复权净值、不扣成本。
+行业基准只在**基础合格域**上取中位数（不是分析师覆盖股票、不是最终 Top6），
+每个行业至少 5 只有效原始标签；不足即 `industry_label_insufficient`。
+
+禁止顺延端点、禁止用估值 carry 冒充开盘价、禁止把未知退市金额填成 -100%。
+
+复杂度豁免：阶段专用研究工具，不入生产链路（CLAUDE §7.5）。
+"""
+
+from __future__ import annotations
+
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+from scripts.v2_p7.analyst_diffusion_ml import spec
+
+STATUSES: tuple[str, ...] = (
+    "valid",
+    "right_censored",
+    "entry_missing",
+    "exit_suspended",
+    "exit_delisted",
+    "industry_label_insufficient",
+    "source_gap",
+    "unresolved",
+)
+STATUS_CODE = {name: index for index, name in enumerate(STATUSES)}
+
+
+def _last_observed(close: pd.DataFrame) -> np.ndarray:
+    """每只股票最后一个有效收盘位置（无有效价格记 -1）。"""
+    valid = close.notna().to_numpy()
+    total = valid.shape[0]
+    positions = np.arange(total).reshape(-1, 1)
+    masked = np.where(valid, positions, -1)
+    return masked.max(axis=0)
+
+
+def build_labels(
+    prices: dict[str, pd.DataFrame], calendar: list[str]
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """返回 (原始标签宽表, 状态与执行阻塞宽表)。索引=信号日，列=股票。"""
+    close = prices["close_adj"]
+    open_px = prices["open_adj"]
+    entry_offset = int(spec.LABEL["entry_offset"])
+    exit_offset = int(spec.LABEL["exit_offset"])
+    total = len(calendar)
+
+    entry_close = close.shift(-entry_offset)
+    exit_open = open_px.shift(-exit_offset)
+    entry_ok = entry_close.notna() & (entry_close > 0)
+    exit_ok = exit_open.notna() & (exit_open > 0)
+    valid = entry_ok & exit_ok
+    value = (exit_open / entry_close.where(entry_ok) - 1.0).where(valid)
+
+    suspended = prices["is_suspended"].astype(float)
+    limit_down = prices["is_limit_down"].astype(float)
+    limit_up = prices["is_limit_up"].astype(float)
+    tradable = prices["tradable"].astype(float)
+    exit_suspended = suspended.shift(-exit_offset) == 1.0
+    entry_blocked = (limit_up.shift(-entry_offset) == 1.0) | (
+        tradable.shift(-entry_offset) != 1.0
+    )
+    exit_blocked = (limit_down.shift(-exit_offset) == 1.0) | exit_suspended
+
+    last_obs = _last_observed(close)
+    rows = np.arange(total).reshape(-1, 1)
+    exit_pos = rows + exit_offset
+    censored = exit_pos >= total
+    delisted = (exit_pos > last_obs.reshape(1, -1)) & (last_obs.reshape(1, -1) >= 0)
+
+    status = np.full(value.shape, STATUS_CODE["unresolved"], dtype=np.uint8)
+    status = np.where(~exit_ok.to_numpy(), STATUS_CODE["source_gap"], status)
+    status = np.where(delisted, STATUS_CODE["exit_delisted"], status)
+    status = np.where(exit_suspended.to_numpy(), STATUS_CODE["exit_suspended"], status)
+    status = np.where(~entry_ok.to_numpy(), STATUS_CODE["entry_missing"], status)
+    status = np.where(censored, STATUS_CODE["right_censored"], status)
+    status = np.where(valid.to_numpy(), STATUS_CODE["valid"], status)
+
+    book = {
+        "label_status": pd.DataFrame(status, index=value.index, columns=value.columns),
+        "entry_execution_blocked": pd.DataFrame(
+            entry_blocked.to_numpy(), index=value.index, columns=value.columns
+        ),
+        "exit_execution_blocked": pd.DataFrame(
+            exit_blocked.to_numpy(), index=value.index, columns=value.columns
+        ),
+        "exit_suspended": pd.DataFrame(
+            exit_suspended.to_numpy(), index=value.index, columns=value.columns
+        ),
+        "exit_delisted": pd.DataFrame(delisted, index=value.index, columns=value.columns),
+    }
+    return value, book
+
+
+def industry_neutralize(
+    raw: pd.DataFrame,
+    status: pd.DataFrame,
+    base_mask: np.ndarray,
+    bucket_matrix: np.ndarray,
+    *,
+    min_members: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """在基础合格域上按 PIT 一级行业取中位数并做中性化。
+
+    Returns:
+        (中性标签矩阵, 行业中位数矩阵)，均为 NaN 表示不可算。
+    """
+    threshold = int(min_members or spec.LABEL["min_industry_members"])
+    values = raw.to_numpy(dtype=float)
+    base = np.asarray(base_mask, dtype=bool)
+    valid = status.to_numpy() == STATUS_CODE["valid"]
+    usable = base & valid
+    neutral = np.full(values.shape, np.nan, dtype=np.float64)
+    median_matrix = np.full(values.shape, np.nan, dtype=np.float64)
+
+    for i in range(values.shape[0]):
+        row_values = np.where(usable[i], values[i], np.nan)
+        buckets = bucket_matrix[i]
+        keep = np.isfinite(row_values)
+        if not keep.any():
+            continue
+        buckets_keep = buckets[keep]
+        frame = pd.DataFrame({"bucket": buckets_keep, "value": row_values[keep]})
+        grouped = frame.groupby("bucket")["value"]
+        medians = grouped.median()
+        counts = grouped.size()
+        accepted = medians[counts >= threshold]
+        if len(accepted) == 0:
+            continue
+        lookup = accepted.to_dict()
+        mapped = np.array([lookup.get(int(bucket), np.nan) for bucket in buckets], dtype=float)
+        median_matrix[i] = mapped
+        neutral[i] = values[i] - mapped
+
+    return neutral, median_matrix
+
+
+def extract_label_frame(
+    raw: pd.DataFrame,
+    status: pd.DataFrame,
+    neutral: np.ndarray,
+    median_matrix: np.ndarray,
+    mask: np.ndarray,
+    dates: list[str],
+    codes: list[str],
+    calendar: list[str],
+) -> pd.DataFrame:
+    """抽取目标域行的标签、行业中位数与状态。"""
+    rows, cols = np.nonzero(mask)
+    out = pd.DataFrame(
+        {
+            "trade_date": np.asarray(dates, dtype=object)[rows],
+            "ts_code": np.asarray(codes, dtype=object)[cols],
+        }
+    )
+    raw_values = raw.to_numpy(dtype=np.float64)
+    status_values = status.to_numpy().astype(np.uint8)
+    out["y_ad_raw20"] = raw_values[rows, cols]
+    out["industry_median"] = median_matrix[rows, cols]
+    out["y_ad_neu20"] = neutral[rows, cols]
+
+    codes_status = status_values[rows, cols].copy()
+    # 原始标签有效但行业基准不可得 -> industry_label_insufficient
+    needs_industry = codes_status == STATUS_CODE["valid"]
+    insufficient = needs_industry & ~np.isfinite(median_matrix[rows, cols])
+    codes_status[insufficient] = STATUS_CODE["industry_label_insufficient"]
+    out["label_status"] = np.asarray(STATUSES, dtype=object)[codes_status]
+
+    position = {day: i for i, day in enumerate(calendar)}
+    entry_offset = int(spec.LABEL["entry_offset"])
+    exit_offset = int(spec.LABEL["exit_offset"])
+    last_index = len(calendar) - 1
+
+    def _planned(day: str, offset: int) -> str:
+        """计划日：落在日历内即真实日期，超出则显式记未知（空串）。"""
+        index = position[day] + offset
+        return calendar[index] if index <= last_index else ""
+
+    out["entry_date"] = [_planned(str(d), entry_offset) for d in out["trade_date"]]
+    out["label_end_date"] = [_planned(str(d), exit_offset) for d in out["trade_date"]]
+    return out
+
+
+def maturity_frame(status: pd.DataFrame, calendar: Sequence[str]) -> pd.DataFrame:
+    """逐日标签状态汇总（成熟比例与缺口原因）。"""
+    values = status.to_numpy().astype(np.uint8)
+    total = values.shape[1]
+    rows = []
+    for i, day in enumerate(calendar):
+        counts = np.bincount(values[i], minlength=len(STATUSES))
+        rows.append(
+            {
+                "trade_date": day,
+                "cells": int(total),
+                **{name: int(counts[j]) for j, name in enumerate(STATUSES)},
+            }
+        )
+    return pd.DataFrame(rows)

@@ -1091,6 +1091,36 @@ python scripts/v2_p7/t25/run_t25.py --run-id <NEW_RUN_ID> \
 详见 `docs/reports/p7_t25_closure_20261112.md`（收口）、`p7_t25_result_20261111.md`（结果）与
 `docs/review/v2_p7_t25/`（四轮评审与作者回应）。
 
+**v2 P7 · AD-ML-20-v1 分析师预期扩散 ML 袖（经济预筛，独立研究根）：** 只读 `report_rc`
+重建「同分析师同财年 EPS 修正 + 分析师间扩散」的 15 列特征，训练 16 个半年刷新 XGBoost 回归器，
+在原生真实现金账户中以 6 槽 / 2 批 / 20 日持有回放 B 袖（初始 20% 独立资金），
+与 A100、A80+现金、简单扩散对照并列比较。规格唯一来源
+`docs/experiments/p7_analyst_diffusion_ml_protocol_20261118.md`。
+
+```bash
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage readiness --run-id R0
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage dataset --readiness-run R0 --run-id R1
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage model_probe --readiness-run R0 --dataset-run R1 --run-id P0
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage train_predict --readiness-run R0 --dataset-run R1 --run-id R2
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage replay --readiness-run R0 --dataset-run R1 --predictions-run R2 --run-id R3
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage diagnostics --readiness-run R0 --dataset-run R1 --predictions-run R2 --replay-run R3 --run-id R4
+python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2 --stage report --dataset-run R1 --predictions-run R2 --replay-run R3 --diagnostics-run R4 --train-run R2 --run-id R5
+```
+
+- 只开 `campaign/stage/run-id` 与上游 run 身份，不提供任何规格扫描参数；`--resume` 一律拒绝。
+  数据/探针/训练/回放阶段必须给 `--readiness-run`，且该 run 状态须为 `ready`
+  （含 `readiness.json` 的封存 SHA 复核、输入内容 SHA 复核、模型摘要与训练 run 对齐）。
+- 工件根 `data/reports/p7_analyst_diffusion_ml_20261118/adml20_v1_20261118r2/`：`specification/`
+  规格与授权、`inputs/` 身份与覆盖台账、`events/` 研报事件、`dataset/` 分年面板、
+  `models/` 隔离注册表、`predictions/` 逐日排名、`accounts/` 真实现金账、`diagnostics/`、`reports/`。
+- 本次结果：评估窗内 0 日不足 100 只（最小 457）；两档本金 `cagr_delta` 相对 A100 为
+  **−0.30pp / −0.11pp**（门槛 ≥ +0.5pp），相对 A80+现金为 +2.01pp / +2.18pp；
+  资源建议 `stop_v1_investment`，正式状态 `not_evaluated`，四个固定压力全部运行。
+  **修复前后 ML 袖年化由 4.69% 摆动到 14.99%，报告已列为稳定性未决项。** 详见
+  `data/reports/p7_analyst_diffusion_ml_20261118/adml20_v1_20261118r2/reports/report_zh.md`。
+- 封存裁决（2026-11-18 用户选项 1）：登记为 `evidence_insufficient`（证据不足），
+  只封存本规格、不判机制；重开需新信息与新预登记。
+
 **v2 P7 T5 · 原始需求 / 配额 / 日内净额 / 借用会计与死局（机械复核第二段）：** 在 T4 生命周期之上补齐
 「授权额度 + 借用会计 + 召回/死局」，把逐袖 `cash_i + credit_i ≥ 0` 从 T4 的登记项升级为**硬门**，
 并交付 VV-H（同配额、禁 credit 参照）与 VV-S（允许 credit）**共用的机械实现**与逐日序列：
