@@ -408,6 +408,9 @@ def _execute_slot_matched_buys(engine, date: pd.Timestamp, ctx: Dict) -> Dict:
         )
 
     def _execute_buy(candidate_stock: str, slot: Dict) -> bool:
+        # 成交前按**真实持仓**复核行业容量（硬上限）；跨日挂单/同日多批都不再溢出
+        if not _industry_capacity_ok(engine, candidate_stock):
+            return False
         target_value = current_value * float(slot["weight"])
         buy_detail = _build_buy_detail(portfolio_value, candidate_stock, target_value)
         # 只有原槽位候选使用 T0 固化股数；同日顺延到其他候选时仍按原槽位权重预算。
@@ -531,6 +534,27 @@ def _record_execution_attribution(engine, date: pd.Timestamp, ctx: Dict, run: Di
                 "signal_to_buy_return": signal_to_buy_return,
             }
         )
+
+
+def _industry_capacity_ok(engine, code: str) -> bool:
+    """成交前行业容量硬复核。
+
+    引擎的选择期约束只调整候选顺序（软约束），跨日挂单与同日多批仍可能把同一
+    行业堆到上限之上；本函数在**实际成交**前用真实持仓复核，超限即拒单。
+
+    未启用行业约束（`max_per_industry` 为空）或行业不可判定时一律放行，
+    保持原有行为不变。
+    """
+    cap = getattr(engine, "max_per_industry", None)
+    mapping = getattr(engine, "industry_mapping", None)
+    if not cap or not mapping:
+        return True
+    bucket = mapping.get(str(code))
+    if bucket is None:
+        return True
+    positions = getattr(engine, "positions", None) or {}
+    count = sum(1 for held in positions if mapping.get(str(held)) == bucket)
+    return count < int(cap)
 
 
 def _register_unfilled_slots(engine, date: pd.Timestamp, ctx: Dict, run: Dict) -> None:
