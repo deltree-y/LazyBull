@@ -2,6 +2,213 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.211.19] - 2026-11-19
+
+### Research（P7 候选一 PRG-M1-v1：R0 就绪 + R1—R3 隔离实现，R4—R6 未授权）
+
+- 新增 `scripts/v2_p7/peer_return_gap/`（`spec/common/clock/inputs/graph/score/targets/stages/run`）：
+  月末时钟、PIT 基本域、分块相关矩阵与冻结同伴/beta、月分数与 PEER/REV/MATCH 三臂、六槽目标与最小买入核算。
+  全部只读本地冻结输入，产物只落 `data/reports/p7_peer_return_gap_20261119/<campaign>/runs/<run_id>/`
+  （staging + 原子发布 + 逐件 SHA + 父 manifest 绑定）。
+- R0（`R0_03`，13.65 s）：核验基准 manifest SHA `541933bb…` 与六个消费子文件；两档本金
+  A80 首日均为 80%、A80+现金逐日等于 A80+固定 20% 现金、三账日期全等；A100 年化/MDD
+  与人工显示值差 4.3e-5 / 1.3e-5。91 个信号月的宽域上界 890–1826（中位 1282.5），
+  **无月份低于 100**，广度停止线未触发。
+- R1—R3 只在 3 个月小样本上定向运行（R1 17.13 s / R2 3.29 s / R3 0.04 s），
+  `coverage.csv` 实际有效分 898/1062/662；**不构成 R1/R2 全窗交付**。
+- R3 合成演练复用公共 `CostModel` 与逐日恒等式：连续入选无往返、停牌卖单顺延 6 次后成交、
+  整手/最小名义额/无负现金全部通过；完整 `NativeMergeBacktestEngineML` 接线登记为 R4 前置缺口。
+- 新增 `tests/test_peer_return_gap.py` 17 项合成验收（时钟/简例 0.058 与 0.010/不足 10 邻居/并列/7-8 of 10/
+  179-180 日/零方差/乱序/单位/槽位/匹配唯一/整手/V/尺度不变/T+1 无前视）。
+- 数据支出 0 元、不联网；未消费正式 α，`formal_admission=not_evaluated`、`intended_type=enhancement`。
+  R0_01（行业 PIT 空结束日判空缺陷）与 R0_02（被新代码取代）保留为失败/历史现场，不覆盖。
+
+## [0.211.18] - 2026-11-19
+
+### Research（对账口径修复：保存有符号误差与两端原始值）
+
+- `quality.reconcile_day` 新增 `signed_volume_rel_error` / `signed_amount_rel_error`；
+  `DownloadEngine` 的对账产物新增 `minute_volume/daily_volume/minute_amount/daily_amount`
+  与有符号列，绝对值列保留（0.5% 调查线仍按绝对值判定）。
+- 起因：原产物只有绝对误差，导致诊断把"1,816 偏高 + 2,322 偏低"误写成"整体偏高 0.5–1%"。
+- 新增 2 项测试：正差 +0.1、负差 −0.1 不被折叠。
+- 诊断更正（见报告 §11f/§11g）：**2023-08-09 起分钟量全部变为 100 股整数倍，2026-01-05 恢复**；
+  异常方向 −30.3%…+6.1%，两项均 ≤2% 仅占 91.4%；整手舍入上界不足以解释差额。
+  **不采用 2% 容差、不缩放、不删末根**；数据门保持阻断，Step 2 不启动。
+- 定向测试合计 **96 passed**（core 28 / pipeline 21 / review 21 / entry 26）。
+
+## [0.211.17] - 2026-11-19
+
+### Research（BaoStock 访问合规：单连接守卫 + API key 实测）
+
+- 新增 `scripts/v2_p7/minute_repair_ml/bs_lock.py`：基于 `campaign/baostock.lock` 的单连接守卫
+  （PID + 时间戳，1 小时过期可接管）；`baostock_probe`、`bs_coverage`、`bs_followup` 在
+  `login()` 前必须取锁，`throughput_blocks(guard=False)` 支持嵌套调用。
+  起因：11-18 22:33/23:03 各做过一次 2 进程并发查询，此后匿名查询持续无返回。
+- 两日请求量核对：11-18 约 438 次、11-19 约 16 次，合计约 454 次，**远低于 5 万/日上限**；
+  被限的原因不是请求量，而是**并发连接**（服务方明确禁止）。
+- API key 实测：`bs.set_API_key()` 后登录成功，但 5min 与日线均返回
+  `10001015 Unbought fLOW`（0.03 秒、0 行）→ 该 key 无已购服务，**不会更快**，
+  且会覆盖匿名访问；探查工具仍保持匿名，key 仅存 `.env`。
+- 测试：新增 2 项锁用例（第二次会话被拒、过期锁可接管），定向合计 **92 passed**。
+
+## [0.211.16] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 BaoStock 2020 起覆盖验收）
+
+- 新增 `scripts/v2_p7/minute_repair_ml/bs_coverage.py`：预登记抽样（95 只，市场×行业×流动性分层）、
+  3 个锚点月（2020-01 / 2023-06 / 2026-09）逐股核对"应有 vs 实取"、48 槽完整性、
+  量额对账处置、120 交易日块吞吐与全量请求重算；上限 300 查询 / 2 小时。
+- 新增 `scripts/v2_p7/minute_repair_ml/bs_followup.py`：补样（退市股 × 2 锚点）与
+  单独吞吐模式（`--throughput-only`，用在市大盘股，避免退市样本空返回）。
+- 结果（285 + 8 + 5 查询，0 元）：
+  - 2020-01：91 只、应有 1,356 股票日、实取 1,436、**缺失 0 / 不完整 0 / 未解释 0**；
+  - 2023-06：93 只、1,840 / 1,860、缺失 0；2026-09：92 只、1,932 / 1,932、缺失 0；
+  - 对账处置 `within_line` 4,616 + `ohlc_tick_rounding` 612，未解释 0；
+  - 退市样本 4 只 × 2 锚点 8 查询全部有数据、零缺失；
+  - **吞吐 260.6 查询/小时**（5×120 交易日块，27,600 行 / 69.1 秒）→ 2020 窗 25,771 请求
+    ≈ **98.9 小时**，为 R1 22 小时上限的 4.5 倍。
+- 结论：2020 起**能取全**（抽样层面），但**串行下载约 99 小时**，超出当前预算；
+  2 年长窗单查询与并发尝试均出现长时间无返回（已终止），不能承诺提速。
+- 文档：报告 §11 记录证据与判定；未建新规格、未取全量、未训练。
+
+## [0.211.15] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 BaoStock 核验意见整改：质量口径回退与追溯修复）
+
+- **质量口径恢复协议语义**：`quality.day_verdict` 核心改为 **k=1..47**（与
+  `sessions.session_complete` 一致），k=48 缺失只记 `tail_slot_missing` 告警；
+  删除自创的 `reconciliation_min_within_line_share=0.99` 门，0.5% 恢复为**调查线**。
+- **对账改为处置分类**：`reconciliation_disposition` 区分 `within_line`、
+  `ohlc_tick_rounding`、`volume_rounding`（≤1 手）、`amount_rounding`（≤1 元/1e-6）与
+  `unexplained_*`；发布门只要求"无未解释异常"，未解释项阻断并全量列示。
+- **全量排除台账**：新增 `exclusions_year=`（`ts_code/trade_date/phase/bucket/reason/source`），
+  summary 里的 500 条仅作展示；`DailyCache.loaded_days` 区分"分区缺失"与"未上市/已摘牌"，
+  避免读不到日线就放过。
+- **字段修复**：`run._probe_sequence` 改读嵌套 `blocked`（此前配额与下次时间全丢）；
+  `baostock_probe` 用 `ts_code`/`response_code`（此前 `**meta` 覆盖股票代码，报告代码列全为 0）；
+  分块检查升级为**全部字段逐值 + 重复键**，并以修正后工具重取免费证据
+  `bsprobe_20261118T133901`（整月 1,104 行 `max_abs_diff=0`、重复键 0）。
+- **吞吐口径**：`measure_throughput` 不再把 OK 空表算作有效吞吐（单独记 `empty_responses`）。
+- 测试：新增 `TestR0SuccessPath`（完整 `run_r0` → ready → 发布 → 下游接受）；
+  定向合计 **90 passed**；未跑全量。
+- 文档：报告新增 §10b「BaoStock 新规格草案（未冻结）」，列出 2023-04 锚 / 8 折 / A 同窗重跑
+  与三条危机窗限制；答复见 `docs/review/v2_p7_minute_repair_ml/p7_minute_baostock_codex_20261118_response.md`。
+
+## [0.211.14] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 BaoStock 免费源有界探查）
+
+- 新增 `scripts/v2_p7/minute_repair_ml/baostock_probe.py`：25 次查询 / 8.9 秒的有界探查
+  （历史年份扫描、单日结构、日线量额对账、整月 vs 分块一致性、退市股样本、实测吞吐），
+  工件落 `campaign/baostock_probe/<run>/`，不写生产目录。
+- 结论：BaoStock 5 分钟 **2013/2016/2019（含 2019-12）全为空，2020-01 起可用**；
+  可取样本均 **48 根/日、09:35..15:00、无 09:30 竞价**、end 约定；
+  分钟 volume 与日线逐日完全相等、amount 误差 ≤3.7e-10；整月与分块键集合一致；
+  实测 10,112 查询/小时（37,829 查询≈3.7 小时，落在 22 小时上限内）；25 次查询未触发限频。
+- 含义：该源**不能**替代协议 2016-01 起的 5 分钟窗口；改窗或改源都属规格变更，需用户裁决与重新预登记。
+- 依赖：新增 `baostock==0.9.4`（仅探查工具使用，生产链路未接入）。
+- 测试：新增 4 项解析用例（结构/短日/分块一致性/日线对账），定向合计 **89 passed**。
+
+## [0.211.13] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 零采购费可得性探查工具与结果）
+
+- 新增 `scripts/v2_p7/minute_repair_ml/access_probe.py`：≤8 请求的有界探查
+  （预登记顺序、请求间隔 65 秒、命中配额即停、逐响应存证 + SHA），
+  产出 `campaign/access_probe/<run>/summary.json|report.md`，不写生产目录、不打印 token。
+- 实测结果（2026-11-18，用户授权 A 方案）：现有授权为 **2 次/天**（window 86400 秒），
+  首个请求即被拒，**成功样本 0**、历史深度未确认；按 2 次/天，37,829 请求需约 52 年，
+  该授权无法支撑本规格。下次可试 `2026-11-19T13:04:14Z`。
+- 测试：新增 2 项（限频即停且不等待整窗、单日结构不合格判定），定向合计 **85 passed**。
+
+## [0.211.12] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 数据链第二轮整改：可达的吞吐门、逐日质量门、限频可恢复）
+
+- **A 吞吐可测**：新增 `run.measure_throughput`（120 交易日窗口、300 请求 / 120 秒上限、
+  请求数与时长双下限）与 `spec.MINUTE["throughput_sample"]` 预登记参数；
+  `_throughput_assessment` 接收实测样本，取"实测与配额较小值"判 `within_cap`，
+  未测得仍为 `None`（拒绝，不放行）。修复 probe/fetch 阻塞结构分叉：统一
+  `source.block_record()`，probe 不再写 `frequency_limit`，配额与下次可尝试时间不再丢失。
+- **B 残缺数据不得就绪**：新增 `quality.validate_standardized` / `day_verdict`
+  （48 槽、重复键、OHLC、零价、负量额、槽位越界），覆盖裁定按逐日质量计
+  `unresolved_incomplete`；预热日单独台账并要求 `warmup_unresolved=0`；
+  对账改分桶 + `within_line_share ≥ 0.99` 发布门，越线日全量列示不删除；
+  跨块同键异值不再 `keep=first`（下载侧登记冲突并排除，读取侧遇冲突直接报错）。
+- **C 限频可恢复**：raw 改为逐请求落 `raw_spool/` + `raw_index/`（含 SHA/行数/字节/窗口），
+  阻塞时写 `blocked.json`、`state=blocked`、**不发布 artifacts**；`--resume` 优先从 spool
+  重放，只补缺失请求；`write_state` 改为可变台账，派生件续跑可覆盖（发布件仍不可变）。
+- 边界：递归分块冲突一路上传；落盘字节分 `raw_blocks/raw_spool/standardized/aux`；
+  报告删除"49 项测试"硬编码；manifest 统一为 `payload.artifacts/upstream`（此前 R2 会读不到上游）。
+- 测试：新增 `tests/test_p7_minute_repair_ml_entry.py`（13 项实际入口用例：完整通过 /
+  每日 1 根拒绝 / 限频中断+续跑不重复请求 / 三种限频形态 / 吞吐四态 / 质量裁定）；
+  离线用例全部隔离到临时根，不读真实日历与输入目录。定向合计 **83 passed**；未跑全量。
+
+## [0.211.11] - 2026-11-18
+
+### Fixed（分钟研究复核测试隔离）
+
+- 修复 `test_p7_minute_repair_ml_review.py` 的临时数据根隔离：离线 R0 控制流不再读取生产日历、输入目录或旧分钟样例；拒绝门回归时也不能访问真实凭据或网络。
+- 保留既有策略、数据判据与研究源码；本版本只收口复核测试夹具，不表示 R0/R1 数据链已验收。
+- 定向回归 70 项通过；复核记录与三条端到端诊断见 `docs/review/v2_p7_minute_repair_ml/p7_minute_data_access_codex_recheck_20261118.md`，R0 吞吐路径、R1 完整性与限频恢复仍待闭合。
+
+## [0.211.10] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 数据获取链整改：独立检视 D1–D7）
+
+- **D1 缺观测崩溃**：`observed_quota_requests_per_hour=None` 不再进入 `:.0f` 格式化；
+  统一 `_fmt_optional`（"未测得"），并把"未观测到限频"从"不受限"改为 `basis=not_measured`、
+  `within_cap=None`（不得当通过）。
+- **D2 阶段门唯一来源**：新增 `readiness.json`（逐项 `{ok, detail}` + `data_status`）与
+  `artifacts.require_ready`；R1/R2/R3 只认该文件，`access_status` 不再代替验收。R0 就绪改为
+  6 项检查（三窗口 5min / 5min 槽位 / 1min 槽位 / 配对对账 / 吞吐 / 无阻塞）。旧 R0 无 readiness，
+  按契约自动拒绝为上游。
+- **D3 不可证明的完整**：R1 改为 raw 先行（内容寻址块 + `request_id`），冲突键**双方原始行**
+  落 `conflicts_year=` 并整体排除出标准化；竞价旁路单独落盘；`quality.validate_rows`
+  与 `reconcile_day` 接入真实编排（逐股日对账）；新增 `quality.adjudicate_coverage`
+  区分"已接受排除（真实停牌）"与"未解决缺口"，未解决非零即 `data_not_ready`。
+- **D4 限频调度**：命中已知配额一律抛 `RateLimitBlocked`（带 `next_allowed_at_utc`）并**停止批次**，
+  不再秒级重试、不再前台等一小时；R0 探针改为"遇阻塞即停、其余标记 skipped_after_block"；
+  HTTP 429 归限频、5xx 归传输；`max_retries=0` 按 0 执行（修 `or default` 缺陷）。
+- **D5 吞吐口径**：多窗口配额取**最严格**（最小速率）而非最宽松；分别记录配额、依据与
+  按配额估算的总耗时；探针成功次数不得当吞吐测量。
+- **D6 覆盖与断点**：请求覆盖向前扩 20 个市场交易日预热（只改下载覆盖，不改资格/标签母域），
+  行数按实际请求覆盖重估（1.61 亿 → 2.34 亿行上限）；新增 `download.DownloadEngine`：
+  逐批（100 只）原子落盘 + 进度文件 + `--resume` 续跑，不再把整库堆在内存。
+- **D7 状态与账目**：`engineering_status` 由本地可核项计算（`valid/partial/invalid`），
+  新增 `verification_scope`（局部测试 / 数据访问 / 语义 / 吞吐 / 对账 / R1+）与
+  `campaign/ledger/<run>.json` 耗时账（未登记开发耗时显式标 `not_tracked`）；
+  报告中"同日晚间 49 行观察"降级为 `unverified_anecdote`，不并入冻结 R0 事实。
+- 测试：新增 `tests/test_p7_minute_repair_ml_review.py`（18 项，全部离线）覆盖上述
+  D1–D6 的控制流；定向合计 67 项通过；未运行全量 pytest。
+
+## [0.211.9] - 2026-11-18
+
+### Research（LR5M-ML-10-v1 分钟量价流动性修复 ML 袖：研究包 + R0）
+
+- 新增独立研究包 `scripts/v2_p7/minute_repair_ml/`（19 模块）：协议机器镜像（24 列 = 6 日线
+  控制 + 18 分钟、10 日行业中性标签、36 月训练 / 6 月验证 / 16 折 / 64 次固定拟合、
+  6 槽 2 批 0/5、10 日持有、单笔下限 V=25,588.54 元）、内容寻址年分区 raw 块、
+  时段映射（end 约定 + 09:30 竞价旁路）与单位对账、历史动态母域（T 日涨跌停不预先剔除）、
+  唯一 24 列特征实现、端点标签八态、分年数据集、隔离 ModelRegistry 训练与全域 OOS 评分、
+  原生真实现金账户回放、比较/分段/相关/配对块自举与中文报告。
+- 时间游标抓取：接口未承诺 offset，满页（8,000 行）一律丢弃并按时间二分重取；同键异值记
+  `source_conflict` 且不 `keep=last`；HTTP 非 200 显式记 `transport_error`（现有客户端会把
+  非 200 静默当空表，本包另行记录，避免把 502 误判成"无数据"）。
+- R0 结论（2026-11-18）：`data/reports/p7_minute_repair_ml_20261118/lr5m10_v1_20261118/runs/r0_20261118T104959/`
+  —— 冻结 A 基准 manifest SHA 与协议一致（`541933bb…fd81`，逐成员核验无问题）；本地 1 分钟
+  241 行实样确认 **end 约定 + 09:30 竞价**；下载计划 2,821 只 / 328.5 万股票日 / 37,829 请求
+  （按 100 次/分钟约 6.3 小时，折合 1,720 请求/小时可落在 R1 22 小时上限内）；**实测试用权限为
+  1 次/小时，吞吐缺口 1,719 倍**（另有网关 502 与 TuShare 侧数据库错误间歇出现）→
+  `data_status=access_not_ready`、`research_decision=access_not_ready`、
+  `formal_admission=not_evaluated`，R1~R3 未启动，采购请求约 2000 元/年（未自动扣款）。
+- 合成反例测试 49 项（`tests/test_p7_minute_repair_ml_core.py` 28 项 +
+  `tests/test_p7_minute_repair_ml_pipeline.py` 21 项）：路径顺序（先冲高后探底 vs 先探底后冲高）、
+  午休不进入 5 分钟 RV、零成交 vs 缺整根、0 分母 NaN、16 有效历史、跨节假日标签、purge 严格小于、
+  行业中位数含无分钟股票、退市股保留在历史母域、满页二分、同键异值冲突、502 不当空表、
+  6/24 列白名单、批内 0.40 上限、整手后不足 V 拒绝、日期轴不一致拒绝合并、四臂状态映射。
+
 ## [0.211.8] - 2026-11-18
 
 ### Research（AD-ML-20-v1 分析师预期扩散 ML 袖经济预筛）

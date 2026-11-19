@@ -1031,6 +1031,23 @@ python scripts/v2_p7/build_t05_governance.py \
 与运行手册 `docs/plans/v2/p7_t05_runbook_20261111.md`；**边界：T0.5 未生效、T1~T6 未获授权，
 本阶段不产生任何前向/日历结论，也不构成 B 区转正**。
 
+**P7 候选一 PRG-M1-v1（关联股票补涨袖，R0—R3 隔离研究件）：** 协议见
+`docs/experiments/p7_peer_return_gap_protocol_20261119.md`。本轮只批准 R0 就绪与 R1—R3 的
+实现/合成测试；**R4—R6 经济重放未获预算，入口会直接拒绝**。数据支出 0 元、不联网：
+
+```bash
+# R0 输入就绪（只读本地；产物原子发布，run_id 已存在即拒绝覆盖）
+python -m scripts.v2_p7.peer_return_gap.run --campaign prg_m1_v1 --stage R0 --run-id R0_03
+# R1—R3：默认只跑 3 个月小样本（--max-months），全窗需另行授权
+python -m scripts.v2_p7.peer_return_gap.run --stage R1 --upstream R0_03 --run-id R1_03 --max-months 3
+python -m scripts.v2_p7.peer_return_gap.run --stage R2 --upstream R1_03 --run-id R2_03 --max-months 3
+python -m scripts.v2_p7.peer_return_gap.run --stage R3 --upstream R0_03 --upstream R2_03 --run-id R3_04
+```
+
+产物根 `data/reports/p7_peer_return_gap_20261119/prg_m1_v1/runs/<run_id>/`；合成验收
+`pytest tests/test_peer_return_gap.py -q`。**边界：R1/R2 小样本不是全窗交付，R3 未接完整原生引擎，
+不构成经济结论或正式准入。**
+
 **v2 P7 T1 · P-1 同域静态可执行性（候选线冻结判定）：** 用 T 日公开信息构造「1 事件股 + 5 对照股」
 六股匹配组，判定六股能否按冻结的 T+1 开盘入场 / 到期收盘离场规则共同成交并完整持有：
 
@@ -1120,6 +1137,50 @@ python -m scripts.v2_p7.analyst_diffusion_ml.run --campaign adml20_v1_20261118r2
   `data/reports/p7_analyst_diffusion_ml_20261118/adml20_v1_20261118r2/reports/report_zh.md`。
 - 封存裁决（2026-11-18 用户选项 1）：登记为 `evidence_insufficient`（证据不足），
   只封存本规格、不判机制；重开需新信息与新预登记。
+
+**v2 P7 · LR5M-ML-10-v1 分钟量价流动性修复 ML 袖（研究包，独立研究根）：** 用个股 5 分钟
+价格路径、成交额分布与冲击后修复状态，预测 T+1 收盘买入后 10 日的行业相对收益；
+固定 24 列（6 日线控制 + 18 分钟）、36 月训练窗、半年刷新 16 折、64 次固定拟合，
+B 袖 6 槽 / 2 批（偏移 0/5）/ 10 日持有，与 A100、A80+静态现金、6 列日线对照并列。
+规格唯一来源 `docs/experiments/p7_minute_repair_ml_protocol_20261118.md`。
+
+```bash
+python -m scripts.v2_p7.minute_repair_ml.run --stage r0 --campaign-id lr5m10_v1_20261118
+python -m scripts.v2_p7.minute_repair_ml.run --stage r1 --upstream <r0_run_id>
+python -m scripts.v2_p7.minute_repair_ml.run --stage r2 --upstream <r1_run_id>
+python -m scripts.v2_p7.minute_repair_ml.run --stage r3 --upstream <r2_run_id>
+```
+
+- 无参数扫描入口：`--stage` 只接受 `r0/r1/r2/r3`，同 `run-id` 一律拒绝覆盖，
+  下游只接受已发布且逐文件 SHA 通过的上游 run。
+- 工件根 `data/reports/p7_minute_repair_ml_20261118/<campaign>/`：`specification/` 协议与
+  机器规格、`raw/stk_mins_5m/year=YYYY/`（内容寻址块）、`runs/<run_id>/artifacts/inputs|dataset|models|predictions|accounts|diagnostics|reports/`。
+- R0 结论（2026-11-18）：分钟接口当前为**试用频次（1 次/小时）**，全量下载需约
+  **1,720 请求/小时**（37,829 请求 / 22 小时上限）→ `access_not_ready`。
+  该 run 由旧代码产生，**不含 `readiness.json`**，按新契约不能作为 R1 上游；
+  下游一律走 `require_ready`（已发布 + readiness 全项成立），`access_status` 只描述请求。
+  **本次不新增采购建议**；详见 `docs/reports/p7_minute_repair_ml_r0_20261118.md`。
+- 数据门（第二轮整改后）：R0 需 5min 三窗口 + 48 槽语义 + 配对对账 + 分块一致性 +
+  **吞吐实测样本**；R1 需逐日槽位质量、预热台账无未解决、对账越线占比 ≥0.99。
+  R1 逐请求落 `raw_spool/`，限频阻塞**不发布**工件并可用 `--resume` 续跑
+  （已保存请求从 spool 重放，不重复联网）。
+- 可得性探查（2026-11-18，用户授权 ≤8 请求）：现有授权实测为 **2 次/天**，
+  首个请求即被拒、成功样本 0，历史深度未确认；按该配额 37,829 请求需约 52 年。
+  证据 `campaign/access_probe/probe_20261118T130406/`。
+- 免费备选探查（2026-11-18，用户授权 B 方案）：BaoStock 5 分钟 **2013/2016/2019 为空、
+  2020-01 起可用**；可取样本 48 根/日、09:35..15:00、无 09:30 竞价；量额与日线对账通过；
+  整月与分块**全字段逐值一致**；实测 10,551 查询/小时（**粗略外推**约 3.6 小时，不作验收）。
+  **不能**覆盖协议 2016 起点，改窗/改源属规格变更。
+  证据 `campaign/baostock_probe/bsprobe_20261118T133901/`（旧件 `…131941` 保留，代码列缺陷已在新件修正）。
+- **2020 起覆盖验收（2026-11-18，用户批准，285+8+5 查询）**：95 只 × 3 锚点，
+  2020-01/2023-06/2026-09 **缺失 0、不完整 0、未解释对账 0**；4 只退市股 8 查询全部有数据。
+  但实测 **260.6 查询/小时**，2020 窗 25,771 请求 ≈ **99 小时**，为 R1 22 小时上限的 4.5 倍。
+  证据 `campaign/bs_coverage/bscover_20261118T134622/`、`campaign/bs_followup/bsfollow_20261118T135753/`
+  与 `…/bsthr_20261118T140128/`。**未建新规格、未取全量**。
+
+- 本研究的离线定向验证命令：
+  `python -m pytest tests/test_p7_minute_repair_ml_core.py tests/test_p7_minute_repair_ml_pipeline.py tests/test_p7_minute_repair_ml_review.py`。
+  复核控制流使用临时数据根并禁止真实凭据与网络访问；通过这些测试不代表历史数据可得或真实 R0/R1 验收通过。
 
 **v2 P7 T5 · 原始需求 / 配额 / 日内净额 / 借用会计与死局（机械复核第二段）：** 在 T4 生命周期之上补齐
 「授权额度 + 借用会计 + 召回/死局」，把逐袖 `cash_i + credit_i ≥ 0` 从 T4 的登记项升级为**硬门**，
