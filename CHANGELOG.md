@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.211.21] - 2026-11-19
+
+### Research（P7 候选一原规格纠错：三处实现偏差 + R5 核验 + 重跑）
+
+- 外部核查指出并复算确认三处偏差：①R2 评分把当月收益表与 T 日可买池取交集，
+  使 T 日不再可买的冻结同伴被踢出均值；②`holding_period=60` 下月度替换被绕过
+  （162/158 笔 `holding_period` 卖出）；③`min_buy_value_ratio=0.2` 未拦住 amount < V 的买入
+  （206/213 笔，最小 631 元）。
+- 修正：`excess_month_by_code` 改用全市场月收益；新增 `PRGSleeve`
+  （`_queue_rebalance_sells` 用 `min_holding_days=0`、`holding_period=99999`、
+  `_buy_stock_direct` 在 `target_value < V` 时跳过）；R5 的 `single_trade_min_notional`
+  改读 R4 `trades.json` 实算，不再写死 True；报告改为"三项合取未过"。
+- 重跑：`R2_full2` 194.4 s（scored 最小 668，原 366）、`R4_06` 135.5 s
+  （`min_trade_skips=3022`）、`R5_04`/`R6_05`。
+- 纠错后五臂（CAGR/MDD_loss）：A80+PEER **13.7459/29.6516**（1M）、
+  **13.3908/30.6365**（2M）；对照 A80+现金 14.0687/28.9572、14.1438/28.9834。
+  ΔCAGR **-2.6284 / -3.0434pp**，ΔMDD **-2.0927 / -1.1422pp（≤+1pp 满足）**，
+  三条合取仍不过。B 袖 19/546、98/546 成交（单笔 ≥V 生效后熄火）。
+- PEER−REV = -0.0404 / +0.0081pp；PEER−MATCH = -0.3795 / -0.8096pp；
+  相关 0.15/0.31（两档不一致，2022 窗 `None`）。F29：E1/T2/相关/增量/单笔 ≥V 全 fail。
+- 残留如实登记：单笔 <V 仍 1/19、3/98 笔；`holding_period` 残留 2/7 笔；
+  日终持仓 >6 残留 0—2 天；2022 相关 `not_estimable`。
+- 判定仍 **negative**，但性质为"20% 本金 + 6 只等权 + 单笔 ≥V 的可行性不成立"，
+  与原读数"信号选股负向"不同；不消费 α、不转其他候选。
+
+## [0.211.20] - 2026-11-19
+
+### Research（P7 候选一 PRG-M1-v1：R4—R6 经济结论 = negative）
+
+- 新增 `scripts/v2_p7/peer_return_gap/economic.py`：三臂 B 袖接 `OperatingBaselineEngine`
+  （单批/等权/行业 2/开盘卖/不补齐/不重试/关早调仓）、`combine_independent_daily` 五臂合并、
+  链式指标/分年/压力/三口径相关。
+- R1 全窗 91 月 **598.7 s**、R2 全窗 **124.3 s**、R4 六账 **134.3 s**、R5 0.46 s、R6 0.01 s；
+  数据支出 0 元，全部只读本地冻结输入。
+- 五臂（CAGR/MDD_loss）：A100 16.3743/31.7443（1M）、16.4341/31.7787（2M）；
+  A80+现金 14.0687/28.9572、14.1438/28.9834；A80+PEER **13.1290/31.7324、13.1791/31.7820**；
+  A80+REV 13.3009/31.5856、13.3998/31.4778；A80+MATCH 13.7249/31.5929、13.8246/31.6088。
+- ΔCAGR(PEER−A100) = **-3.2452pp / -3.2550pp**，ΔMDD = -0.0119 / +0.0033pp；
+  三项经济目标全不成立。B 袖单账 CAGR **-17.99% / -19.14%**、MDD 78.25% / 80.35%。
+- 无费用、全成交的朴素复核：PEER -16.23%/年、REV -17.72%/年，与账本同量级
+  ⇒ 负结论不是账本或费用 bug。
+- PEER−REV = -0.1718 / -0.2207pp；PEER−MATCH = -0.5959 / -0.6455pp（匹配覆盖 77.84% < 90%，
+  机制比较按协议 `not_estimable`）；分年同号 0/8；三口径相关 0.56—0.63（上界 0.3）。
+- F29 型 I：E1/T2/相关/增量 fail，单笔 ≥V pass，Q1/E2/E4 `not_evaluated`。
+- 失败现场保留：`R4_04`（A80+现金误当单账）落 `failed_R4_04/`；R4_01—03 日志在 `logs/`。
+- 新增 `docs/reports/p7_peer_return_gap_economic_20261119.md`；判定 **negative**，
+  `formal_admission=not_evaluated`，不消费 α，不转其他候选。
+
 ## [0.211.19] - 2026-11-19
 
 ### Research（P7 候选一 PRG-M1-v1：R0 就绪 + R1—R3 隔离实现，R4—R6 未授权）

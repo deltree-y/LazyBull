@@ -1048,6 +1048,23 @@ python -m scripts.v2_p7.peer_return_gap.run --stage R3 --upstream R0_03 --upstre
 `pytest tests/test_peer_return_gap.py -q`。**边界：R1/R2 小样本不是全窗交付，R3 未接完整原生引擎，
 不构成经济结论或正式准入。**
 
+经济重放（R4—R6，2026-11-19 已跑）：
+
+```bash
+python -m scripts.v2_p7.peer_return_gap.run --stage R4 \
+  --upstream R3_04 --upstream R2_full --run-id R4_05
+python -m scripts.v2_p7.peer_return_gap.run --stage R5 \
+  --upstream R4_05 --upstream R2_full --run-id R5_03
+python -m scripts.v2_p7.peer_return_gap.run --stage R6 \
+  --upstream R4_05 --upstream R5_03 --run-id R6_04
+```
+
+结论 **negative**（原规格纠错后）：`A80+PEER` 13.7459%/29.6516%（1M）与
+13.3908%/30.6365%（2M），对比 `A100` 16.3743%/31.7443% 与 16.4341%/31.7787%；
+ΔCAGR -2.63/-3.04pp（回撤要求满足、两条收益要求未过）。单笔 ≥V 生效后 B 袖仅成交
+19/546、98/546，净值跌破 15.35 万即停止建仓。详见
+`docs/reports/p7_peer_return_gap_economic_20261119.md`。不消费 α，不转其他候选。
+
 **v2 P7 T1 · P-1 同域静态可执行性（候选线冻结判定）：** 用 T 日公开信息构造「1 事件股 + 5 对照股」
 六股匹配组，判定六股能否按冻结的 T+1 开盘入场 / 到期收盘离场规则共同成交并完整持有：
 
