@@ -430,12 +430,18 @@ class V2PanelBuilder:
         keep_dates: Optional[set[str]] = None,
         *,
         structural: bool = False,
+        shenwan_industry: Optional[pd.DataFrame] = None,
     ) -> list[tuple[str, pd.DataFrame]]:
         """跑旧 pipeline（force=True 绕过跳过），捕获逐日大表。
 
         keep_dates 非空时 sink 只保留指定日（预热日的帧不进内存累积，
         单日通路防 ~140 日大表占内存）。structural=True 仅切换结构段私有
         构建器；默认仍走冻结构建器，保持 backfill 与既有调用不变。
+
+        ``shenwan_industry`` 显式注入行业帧（None = 默认读取生产快照）：
+        供研究通路按 T 日 PIT 行业区间（``data/clean/sw_industry_pit.parquet``）
+        构造当日快照注入，使资格过滤、行业中性化与标签中性化使用同一份
+        当日行业输入；生产调用不传该参数，行为逐位不变。
         """
         captured: list[tuple[str, pd.DataFrame]] = []
 
@@ -455,7 +461,9 @@ class V2PanelBuilder:
             start_str,
             end_str,
             force=True,
-            shenwan_industry=self._load_shenwan(),
+            shenwan_industry=(
+                self._load_shenwan() if shenwan_industry is None else shenwan_industry
+            ),
             **self._build_flags(),
         )
         return captured

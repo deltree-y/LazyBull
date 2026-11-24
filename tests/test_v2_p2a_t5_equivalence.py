@@ -1023,8 +1023,12 @@ def test_importer_package_of_scanned_files_exact():
     state_owners（五项所有权投影与还原）、envelope_store（原子落盘与同代链）、
     state_consistency（五项经济一致性：整数股 tol=0 + 现金 I1 容差）四件，
     扫描面 44→48（+4），属 P6.5 设计 §4.5 预登记的独立状态信封边界；__init__.py 5 个不变。）
+    （2026-11-20 注记：core/execution 新增 pending_signal_parse（pending 信号解析三件
+    纯函数从 buy_execution.py 整体搬出，函数体逐字保留、import 改指，行为逐位一致；
+    动因 = buy_execution.py 1210 行超文件行数硬上限 1200，按既有 D8 提取式拆分模式处理），
+    扫描面 48→49（+1）；__init__.py 5 个不变。）
     """
-    assert len(_V2_CORE_SCAN_FILES) == 48
+    assert len(_V2_CORE_SCAN_FILES) == 49
     assert len(_V2_CORE_INIT_FILES) == 5
     for path in _V2_CORE_SCAN_FILES:
         expected = ".".join(path.resolve().parent.relative_to(_REPO_ROOT).parts)

@@ -1395,6 +1395,28 @@ python scripts/v2_p7/run_hog.py --run-id run_recheck --source-manifest-sha256 <�
 原始周报网站没有提供服务可用性承诺，目录或格式变化须作为缺口处理；数据可取不等于策略有效。
 研究不改变生产配置，也不构成P7正式准入或前向验证。
 
+**A 袖现金流拆分研究（CF-SPLIT-20-v1）：** 隔离研究包
+`scripts/v2_p7/cashflow_sleeve_split/`，协议 `docs/experiments/p7_cashflow_sleeve_split_protocol_20261120.md`。
+把 11 列现金流质量及其直接代理整体移出 A 得到 R，再独立训练成 B 袖；产物只落
+`data/reports/p7_cashflow_split_20261120/<campaign>/`。`prepare` 产出预登记、输入和日期核查、
+七日只读探针与成本。审点一通过并获命名批次授权后，`run-a` 串行运行结构重建、F/R 训练、
+打分、账户回放与审点二交付。可用 `--batch` 按批次恢复。
+
+```bash
+python -m scripts.v2_p7.cashflow_sleeve_split.run prepare --campaign cf_split_v1 --run r0_001
+python -m scripts.v2_p7.cashflow_sleeve_split.run run-a --campaign cf_split_v1 --parent r0_008 --run a_new --batch rebuild
+```
+
+按原顺序续接 `rebuild-history`、`train-f`、`train-r`、`score`、`accounts`、`deliver`。
+结构缓存复用须核验完成清单和逐日文件 SHA256。训练输入只索引当前规格的已完成结构缓存。
+逐折和部署登记训练、早停、校准样本与标签及训练权重摘要，供 F/R 同态核对。
+主账户和压力账户均在新股成交前核查 Top20 实际持仓，满仓拒绝写入账户旁路。
+`deliver` 封存 `a_review.md`、`a_metrics.csv`、`b_required.csv` 和运行证据，完成以
+`PUBLISHED.json` 的清单哈希为准。审点二交由用户裁决 B 批。
+
+该研究是历史经济预筛（等级 H），`formal_admission=not_evaluated`、不消费准入 α、
+不改生产模型/分区/纸面链路，也不构成前向或真实日历验证。
+
 **v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
 （≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
 未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用

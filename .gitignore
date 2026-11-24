@@ -117,6 +117,7 @@ temp/*
 !temp/.gitkeep
 _tmp_*
 _tmp_*.log
+cache/*
 
 # temp（旧式兜底）
 to_be_del*/*

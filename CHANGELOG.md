@@ -2,6 +2,201 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.211.30] - 2026-11-24
+
+### Research（CF-SPLIT-20-v1 挂单与候补共用持仓上限）
+
+- a_012 百万档 R100 压力账户在 2025-01-13 退出一只，延迟买单和补齐各建一只，
+  日末 21 只。研究账户在两条路径共享的实际成交点复核 Top20 槽位，超额候选继续沿用
+  原生未成交处理，并登记 `position_limit_rejections.json`。基准与压力账户执行规则相同。
+- `a_013` 核验承接 `a_012` 的 30 个模型和 1,838 日排名后重放 16 个账户，于
+  11 月 24 日 03:01（北京时间）封存。复核发布根 240 件、`work/` 3,764 件 SHA、
+  F/R 15 对输入摘要及逐日权益。两档 R100 均低于 26%，回撤较 F100 深，且两臂在
+  2022-05-06 的有效评分宽度均为 0。证据根 `data/reports/p7_cashflow_split_20261120/cf_split_v1/runs/a_013/`，
+  manifest SHA256 `ba5a926e873b34271387826a0133f9a4ed3b6b99eb16548b1e08d543a11c4f76`。
+  219 项定向测试通过，flake8 通过，双口径复杂度新增硬超限 0。
+
+## [0.211.29] - 2026-11-23
+
+### Research（CF-SPLIT-20-v1 同态训练输入取证）
+
+- 逐折、部署记录训练/早停/校准有序主键和标签、训练权重、早停净化剔除键及隔离段键摘要。
+  种子间或 F/R 间的摘要出现差异时停止批次，覆盖行序、标签和权重变化的定向回归。
+
+## [0.211.28] - 2026-11-23
+
+### Research（CF-SPLIT-20-v1 审点二封存时序）
+
+- 先写最终批次状态，再计算 `work/` 逐件哈希，发布完成标记是最后一步。保留父清单
+  SHA、逐批命令、耗时及开工时代码快照，回归测试校验发布后状态字节仍与清单一致。
+
+## [0.211.27] - 2026-11-23
+
+### Research（CF-SPLIT-20-v1 历史行业重捕与缓存恢复）
+
+- 历史行业变更日按实际交易日历生效，已有分段目录保留。典型边界为 2013-01-01
+  变更、2013-01-04 生效，原单段捕获因此在 a_008 触发 113 次单日重捕。
+- 结构缓存以原子写入的完成清单和完整 SHA256 集合作为复用依据。训练逐日索引只读当前
+  规格下已登记完成的分段，优先使用账户评分窗缓存。新增历史元旦、批次中断及缓存选根回归。
+
+## [0.211.26] - 2026-11-23
+
+### Research（CF-SPLIT-20-v1 a_008 history 批断言拦截：北向列整列消失 + 断言口径修订）
+
+- **事故第三例（同型根因链）**：a_008 rebuild-history 176 段全部构建成功（0 重捕），
+  批尾断言拦截 history 早期段（2012-2014）缺 `north_*`（北向）列。根因：北向数据
+  起点 2014-11（沪港通开通）**晚于段捕获窗** ⇒ 窗内无任何 moneyflow_hsgt 分区文件，
+  加载返回 None ⇒ handler 被跳过 ⇒ 列整列消失。生产全量构建窗**跨过**数据起点 ⇒
+  lookup 非 None ⇒ 早期日输出 NaN 占位列（列在场）——与段构建路径不一致。
+- **修复（features/pipeline.py）**：`north_flow_lookup`/`pledge_lookup`/
+  `share_float_lookup`/`block_trade_lookup` 四处空值兜底为空 dict——handler 走
+  NaN 占位列分支，段帧列集与生产对齐；北向加载起点同时改全量回溯（防御）。
+  同型事故三例的统一教训：**凡 lookup 可能为 None 的可选数据源都必须兜底，
+  否则段帧与生产列集漂移**。
+- **断言口径修订（scoring.py）**：`assert_route_columns_coverage` 改为逐日对照
+  生产同日分区——段帧须覆盖「路由列 ∩ 生产同日列集」；段帧缺「生产也缺」的列
+  （如 2018 前无筹码列）属数据起点既定演化不拦截，缺「生产存在」的列才
+  fail-closed。生产分区缺失的日保守取全集核对。
+- **看门狗纪律**：v1/v2 均因 PS1 编码（UTF-8 无 BOM 被 PS5.1 按 ANSI 解析）启动
+  即崩；v3 改纯 ASCII 并加**心跳文件**（每轮巡检落盘，活性随时可验证）；固化
+  「后台组件启动后 15 秒内实证（进程/命令行/心跳产出）」纪律。
+- 测试：新增 lookup 兜底锚、断言对照生产口径（放行/拦截两向）测试；
+  CF-SPLIT 定向 139 passed，flake8 0，复杂度双口径 exit=0。
+
+## [0.211.25] - 2026-11-22
+
+### Research（CF-SPLIT-20-v1 a_006 双臂链中断修复：share_float 整列消失 + 链串行化）
+
+- **根因修复（features/pipeline.py）**：`build_features_data` 的限售解禁
+  （share_float）加载起点由批次预热窗（`start_dt`）改为全量历史起点
+  `ANNOUNCEMENT_PIT_LOOKBACK_START`（与质押同口径）。事故机制：share_float 为
+  **年分区**（文件代表日 12-31），段捕获窗（预热 7 个月 + 段长）通常不含 12-31 ⇒
+  `load_raw_by_date_range` 命不中分区返回 None ⇒ `FactorRegistry.apply_all` 对
+  `data is None` 跳过 handler ⇒ `days_to_unlock`/`unlock_ratio` **整列消失**（生产
+  全量窗跨 12-31 命中，不受影响）。全量回溯后段帧与生产同源（PIT 按公告日语义
+  需要全量公告史）。生产行为不变（全量构建窗口本就命中年分区）。
+- **防复发断言（scripts/v2_p7/cashflow_sleeve_split/scoring.py）**：新增
+  `assert_route_columns_coverage`（fail-closed）——对 structural_full/history
+  两叶全部逐日帧核对联合路由列（F∪R∪B）在场，rebuild/rebuild-history 批次尾部
+  强制执行；整列消失类缺陷从此在训练期 KeyError 之前被拦截。同日二次修复：
+  断言收窄为只扫当前 spec 代际目录——a_007 首跑误把 `cache/` 下 `_bak_*` 备份
+  目录当有效代际扫入（读出旧代际缺列文件误报），119 段重建产物全部有效后按
+  内容寻址复用并以 a_008 续跑。
+- **a_006 缓存判定失效**：实证旧段缓存与修复后实现**逐值大面积不一致**
+  （含列段 days_to_unlock 435/627 值差；生产 cs_train 的 unlock_ratio 459/626
+  差异来自旧生产实现与审点一冻结口径（同批聚合求和）的既定差异，PIT 叠加本
+  以协议口径覆盖）⇒ 结构缓存全量重建。
+- **链脚本串行化**：train-f/train-r 由并发改串行——a_006 实证两臂并发争
+  `data/features/.write.lock`（readiness 校验持锁），train-f 13 秒即崩。
+- **契约新增（CLAUDE.md §7.11）**：长任务执行纪律（>1h 任务开工前报结束时刻 /
+  监控周期 ≥20 分钟 / 异常即修）。
+- 测试：`tests/test_p7_cashflow_sleeve_split.py` 新增路由列覆盖断言
+  （通过/缺列/无缓存）与 share_float 全量回溯锚；CF-SPLIT 定向 135 passed，
+  flake8（100 列）0，复杂度双口径 exit=0、新增硬超限 0。
+
+## [0.211.24] - 2026-11-20
+
+### Research（CF-SPLIT-20-v1 审点一 r0_003 复核整改：行业注入 / 部署净化 / 键数与预算）
+
+- **行业 PIT 注入（复核第 1 项）**：生产通路 `_run_capture` 新增显式
+  `shenwan_industry` 参数（None = 原默认快照，生产行为逐位不变）；研究构建入口
+  `structbuild.industry_pit_snapshot` 从 `sw_industry_pit` 区间命中 + 码表反查
+  指数码，构造与生产快照同 schema 的**当日**行业帧并显式注入——资格、行业中性化
+  与 `neu_y_ret_*` 标签分组共用同一输入（旧快照是当前申万分类，历史日被未来行业
+  改写：600783.SH 在 2019-04-01 应为非银金融 490000/801790.SI，快照写机械设备
+  801890.SI）。单日验证（2019-04-01）含身份探针 fail-fast 与逐只对齐核对。
+- **标签缺失位置反事实（复核第 1 项）**：反事实升级为三遍构建（原值 / 值改写 /
+  **缺失位置重排**：有→无前 1/3 有限值置 NaN、无→有后 1/3 缺失填 −0.5），逐键
+  比较股票集合、特征列逐值与 F/R/B **有限值**来源掩码（`np.isfinite`，inf 不再
+  计入来源）。
+- **B 来源口径修正（复核第 1 项）**：`ocf`/`fcf` 绝对额单独存在不算 B 来源
+  （只有绝对额、没有可用比率的行单独计数 `B_absolute_amount_only`）；来源白名单
+  改为经济比率 + `cf_sales`。
+- **部署早停净化（复核第 2 项）**：`fold_clock` 部署行与历史折同口径给出早停
+  净化边界——最后可用信号日 2025-07-30（T+21=2025-08-28）、剔除其后 **21** 个
+  早停信号日，冻结期望 fail-fast；部署训练入口须同时收到原始段与净化段两套边界
+  （run-a 逐键核对）。
+- **键数与预算修正（复核第 3 项）**：57 日结构文件逐日直读重算键数
+  （逐日相加断言 = 全块总数；旧附件摘要字段 477+471=948>748 作废），预热天数按
+  交易日历重算（202 = **145 预热** + 57 输出，旧写 148）；预算按拟实际使用块数
+  （97 月块 × 每块重复预热）报上界、单大块一次预热摊薄报下界 ≈ **4.44 h**；
+  墙钟不含写盘、RSS 非峰值的限制显式登记，单日验证改用后台线程采样峰值 RSS 并
+  单列写盘计时/字节；测量附件带 `content_digest` 自校验，父 run 消费前强制校验。
+- **探针三层数**：七日探针区分「旧域可观察数 / 结构域可观察数 / 实际评分数」
+  （评分数须待模型训练，恒 `not_estimable_at_checkpoint_1`）；单日结构探针消费
+  注入 PIT 的真实构建输出并保留旧 `cs_train` 对照。
+- **生产代码行数拆分**：`v2/core/execution/buy_execution.py`（1210 行 > 硬上限
+  1200，存量漂移）按既有 D8 模式把 pending 信号解析三件纯函数整体搬至新文件
+  `pending_signal_parse.py`（函数体逐字保留、import 改指，行为逐位一致）；
+  T5 扫描面锚定 48→49 并附注记。
+- 定向测试 **91 passed**；flake8 exit=0；复杂度双口径 `--baseline` 新增硬超限 0
+  （src 502 文件 / all 941 文件）；v2 执行链路回归（P2a-T4/T5、P2b-T4 等价性 +
+  buy_execution owner）通过。
+
+## [0.211.23] - 2026-11-20
+
+### Research（CF-SPLIT-20-v1 审点一复审整改 1–7：r0_002，保留 r0_001）
+
+- **整改 1（训练时钟）**：`fold_clock` 改用原训练日志 `ml_train_runs.csv` 的实际分段
+  （es/校准/末尾隔离/测试），比例规则降级为 `reference_only` 并逐版登记差值；
+  标签成熟日按 `T+21`（`labels.py` 卖出取 T+1+20 开盘）。实测日志物理行
+  23482/23484/23490 与审核意见一致，val 起日差 1 日的正是 v24008/v24010/v24016；
+  部署段三截止日 2025-08-28 / 2025-12-03 / 2026-01-05 复现（末者 = 校准末端 + 21）。
+- **整改 2（资格探针）**：母表改为当日 `clean/daily` 全行，按 9 步顺序排除
+  （特征行 → 主板 → 上市≥365日 → 非 ST → 非停牌 → 行业 PIT 命中 → 非金融 →
+  成交额 → 市值），每步记录排除数与「资料未知」数；缺列一律 `source_not_ready`。
+  七日合格域 1,282 / 1,466 / 1,817 / 1,948 / 1,700 / 1,704 / 1,611（均 ≥500），
+  结构缺口（通过非特征资格但无特征行）0–7 只逐日登记。
+- **整改 3（三臂来源）**：F / R / B 按当折有序白名单分别取证；B 只认原始比率
+  （`ocf`/`ocf_to_revenue`/`ocf_to_profit`/`fcf`/`fcf_yield`/`capex_to_ocf`）与公告
+  新鲜度，仅有 zscore/`_sz` 记「默认填值」；新增真实结构构建反事实：
+  `_run_capture(structural=True)` 两遍（标签原值 vs 改写为 −3×+0.5），5,166 行、
+  398 特征列签名**逐值一致**。同时登记发现：结构通路仍会调用标签函数（删除标签
+  不是受支持状态）。
+- **整改 4（账户角色）**：主腿 Top20 / half-Kelly / 单股新买 ≤15% 权益
+  （1M → 120,000；2M → 240,000）；六槽（Top6、两批各 3）只属小腿
+  （1M → 33,333.33；2M → 66,666.67；V=25,588.54）。新增逐角色执行配置表。
+- **整改 5（判据符号与轴）**：门槛函数只收损失幅度（负值直接报错），新增唯一转换点
+  `mdd_loss_from_raw`；净值帧强制 `trade_date`、拒绝 NaN/±inf/重复/未升序/单点，
+  支持冻结 1,839 点严格轴；`align_axes` 拒绝单点轴与轴不符。
+- **整改 6（身份与可还原）**：`git_identity` 递归列举未跟踪目录到文件层（16 个文件
+  入内容指纹，不再出现 `<not-a-file>`），新增 `code_restore.json`（逐文件 SHA +
+  `git diff` 补丁 SHA）；输入清单新增原训练日志、锚 `summary.parquet`、
+  `precheck/fold_check.json`、`phase_calendar.json`、公司行为清单与修订表；
+  旧 A 锚按冻结清单 **226/226 逐件验 SHA**（缺件或改一字节即失败），账户明细缺件不再静默略过。
+- **整改 7（预算分列）**：A 批只计 F/R 两臂（4.0–9.5 h），B 批列审点二后独立预算
+  （2–8 h）；结构重建单列并实测固定分块 140 日（含 7 个月预热）**465.1 s / 峰值
+  RSS 4,129 MB / 407 列**，按 3.32 s/日外推整窗 1,958 日 ≈ **1.81 h**。
+- 定向测试 **66 passed**；`flake8 --max-line-length=100` exit=0；本包复杂度 0 硬超限。
+  证据根 `data/reports/p7_cashflow_split_20261120/cf_split_v1/runs/r0_002/`（7 件，
+  `r0_001` 原样保留）。`formal_admission=not_evaluated`、不消费 α、生产零改动。
+
+## [0.211.22] - 2026-11-20
+
+### Research（CF-SPLIT-20-v1 审点一：隔离入口 + 机器预登记 + 输入/特征/日期核查 + 只读探针）
+
+- 新增隔离研究包 `scripts/v2_p7/cashflow_sleeve_split/`（`spec/artifacts/identity/
+  feature_routes/fold_clock/readiness/probes/budget/gates/run`），协议
+  `docs/experiments/p7_cashflow_sleeve_split_protocol_20261120.md`；
+  只写 `data/reports/p7_cashflow_split_20261120/**` 与 `temp/**`，生产根 fail-closed。
+- `prepare` 唯一实现：机器预登记 `spec.json`、输入清单 `input_manifest.json`、
+  逐折 `feature_routes.json`、`fold_clock.csv`、`readiness.json`、`pilot_costs.json`、
+  `tests.txt`；`run-a / run-b / verify` 为显式拒绝桩（未授权不写任何工件）。
+- 关键核验（可复算）：旧 A 锚 manifest SHA `541933bb…` 与逐件消费文件；
+  1,839 净值点、锚日全现金、A80+0.2K 恒等式残差 ≤4.66e-10；
+  复算 CAGR/MDD 与已发表参照差 ≤2.7e-7。14 折 F 列数 140/140/141/149/149/148/148/148/
+  148/148/148/147/154/154 与部署 154 逐值一致，11 列 G 全部存在且无 `cf_nm` 回流；
+  R/B 保序切分 + 交集空 + 并集等于 F；接缝 20 日、部署段 176 日、账户窗 1,838 区间无缝。
+- 配置取证：`n_estimators` 存在 500（value spec / WF summary）与 1500（15 份模型元数据）
+  冲突，`best_iteration` 最大 699 > 500 ⇒ 按协议以元数据 1500 为准并登记；
+  其余 9 项超参三方一致；三种子 42/61/82；逐臂 best_iteration 独立（23/27/8 触发下限）。
+- 七日只读探针（不产生收益）：合格域宽度 1,578~3,105，现金流真实来源覆盖等于合格域，
+  哨兵 = 3；`kernel_scored/effective_scored` 记 `not_estimable`（run-a 解封）。
+- 定向测试 67 项全绿（`tests/test_p7_cashflow_sleeve_split.py`）；`flake8 --max-line-length=100`
+  exit=0；本包复杂度 0 硬超限（仓库既有 `v2/core/execution/buy_execution.py` 1210>1200
+  为存量超限，已登记非本包引入）；`src/lazybull/**` 零改动、数据采购 0 元。
+- 边界：`formal_admission=not_evaluated`、不消费准入 α、不改生产；三批收益批次未启动。
+
 ## [0.211.21] - 2026-11-19
 
 ### Research（P7 候选一原规格纠错：三处实现偏差 + R5 核验 + 重跑）

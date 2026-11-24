@@ -533,12 +533,20 @@ def build_features_data(
     if enable_north:
         from src.lazybull.factors.north_flow import build_north_flow_lookup_by_date
 
-        hsgt_df = loader.load_moneyflow_hsgt(start_dt.strftime("%Y%m%d"), end_date)
+        # 全量起点加载 + None 兜底：北向数据起点 2014-11（沪港通开通）晚于早期
+        # 段捕获窗 ⇒ 窗内无任何分区文件，无论加载起点多早都返回 None ⇒ handler
+        # 被跳过、north_* 列整列消失（2026-11-23 CF-SPLIT history 早期段断言
+        # 拦截）。lookup 空值兜底为空 dict，使 handler 走 NaN 占位列分支，
+        # 与生产全量构建（窗跨数据起点）的早期日行为一致。
+        hsgt_df = loader.load_moneyflow_hsgt(
+            ANNOUNCEMENT_PIT_LOOKBACK_START, end_date
+        )
         if hsgt_df is not None:
             logger.info(f"北向资金数据: {len(hsgt_df)} 条")
             north_flow_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
         else:
-            logger.warning("未找到北向资金数据，相关特征将为空")
+            logger.warning("未找到北向资金数据，相关特征按 NaN 占位列兜底")
+            north_flow_lookup = {}
 
     # 加载龙虎榜数据（可选）
     lhb_lookup = None
@@ -741,23 +749,30 @@ def build_features_data(
             pledge_lookup = build_pledge_lookup_by_date(pledge_df, trading_dates_str)
         else:
             logger.warning(
-                "未找到质押数据，相关特征将为空。"
+                "未找到质押数据，相关特征按 NaN 占位列兜底。"
                 "请先运行: python scripts/download_raw.py --download pledge_stat"
             )
+            pledge_lookup = {}
         pledge_df = None
 
-        # 限售解禁（年分区，PIT 按公告日，回溯 start_dt）
+        # 限售解禁（年分区，PIT 按公告日，回溯全量历史起点）
+        # 与质押同口径：解禁公告 ann_date 可远早于批次预热窗，而年分区文件代表日
+        # （12-31）通常不在窄窗内 ⇒ storage 命中失败返回 None ⇒ handler 被
+        # apply_all 跳过、days_to_unlock/unlock_ratio 整列消失（2026-11-22
+        # CF-SPLIT 段缓存缺列事故根因）。凡 PIT 按公告日语义的公告数据一律从
+        # ANNOUNCEMENT_PIT_LOOKBACK_START 起加载（上界仍 end_dt，避免未来泄露）。
         share_float_df = loader.load_share_float(
-            start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
+            ANNOUNCEMENT_PIT_LOOKBACK_START, end_dt.strftime("%Y%m%d")
         )
         if share_float_df is not None and len(share_float_df) > 0:
             logger.info(f"限售解禁数据: {len(share_float_df)} 条")
             share_float_lookup = build_share_float_lookup_by_date(share_float_df, trading_dates_str)
         else:
             logger.warning(
-                "未找到限售解禁数据，相关特征将为空。"
+                "未找到限售解禁数据，相关特征按 NaN 占位列兜底。"
                 "请先运行: python scripts/download_raw.py --download share_float"
             )
+            share_float_lookup = {}
         share_float_df = None
 
         # 大宗交易（日分区，近 10 交易日折价聚合，需未复权收盘价）
@@ -778,9 +793,10 @@ def build_features_data(
             )
         else:
             logger.warning(
-                "未找到大宗交易数据，相关特征将为空。"
+                "未找到大宗交易数据，相关特征按 NaN 占位列兜底。"
                 "请先运行: python scripts/download_raw.py --download block_trade"
             )
+            block_trade_lookup = {}
         block_trade_df = None
 
     # clean数据已包含复权价格，使用空DataFrame
